@@ -7,20 +7,6 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:15-alpine
-        env:
-          POSTGRES_DB: withplus
-          POSTGRES_USER: withplus_user
-          POSTGRES_PASSWORD: withplus_password
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
     steps:
       - uses: actions/checkout@v3
       - name: Set up Node.js
@@ -31,13 +17,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
       - name: Run tests (if present)
-        run: |
-          if [ -d "**/*.test.js" ] || [ -d "**/*.spec.js" ]; then
-            npm test
-          else
-            echo "No test files found, skipping tests"
-          fi
-        continue-on-error: true
+        run: npm test --if-present || true
 
   deploy:
     needs: test
@@ -45,17 +25,24 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v3
-      - name: Deploy to EC2
-        uses: appleboy/ssh-action@master
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
         with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_PRIVATE_KEY }}
-          port: 22
-          script: |
-            cd /home/ubuntu/withplus-platform
-            git fetch origin main
-            git reset --hard origin/main
-            npm install --production
-            pm2 restart withplus-api || pm2 start server.js --name withplus-api
-            echo "✅ Deploy to EC2 completed"
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-northeast-2
+      
+      - name: Deploy to EC2
+        run: |
+          aws ssm send-command \
+            --instance-ids i-063a57c7ae63a41e4 \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=[
+              "cd /home/ubuntu/withplus-platform",
+              "git fetch origin main",
+              "git reset --hard origin/main",
+              "npm install --production",
+              "pm2 restart withplus-api || pm2 start server.js --name withplus-api"
+            ]' \
+            --region ap-northeast-2
