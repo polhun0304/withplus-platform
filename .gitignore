@@ -5,3 +5,8 @@
 *.log
 dist/
 build/
+*.pem
+*.key
+withplus-key.pem
+*.zip
+nodemailer-pkg.zip

@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WITH+ 분양형 커뮤니티</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B;
+            --primary-dark: #B0154F;
+            --bg-white: #FFFFFF;
+            --bg-light: #F5F5F5;
+            --text-dark: #333333;
+            --text-gray: #666666;
+            --border-color: #E0E0E0;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; background: var(--bg-white); }
+        a { color: inherit; }
+
+        .app-wrap { max-width: 720px; margin: 0 auto; }
+
+        .header { border-bottom: 1px solid var(--border-color); position: sticky; top: 0; background: white; z-index: 10; }
+        .header-inner { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 14px 16px; }
+        .org-brand { display: flex; align-items: center; gap: 6px; font-weight: 700; font-size: 0.95em; min-width: 0; }
+        .org-brand .logo-emoji { font-size: 1.2em; flex-shrink: 0; }
+        .org-brand .logo-img { width: 28px; height: 28px; object-fit: cover; border-radius: 6px; flex-shrink: 0; }
+        .org-brand .brand-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .org-brand .tagline { font-size: 0.75em; color: var(--text-gray); font-weight: 400; }
+        .header-links { display: flex; gap: 12px; font-size: 0.8em; flex-shrink: 0; }
+        .header-links a { text-decoration: none; color: var(--text-gray); white-space: nowrap; }
+
+        .state-box { text-align: center; padding: 80px 20px; color: var(--text-gray); }
+        .state-box .emoji { font-size: 2.6em; margin-bottom: 14px; }
+
+        /* ===================== CLASSIC 템플릿 (기존 디자인) ===================== */
+        .classic-hero { padding: 44px 20px; text-align: center; color: white; }
+        .classic-hero h1 { font-size: 1.9em; margin-bottom: 10px; line-height: 1.3; }
+        .classic-hero p { font-size: 0.95em; opacity: 0.95; margin-bottom: 22px; }
+        .classic-hero .cta-btn {
+            display: inline-block; background: white; color: var(--primary-color);
+            padding: 12px 28px; border-radius: 24px; font-weight: 700; text-decoration: none; font-size: 0.92em;
+        }
+
+        .classic-stats-row {
+            max-width: 680px; margin: -28px auto 0; padding: 0 20px;
+            display: grid; grid-template-columns: 1fr 1fr; gap: 12px; position: relative; z-index: 2;
+        }
+        .classic-stat-box {
+            background: white; border: 1px solid var(--border-color); border-radius: 14px;
+            padding: 18px; box-shadow: 0 6px 18px rgba(0,0,0,0.06);
+        }
+        .classic-stat-box .stat-label { font-size: 0.8em; color: var(--text-gray); margin-bottom: 6px; }
+        .classic-stat-box .stat-value { font-size: 1.3em; font-weight: 800; color: var(--primary-color); }
+
+        .classic-divider-msg {
+            text-align: center; padding: 26px 20px 10px; color: var(--text-dark); font-size: 0.92em; font-weight: 600;
+        }
+
+        .classic-feature-strip {
+            display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; padding: 16px 20px 26px; text-align: center;
+        }
+        .classic-feature-strip .f-item { padding: 14px 6px; }
+        .classic-feature-strip .f-icon { font-size: 1.6em; margin-bottom: 6px; }
+        .classic-feature-strip .f-title { font-weight: 700; font-size: 0.86em; margin-bottom: 3px; }
+        .classic-feature-strip .f-desc { font-size: 0.74em; color: var(--text-gray); }
+
+        .classic-section { padding: 24px 20px; }
+        .classic-section-title { font-size: 1.15em; font-weight: 700; margin-bottom: 16px; text-align: center; }
+
+        .classic-benefit-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+        .classic-benefit-card { border: 1px solid var(--border-color); border-radius: 12px; padding: 18px 14px; text-align: center; }
+        .classic-benefit-card .b-icon { font-size: 1.6em; margin-bottom: 8px; }
+        .classic-benefit-card .b-title { font-weight: 700; font-size: 0.88em; margin-bottom: 4px; }
+        .classic-benefit-card .b-desc { font-size: 0.76em; color: var(--text-gray); margin-bottom: 6px; }
+        .classic-benefit-card a { font-size: 0.76em; color: var(--primary-color); text-decoration: none; font-weight: 600; }
+
+        .classic-intro-section { background: var(--bg-light); padding: 30px 20px; }
+        .classic-intro-section h2 { font-size: 1.1em; margin-bottom: 10px; }
+        .classic-intro-section p { font-size: 0.88em; color: var(--text-gray); margin-bottom: 16px; white-space: pre-line; }
+        .classic-intro-section .intro-image {
+            width: 100%; aspect-ratio: 16/9; border-radius: 12px; background: var(--border-color);
+            background-size: cover; background-position: center; margin-bottom: 16px;
+        }
+        .classic-intro-section .site-link {
+            display: inline-block; border: 1px solid var(--primary-color); color: var(--primary-color);
+            text-decoration: none; padding: 8px 18px; border-radius: 20px; font-size: 0.82em; font-weight: 600;
+        }
+
+        .classic-footer {
+            padding: 24px 20px; border-top: 1px solid var(--border-color); font-size: 0.82em; color: var(--text-gray);
+        }
+        .classic-footer strong { color: var(--text-dark); }
+        .classic-footer .powered-by { margin-top: 14px; font-size: 0.85em; }
+        .classic-footer .powered-by a { color: var(--primary-color); text-decoration: none; font-weight: 700; }
+
+        /* ===================== MODERN 템플릿 (미니멀/그리드) ===================== */
+        .modern-hero { padding: 40px 20px 30px; }
+        .modern-hero .m-tag {
+            display: inline-block; font-size: 0.72em; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+            border: 1px solid; border-radius: 999px; padding: 4px 12px; margin-bottom: 16px;
+        }
+        .modern-hero h1 { font-size: 1.65em; font-weight: 800; line-height: 1.35; margin-bottom: 10px; color: #111; }
+        .modern-hero p { font-size: 0.9em; color: #555; margin-bottom: 22px; }
+        .modern-hero .cta-btn {
+            display: inline-block; color: white; padding: 13px 28px; font-weight: 700; font-size: 0.88em;
+            text-decoration: none; border-radius: 3px;
+        }
+
+        .modern-stats { display: flex; border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); }
+        .modern-stats .m-stat { flex: 1; padding: 18px 16px; text-align: center; }
+        .modern-stats .m-stat:first-child { border-right: 1px solid var(--border-color); }
+        .modern-stats .m-stat-label { font-size: 0.75em; color: #888; margin-bottom: 6px; }
+        .modern-stats .m-stat-value { font-size: 1.25em; font-weight: 800; color: #111; }
+
+        .modern-features { display: flex; flex-direction: column; }
+        .modern-features .m-feat-row { display: flex; align-items: flex-start; gap: 14px; padding: 16px 20px; border-bottom: 1px solid var(--border-color); }
+        .modern-features .m-feat-row .m-feat-bar { width: 4px; align-self: stretch; border-radius: 2px; flex-shrink: 0; }
+        .modern-features .m-feat-row .m-feat-icon { font-size: 1.3em; flex-shrink: 0; }
+        .modern-features .m-feat-row .m-feat-title { font-weight: 700; font-size: 0.9em; margin-bottom: 2px; }
+        .modern-features .m-feat-row .m-feat-desc { font-size: 0.78em; color: #777; }
+
+        .modern-section { padding: 30px 20px 8px; }
+        .modern-section .m-section-title { font-size: 1.05em; font-weight: 800; margin-bottom: 4px; }
+        .modern-section .m-section-sub { font-size: 0.8em; color: #888; margin-bottom: 18px; }
+
+        .modern-benefit-list { display: flex; flex-direction: column; border-top: 1px solid var(--border-color); }
+        .modern-benefit-list .m-b-row { display: flex; align-items: center; gap: 14px; padding: 16px 20px; border-bottom: 1px solid var(--border-color); }
+        .modern-benefit-list .m-b-icon { width: 38px; height: 38px; border-radius: 50%; background: var(--bg-light); display: flex; align-items: center; justify-content: center; font-size: 1.05em; flex-shrink: 0; }
+        .modern-benefit-list .m-b-title { font-weight: 700; font-size: 0.88em; }
+        .modern-benefit-list .m-b-desc { font-size: 0.78em; color: #888; }
+        .modern-benefit-list .m-b-link { margin-left: auto; font-size: 0.78em; font-weight: 700; text-decoration: none; white-space: nowrap; flex-shrink: 0; }
+
+        .modern-intro { border: 1px solid var(--border-color); margin: 8px 20px 28px; padding: 22px; }
+        .modern-intro h2 { font-size: 1em; font-weight: 800; margin-bottom: 10px; }
+        .modern-intro p { font-size: 0.85em; color: #666; white-space: pre-line; margin-bottom: 14px; }
+        .modern-intro .m-intro-image {
+            width: 100%; aspect-ratio: 16/9; background: var(--bg-light); background-size: cover; background-position: center; margin-bottom: 14px;
+        }
+        .modern-intro .m-site-link { display: inline-block; text-decoration: none; font-size: 0.82em; font-weight: 700; border-bottom: 2px solid; padding-bottom: 2px; }
+
+        .modern-footer { padding: 22px 20px 28px; font-size: 0.78em; color: #888; border-top: 3px solid #111; }
+        .modern-footer strong { color: #111; }
+        .modern-footer .m-powered-by { margin-top: 12px; font-size: 0.95em; }
+        .modern-footer .m-powered-by a { text-decoration: none; font-weight: 700; }
+
+        /* ===================== WARM 템플릿 (스토리형/따뜻한 느낌) ===================== */
+        .warm-hero { position: relative; padding: 54px 20px 66px; text-align: center; color: white; overflow: hidden; }
+        .warm-hero .w-logo-circle {
+            width: 72px; height: 72px; border-radius: 50%; background: white; margin: 0 auto 16px;
+            display: flex; align-items: center; justify-content: center; font-size: 1.8em; overflow: hidden;
+            box-shadow: 0 6px 16px rgba(0,0,0,0.18);
+        }
+        .warm-hero .w-logo-circle img { width: 100%; height: 100%; object-fit: cover; }
+        .warm-hero h1 { font-size: 1.55em; margin-bottom: 10px; line-height: 1.45; font-weight: 800; }
+        .warm-hero p { font-size: 0.9em; opacity: 0.95; margin-bottom: 22px; }
+        .warm-hero .cta-btn {
+            display: inline-block; background: white; padding: 13px 30px; border-radius: 30px;
+            font-weight: 800; text-decoration: none; font-size: 0.88em;
+        }
+
+        .warm-stats { display: flex; gap: 12px; padding: 0 20px; margin-top: -34px; position: relative; z-index: 2; }
+        .warm-stats .w-stat { flex: 1; background: white; border-radius: 20px; padding: 20px 12px; text-align: center; box-shadow: 0 8px 22px rgba(0,0,0,0.09); }
+        .warm-stats .w-stat .w-stat-icon { font-size: 1.35em; margin-bottom: 6px; }
+        .warm-stats .w-stat .w-stat-label { font-size: 0.74em; color: #888; margin-bottom: 4px; }
+        .warm-stats .w-stat .w-stat-value { font-size: 1.1em; font-weight: 800; }
+
+        .warm-quote { padding: 38px 26px 16px; text-align: center; }
+        .warm-quote .w-quote-mark { font-size: 2.6em; opacity: 0.22; line-height: 1; }
+        .warm-quote p { font-size: 0.98em; line-height: 1.85; color: #444; font-weight: 500; }
+
+        .warm-benefits { padding: 14px 18px 30px; display: flex; flex-direction: column; gap: 12px; }
+        .warm-benefits .w-b-card { display: flex; gap: 14px; align-items: center; background: var(--bg-light); border-radius: 16px; padding: 16px; }
+        .warm-benefits .w-b-icon-circle { width: 46px; height: 46px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.3em; color: white; flex-shrink: 0; }
+        .warm-benefits .w-b-title { font-weight: 700; font-size: 0.9em; margin-bottom: 3px; }
+        .warm-benefits .w-b-desc { font-size: 0.78em; color: #777; }
+        .warm-benefits .w-b-link { font-size: 0.76em; font-weight: 700; text-decoration: none; margin-top: 4px; display: inline-block; }
+
+        .warm-story { padding: 26px 20px 34px; text-align: center; }
+        .warm-story .w-story-img { width: 100%; aspect-ratio: 16/9; border-radius: 20px; background: var(--border-color); background-size: cover; background-position: center; margin-bottom: 16px; }
+        .warm-story h2 { font-size: 1.05em; margin-bottom: 10px; }
+        .warm-story p { font-size: 0.88em; color: #666; white-space: pre-line; margin-bottom: 14px; }
+        .warm-story .w-site-link { display: inline-block; border-radius: 20px; padding: 8px 18px; font-size: 0.82em; font-weight: 700; text-decoration: none; color: white; }
+
+        .warm-footer { padding: 30px 20px; text-align: center; background: var(--bg-light); font-size: 0.82em; color: #777; }
+        .warm-footer strong { color: #333; display: block; margin-bottom: 6px; font-size: 1.05em; }
+        .warm-footer .w-powered-by { margin-top: 12px; }
+        .warm-footer .w-powered-by a { text-decoration: none; font-weight: 700; }
+    </style>
+</head>
+<body>
+    <div class="app-wrap" id="app-root">
+        <div class="state-box">
+            <div class="emoji">⏳</div>
+            <h3>불러오는 중입니다...</h3>
+        </div>
+    </div>
+
+    <script src="/vendor/supabase.min.js"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        (async function () {
+            const root = document.getElementById('app-root');
+            const slug = location.pathname.split('/').filter(Boolean).pop();
+
+            function showError(title, desc) {
+                root.innerHTML = `
+                    <div class="state-box">
+                        <div class="emoji">🤔</div>
+                        <h3>${WithPlus.escapeHtml(title)}</h3>
+                        <p style="margin-top:8px;">${WithPlus.escapeHtml(desc)}</p>
+                        <p style="margin-top:20px;"><a href="/" style="color:var(--primary-color); text-decoration:none; font-weight:600;">WITH+ 홈으로 가기 →</a></p>
+                    </div>`;
+            }
+
+            let community;
+            try {
+                const res = await fetch('/api/communities/' + encodeURIComponent(slug));
+                const json = await res.json();
+                if (!res.ok || !json.success) {
+                    return showError('커뮤니티를 찾을 수 없습니다', json.message || '주소를 다시 확인해주세요.');
+                }
+                community = json.data;
+            } catch (err) {
+                return showError('불러오지 못했습니다', err.message);
+            }
+
+            // 이 커뮤니티를 통해 들어왔다는 걸 기억해둔다 (장바구니에서 자동으로 이 커뮤니티가 선택되도록)
+            try {
+                localStorage.setItem('withplus_preferred_community_slug', community.slug);
+                localStorage.setItem('withplus_preferred_community_name', community.name || community.slug);
+            } catch (e) {}
+
+            const primaryColor = community.primary_color || '#E91E63';
+            const heroTitle = community.hero_title || '함께할수록 더 큰 나눔이 됩니다';
+            const heroSubtitle = community.hero_subtitle || 'WITH+에서 쇼핑하고 적립된 혜택이 공동체를 위해 사용됩니다.';
+            const totalPointsText = Number(community.total_points_earned || 0).toLocaleString('ko-KR') + '원';
+
+            document.title = `${community.name}와 함께하는 WITH+`;
+
+            const headerHtml = `
+                <header class="header">
+                    <div class="header-inner">
+                        <div class="org-brand">
+                            ${community.logo_url
+                                ? `<img src="${WithPlus.escapeHtml(community.logo_url)}" alt="${WithPlus.escapeHtml(community.name)} 로고" class="logo-img">`
+                                : `<span class="logo-emoji">🏛️</span>`}
+                            <span class="brand-text">${WithPlus.escapeHtml(community.name)}<span class="tagline">와 함께하는 WITH+</span></span>
+                        </div>
+                        <div class="header-links">
+                            <a href="/about">WITH+ 소개</a>
+                            <a href="/login" id="landing-login-link">로그인</a>
+                        </div>
+                    </div>
+                </header>`;
+
+            // 세 템플릿 모두 같은 실제 데이터(적립금/혜택/소개글 등)를 쓰되, 완전히 다른 레이아웃으로 보여준다.
+            function renderClassicBody() {
+                return `
+                <section class="classic-hero" style="background: linear-gradient(135deg, ${primaryColor}, ${primaryColor}CC);">
+                    <h1>${WithPlus.escapeHtml(heroTitle)}</h1>
+                    <p>${WithPlus.escapeHtml(heroSubtitle)}</p>
+                    <a href="/welcome?community=${encodeURIComponent(community.slug)}" class="cta-btn">WITH+ 쇼핑 시작하기 →</a>
+                </section>
+
+                <div class="classic-stats-row">
+                    <div class="classic-stat-box">
+                        <div class="stat-label">🏦 공동체 총 적립금</div>
+                        <div class="stat-value">${totalPointsText}</div>
+                    </div>
+                    <div class="classic-stat-box">
+                        <div class="stat-label">❤️ 내가 기여한 적립금</div>
+                        <div class="stat-value" id="my-contribution-value"><span style="font-size:0.7em; color:var(--text-gray); font-weight:400;">로그인 후 확인</span></div>
+                    </div>
+                </div>
+
+                <p class="classic-divider-msg">회원님의 구매는 공동체와 함께 성장하는 나눔으로 이어집니다</p>
+
+                <div class="classic-feature-strip">
+                    <div class="f-item">
+                        <div class="f-icon">🤝</div>
+                        <div class="f-title">공동체와 함께</div>
+                        <div class="f-desc">구매 금액의 일부가 공동체에 적립됩니다</div>
+                    </div>
+                    <div class="f-item">
+                        <div class="f-icon">🎁</div>
+                        <div class="f-title">회원 혜택</div>
+                        <div class="f-desc">다양한 할인과 적립 혜택을 누리실 수 있어요</div>
+                    </div>
+                    <div class="f-item">
+                        <div class="f-icon">🌱</div>
+                        <div class="f-title">함께 성장</div>
+                        <div class="f-desc">우리 모두의 작은 실천이 더 큰 나눔이 됩니다</div>
+                    </div>
+                </div>
+
+                <section class="classic-section">
+                    <h2 class="classic-section-title">${WithPlus.escapeHtml(community.name)}와 함께 누리는 혜택</h2>
+                    <div class="classic-benefit-grid">
+                        <div class="classic-benefit-card">
+                            <div class="b-icon">🏦</div>
+                            <div class="b-title">공동체 적립 혜택</div>
+                            <div class="b-desc">구매 금액의 일부가 공동체에 자동 적립됩니다</div>
+                        </div>
+                        <div class="classic-benefit-card">
+                            <div class="b-icon">🎟️</div>
+                            <div class="b-title">회원 전용 쿠폰</div>
+                            <div class="b-desc">회원에게만 제공되는 할인 쿠폰 혜택</div>
+                            <a href="/cart">쿠폰 사용하기 →</a>
+                        </div>
+                        <div class="classic-benefit-card">
+                            <div class="b-icon">📦</div>
+                            <div class="b-title">간편한 주문 관리</div>
+                            <div class="b-desc">배송조회, 반품/교환 신청까지 셀프로</div>
+                            <a href="/mypage">마이페이지 →</a>
+                        </div>
+                        <div class="classic-benefit-card">
+                            <div class="b-icon">🎉</div>
+                            <div class="b-title">이벤트 & 특가</div>
+                            <div class="b-desc">다양한 기획전 상품을 만나보세요</div>
+                            <a href="/category/special">기획전 보기 →</a>
+                        </div>
+                    </div>
+                </section>
+
+                ${(community.intro_text || community.image_url) ? `
+                <section class="classic-intro-section">
+                    <h2>${WithPlus.escapeHtml(community.name)} 소개</h2>
+                    ${community.image_url ? `<div class="intro-image" style="background-image:url('${community.image_url}');"></div>` : ''}
+                    ${community.intro_text ? `<p>${WithPlus.escapeHtml(community.intro_text)}</p>` : ''}
+                    ${community.website_url ? `<a href="${WithPlus.escapeHtml(community.website_url)}" target="_blank" rel="noopener" class="site-link">${WithPlus.escapeHtml(community.name)} 홈페이지 바로가기 →</a>` : ''}
+                </section>` : ''}
+
+                <footer class="classic-footer">
+                    <strong>${WithPlus.escapeHtml(community.name)}</strong><br>
+                    ${community.address ? WithPlus.escapeHtml(community.address) + '<br>' : ''}
+                    ${community.phone ? WithPlus.escapeHtml(community.phone) : ''}${community.phone && community.website_url ? ' · ' : ''}${community.website_url ? WithPlus.escapeHtml(community.website_url) : ''}
+                    <div class="powered-by">WITH+는 ${WithPlus.escapeHtml(community.name)}와 함께 하나님의 사랑을 전하는 사역에 동참합니다.<br>Powered by <a href="/">WITH+</a></div>
+                </footer>`;
+            }
+
+            function renderModernBody() {
+                return `
+                <section class="modern-hero">
+                    <span class="m-tag" style="color:${primaryColor}; border-color:${primaryColor};">${WithPlus.escapeHtml(community.name)}</span>
+                    <h1>${WithPlus.escapeHtml(heroTitle)}</h1>
+                    <p>${WithPlus.escapeHtml(heroSubtitle)}</p>
+                    <a href="/welcome?community=${encodeURIComponent(community.slug)}" class="cta-btn" style="background:${primaryColor};">WITH+ 쇼핑 시작하기 →</a>
+                </section>
+
+                <div class="modern-stats">
+                    <div class="m-stat">
+                        <div class="m-stat-label">🏦 공동체 총 적립금</div>
+                        <div class="m-stat-value">${totalPointsText}</div>
+                    </div>
+                    <div class="m-stat">
+                        <div class="m-stat-label">❤️ 내가 기여한 적립금</div>
+                        <div class="m-stat-value" id="my-contribution-value" style="font-size:0.85em; color:#888; font-weight:400;">로그인 후 확인</div>
+                    </div>
+                </div>
+
+                <div class="modern-features">
+                    <div class="m-feat-row">
+                        <div class="m-feat-bar" style="background:${primaryColor};"></div>
+                        <div class="m-feat-icon">🤝</div>
+                        <div>
+                            <div class="m-feat-title">공동체와 함께</div>
+                            <div class="m-feat-desc">구매 금액의 일부가 공동체에 적립됩니다</div>
+                        </div>
+                    </div>
+                    <div class="m-feat-row">
+                        <div class="m-feat-bar" style="background:${primaryColor};"></div>
+                        <div class="m-feat-icon">🎁</div>
+                        <div>
+                            <div class="m-feat-title">회원 혜택</div>
+                            <div class="m-feat-desc">다양한 할인과 적립 혜택을 누리실 수 있어요</div>
+                        </div>
+                    </div>
+                    <div class="m-feat-row">
+                        <div class="m-feat-bar" style="background:${primaryColor};"></div>
+                        <div class="m-feat-icon">🌱</div>
+                        <div>
+                            <div class="m-feat-title">함께 성장</div>
+                            <div class="m-feat-desc">우리 모두의 작은 실천이 더 큰 나눔이 됩니다</div>
+                        </div>
+                    </div>
+                </div>
+
+                <section class="modern-section">
+                    <div class="m-section-title">${WithPlus.escapeHtml(community.name)}와 함께 누리는 혜택</div>
+                    <div class="m-section-sub">실제로 지금 바로 이용하실 수 있는 혜택입니다</div>
+                </section>
+                <div class="modern-benefit-list">
+                    <div class="m-b-row">
+                        <div class="m-b-icon">🏦</div>
+                        <div>
+                            <div class="m-b-title">공동체 적립 혜택</div>
+                            <div class="m-b-desc">구매 금액의 일부가 공동체에 자동 적립됩니다</div>
+                        </div>
+                    </div>
+                    <div class="m-b-row">
+                        <div class="m-b-icon">🎟️</div>
+                        <div>
+                            <div class="m-b-title">회원 전용 쿠폰</div>
+                            <div class="m-b-desc">회원에게만 제공되는 할인 쿠폰 혜택</div>
+                        </div>
+                        <a href="/cart" class="m-b-link" style="color:${primaryColor};">쿠폰 사용하기 →</a>
+                    </div>
+                    <div class="m-b-row">
+                        <div class="m-b-icon">📦</div>
+                        <div>
+                            <div class="m-b-title">간편한 주문 관리</div>
+                            <div class="m-b-desc">배송조회, 반품/교환 신청까지 셀프로</div>
+                        </div>
+                        <a href="/mypage" class="m-b-link" style="color:${primaryColor};">마이페이지 →</a>
+                    </div>
+                    <div class="m-b-row">
+                        <div class="m-b-icon">🎉</div>
+                        <div>
+                            <div class="m-b-title">이벤트 & 특가</div>
+                            <div class="m-b-desc">다양한 기획전 상품을 만나보세요</div>
+                        </div>
+                        <a href="/category/special" class="m-b-link" style="color:${primaryColor};">기획전 보기 →</a>
+                    </div>
+                </div>
+
+                ${(community.intro_text || community.image_url) ? `
+                <section class="modern-intro">
+                    <h2>${WithPlus.escapeHtml(community.name)} 소개</h2>
+                    ${community.image_url ? `<div class="m-intro-image" style="background-image:url('${community.image_url}');"></div>` : ''}
+                    ${community.intro_text ? `<p>${WithPlus.escapeHtml(community.intro_text)}</p>` : ''}
+                    ${community.website_url ? `<a href="${WithPlus.escapeHtml(community.website_url)}" target="_blank" rel="noopener" class="m-site-link" style="color:${primaryColor}; border-color:${primaryColor};">${WithPlus.escapeHtml(community.name)} 홈페이지 바로가기 →</a>` : ''}
+                </section>` : ''}
+
+                <footer class="modern-footer">
+                    <strong>${WithPlus.escapeHtml(community.name)}</strong><br>
+                    ${community.address ? WithPlus.escapeHtml(community.address) + '<br>' : ''}
+                    ${community.phone ? WithPlus.escapeHtml(community.phone) : ''}${community.phone && community.website_url ? ' · ' : ''}${community.website_url ? WithPlus.escapeHtml(community.website_url) : ''}
+                    <div class="m-powered-by">WITH+는 ${WithPlus.escapeHtml(community.name)}와 함께 하나님의 사랑을 전하는 사역에 동참합니다.<br>Powered by <a href="/" style="color:${primaryColor};">WITH+</a></div>
+                </footer>`;
+            }
+
+            function renderWarmBody() {
+                return `
+                <section class="warm-hero" style="background: linear-gradient(160deg, ${primaryColor}, ${primaryColor}AA);">
+                    <div class="w-logo-circle">
+                        ${community.logo_url
+                            ? `<img src="${WithPlus.escapeHtml(community.logo_url)}" alt="${WithPlus.escapeHtml(community.name)} 로고">`
+                            : `🏛️`}
+                    </div>
+                    <h1>${WithPlus.escapeHtml(heroTitle)}</h1>
+                    <p>${WithPlus.escapeHtml(heroSubtitle)}</p>
+                    <a href="/welcome?community=${encodeURIComponent(community.slug)}" class="cta-btn" style="color:${primaryColor};">WITH+ 쇼핑 시작하기 →</a>
+                </section>
+
+                <div class="warm-stats">
+                    <div class="w-stat">
+                        <div class="w-stat-icon">🏦</div>
+                        <div class="w-stat-label">공동체 총 적립금</div>
+                        <div class="w-stat-value" style="color:${primaryColor};">${totalPointsText}</div>
+                    </div>
+                    <div class="w-stat">
+                        <div class="w-stat-icon">❤️</div>
+                        <div class="w-stat-label">내가 기여한 적립금</div>
+                        <div class="w-stat-value" id="my-contribution-value" style="font-size:0.78em; color:#757575; font-weight:500;">로그인 후 확인</div>
+                    </div>
+                </div>
+
+                <div class="warm-quote">
+                    <div class="w-quote-mark">💬</div>
+                    <p>회원님의 작은 구매 하나하나가 모여<br>${WithPlus.escapeHtml(community.name)} 공동체를 위한 따뜻한 나눔이 됩니다.</p>
+                </div>
+
+                <div class="warm-benefits">
+                    <div class="w-b-card">
+                        <div class="w-b-icon-circle" style="background:${primaryColor};">🏦</div>
+                        <div>
+                            <div class="w-b-title">공동체 적립 혜택</div>
+                            <div class="w-b-desc">구매 금액의 일부가 공동체에 자동 적립됩니다</div>
+                        </div>
+                    </div>
+                    <div class="w-b-card">
+                        <div class="w-b-icon-circle" style="background:${primaryColor};">🎟️</div>
+                        <div>
+                            <div class="w-b-title">회원 전용 쿠폰</div>
+                            <div class="w-b-desc">회원에게만 제공되는 할인 쿠폰 혜택</div>
+                            <a href="/cart" class="w-b-link" style="color:${primaryColor};">쿠폰 사용하기 →</a>
+                        </div>
+                    </div>
+                    <div class="w-b-card">
+                        <div class="w-b-icon-circle" style="background:${primaryColor};">📦</div>
+                        <div>
+                            <div class="w-b-title">간편한 주문 관리</div>
+                            <div class="w-b-desc">배송조회, 반품/교환 신청까지 셀프로</div>
+                            <a href="/mypage" class="w-b-link" style="color:${primaryColor};">마이페이지 →</a>
+                        </div>
+                    </div>
+                    <div class="w-b-card">
+                        <div class="w-b-icon-circle" style="background:${primaryColor};">🎉</div>
+                        <div>
+                            <div class="w-b-title">이벤트 & 특가</div>
+                            <div class="w-b-desc">다양한 기획전 상품을 만나보세요</div>
+                            <a href="/category/special" class="w-b-link" style="color:${primaryColor};">기획전 보기 →</a>
+                        </div>
+                    </div>
+                </div>
+
+                ${(community.intro_text || community.image_url) ? `
+                <section class="warm-story">
+                    ${community.image_url ? `<div class="w-story-img" style="background-image:url('${community.image_url}');"></div>` : ''}
+                    <h2>${WithPlus.escapeHtml(community.name)} 이야기</h2>
+                    ${community.intro_text ? `<p>${WithPlus.escapeHtml(community.intro_text)}</p>` : ''}
+                    ${community.website_url ? `<a href="${WithPlus.escapeHtml(community.website_url)}" target="_blank" rel="noopener" class="w-site-link" style="background:${primaryColor};">${WithPlus.escapeHtml(community.name)} 홈페이지 바로가기 →</a>` : ''}
+                </section>` : ''}
+
+                <footer class="warm-footer">
+                    <strong>${WithPlus.escapeHtml(community.name)}</strong>
+                    ${community.address ? WithPlus.escapeHtml(community.address) + '<br>' : ''}
+                    ${community.phone ? WithPlus.escapeHtml(community.phone) : ''}${community.phone && community.website_url ? ' · ' : ''}${community.website_url ? WithPlus.escapeHtml(community.website_url) : ''}
+                    <div class="w-powered-by">🤍 WITH+는 ${WithPlus.escapeHtml(community.name)}와 함께 하나님의 사랑을 전하는 사역에 동참합니다.<br>Powered by <a href="/" style="color:${primaryColor};">WITH+</a></div>
+                </footer>`;
+            }
+
+            const template = community.landing_template || 'classic';
+            let bodyHtml;
+            if (template === 'modern') bodyHtml = renderModernBody();
+            else if (template === 'warm') bodyHtml = renderWarmBody();
+            else bodyHtml = renderClassicBody();
+
+            root.innerHTML = headerHtml + bodyHtml;
+
+            // 로그인 상태 확인 + 로그인한 경우 실제 "내가 기여한 적립금" 조회 (세 템플릿 모두 #my-contribution-value id를 공유)
+            const session = await WithPlus.getSession();
+            const loginLink = document.getElementById('landing-login-link');
+            if (session) {
+                if (loginLink) { loginLink.textContent = '마이페이지'; loginLink.setAttribute('href', '/mypage'); }
+                try {
+                    const token = await WithPlus.getAccessToken();
+                    const res = await fetch('/api/communities/' + encodeURIComponent(slug) + '/my-contribution', {
+                        headers: { Authorization: 'Bearer ' + token }
+                    });
+                    const json = await res.json();
+                    if (res.ok && json.success) {
+                        const el = document.getElementById('my-contribution-value');
+                        if (el) el.innerHTML = `${Number(json.data.myContribution).toLocaleString('ko-KR')}원`;
+                    }
+                } catch (err) { /* 실패 시 "로그인 후 확인" 문구 유지 */ }
+            }
+        })();
+    </script>
+</body>
+</html>

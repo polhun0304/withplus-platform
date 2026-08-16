@@ -1,0 +1,701 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>상품 상세 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B; --primary-dark: #B0154F;
+            --bg-white: #FFFFFF; --bg-light: #F5F5F5;
+            --text-dark: #333333; --text-gray: #666666;
+            --border-color: #E0E0E0; --success: #2E7D32; --warning: #FFC107;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; }
+        .header { background: var(--bg-white); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-main { max-width: 1400px; margin: 0 auto; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; gap: 30px; }
+        .logo { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; }
+        .logo span { font-size: 0.7em; color: var(--text-gray); display: block; font-weight: normal; }
+        .header-actions { display: flex; gap: 20px; align-items: center; }
+        .icon-button { background: none; border: none; cursor: pointer; font-size: 1.3em; position: relative; color: inherit; text-decoration: none; display: inline-block; }
+        .cart-badge { position: absolute; top: -8px; right: -8px; background: var(--primary-color); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: bold; }
+
+        .breadcrumb { max-width: 1200px; margin: 20px auto 0; padding: 0 20px; font-size: 0.9em; color: var(--text-gray); }
+        .breadcrumb a { color: var(--primary-dark); text-decoration: underline; }
+
+        .detail-wrap { max-width: 1200px; margin: 20px auto 80px; padding: 0 20px; }
+        .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 50px; }
+        .image-gallery { display: flex; flex-direction: column; gap: 12px; }
+        .detail-image { background: var(--bg-light); border-radius: 16px; height: 460px; display: flex; align-items: center; justify-content: center; font-size: 8em; position: relative; overflow: hidden; cursor: zoom-in; }
+        .detail-badge { position: absolute; top: 20px; left: 20px; background: var(--primary-color); color: white; padding: 8px 16px; border-radius: 20px; font-size: 14px; font-weight: bold; }
+        .thumb-strip { display: flex; gap: 10px; overflow-x: auto; padding-bottom: 2px; }
+        .thumb-item { flex: 0 0 auto; width: 76px; height: 76px; border-radius: 10px; background: var(--bg-light); background-size: cover; background-position: center; border: 2px solid transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 1.6em; }
+        .thumb-item.active { border-color: var(--primary-color); }
+
+        .detail-info h1 { font-size: 1.8em; margin-bottom: 10px; }
+        .detail-rating { color: var(--text-gray); margin-bottom: 20px; font-size: 0.95em; }
+        .detail-price-box { padding: 20px 0; border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); margin-bottom: 20px; }
+        .detail-price { font-size: 1.8em; font-weight: bold; color: var(--primary-color); }
+        .detail-original-price { font-size: 1.1em; color: var(--text-gray); text-decoration: line-through; margin-right: 10px; }
+        .detail-discount { color: var(--success); font-weight: bold; margin-right: 8px; }
+        .mileage-box { background: linear-gradient(135deg, #FFF0F6, #FFE5E5); border-radius: 12px; padding: 16px 20px; margin: 15px 0; font-size: 0.9em; }
+        .mileage-box strong { color: var(--primary-color); }
+        .detail-desc { margin: 20px 0; color: var(--text-gray); }
+        .stock-info { margin-bottom: 20px; font-size: 0.95em; color: var(--text-gray); }
+        .variant-select-box { margin-bottom: 20px; }
+        .variant-select-box label { display: block; font-size: 0.9em; color: var(--text-gray); margin-bottom: 6px; }
+        .variant-select-box select { width: 100%; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 1em; }
+        .qty-row { display: flex; align-items: center; gap: 15px; margin-bottom: 20px; }
+        .qty-control { display: flex; align-items: center; border: 1px solid var(--border-color); border-radius: 8px; }
+        .qty-control button { width: 36px; height: 36px; border: none; background: var(--bg-light); cursor: pointer; font-size: 1.1em; }
+        .qty-control input { width: 50px; text-align: center; border: none; font-size: 1em; }
+        .detail-actions { display: flex; gap: 10px; }
+        .btn { flex: 1; padding: 16px; border: none; border-radius: 8px; font-weight: 600; font-size: 1em; cursor: pointer; }
+        .btn-cart { background: var(--bg-light); color: var(--text-dark); border: 1px solid var(--border-color); }
+        .btn-buy { background: var(--primary-color); color: white; }
+        .btn-buy:hover { background: var(--primary-dark); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .restock-notify-box { margin-top: 10px; }
+        .btn-restock-notify { width: 100%; padding: 14px; border: 1px solid var(--primary-color); border-radius: 8px; background: white; color: var(--primary-color); font-weight: 600; font-size: 0.95em; cursor: pointer; }
+        .btn-restock-notify:disabled { opacity: 0.7; cursor: default; background: var(--bg-light); border-color: var(--border-color); color: var(--text-gray); }
+        .restock-notify-msg { font-size: 0.82em; color: var(--text-gray); margin-top: 6px; text-align: center; }
+        .subscribe-box { margin-top: 10px; border: 1px solid var(--border-color); border-radius: 8px; padding: 14px 16px; }
+        .subscribe-toggle-btn { width: 100%; padding: 12px; border: 1px solid var(--primary-color); border-radius: 8px; background: white; color: var(--primary-color); font-weight: 600; font-size: 0.95em; cursor: pointer; }
+        .subscribe-form { display: none; margin-top: 14px; }
+        .subscribe-form.open { display: block; }
+        .subscribe-form .field { margin-bottom: 12px; }
+        .subscribe-form label { display: block; font-size: 0.85em; color: var(--text-gray); margin-bottom: 5px; }
+        .subscribe-form select, .subscribe-form input { width: 100%; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.92em; }
+        .subscribe-address-manual { display: none; margin-top: 10px; }
+        .subscribe-address-manual.open { display: block; }
+        .subscribe-submit-btn { width: 100%; padding: 13px; border: none; border-radius: 8px; background: var(--primary-color); color: white; font-weight: 600; font-size: 0.95em; cursor: pointer; }
+        .subscribe-submit-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .subscribe-msg { font-size: 0.82em; margin-top: 8px; text-align: center; }
+        .subscribe-msg.success { color: var(--success); }
+        .subscribe-msg.error { color: #E53935; }
+
+        .fbt-section { margin-top: 50px; }
+        .fbt-section h2 { font-size: 1.4em; margin-bottom: 20px; }
+        .fbt-scroll { display: flex; gap: 16px; overflow-x: auto; padding-bottom: 8px; }
+        .fbt-card { flex: 0 0 160px; text-decoration: none; color: inherit; }
+        .fbt-card .fbt-image { width: 160px; height: 160px; border-radius: 10px; background: var(--bg-light); display: flex; align-items: center; justify-content: center; font-size: 2.5em; background-size: cover; background-position: center; }
+        .fbt-card .fbt-name { font-size: 0.85em; margin-top: 8px; color: var(--text-dark); line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .fbt-card .fbt-price { font-size: 0.9em; font-weight: 700; color: var(--primary-color); margin-top: 4px; }
+
+        .detail-info-section { margin-top: 50px; }
+        .detail-info-section h2 { font-size: 1.4em; margin-bottom: 20px; }
+        .detail-info-section .long-desc { color: var(--text-dark); white-space: pre-wrap; margin-bottom: 24px; line-height: 1.8; }
+        .detail-section-block { margin-bottom: 30px; }
+        .detail-section-block img { width: 100%; border-radius: 12px; display: block; }
+        .detail-section-block p { margin-top: 14px; color: var(--text-gray); white-space: pre-wrap; line-height: 1.7; }
+
+        .reviews-section { margin-top: 60px; }
+        .reviews-section h2 { font-size: 1.4em; margin-bottom: 20px; }
+        .review-item { padding: 18px 0; border-bottom: 1px solid var(--border-color); }
+        .review-stars { color: var(--warning); margin-bottom: 6px; }
+        .review-comment { color: var(--text-dark); }
+        .review-date { font-size: 0.8em; color: #757575; margin-top: 6px; }
+
+        .review-form { background: var(--bg-light); border-radius: 12px; padding: 20px; margin-bottom: 24px; }
+        .review-form.hidden { display: none; }
+        .star-rating { display: flex; gap: 4px; margin-bottom: 12px; }
+        .star-rating .star { font-size: 1.6em; cursor: pointer; color: #ddd; user-select: none; }
+        .star-rating .star.active { color: var(--warning); }
+        .review-form textarea { width: 100%; min-height: 80px; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; font-family: inherit; font-size: 0.95em; resize: vertical; }
+        .review-submit-btn { margin-top: 10px; padding: 10px 24px; background: var(--primary-color); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; }
+        .review-submit-btn:hover { background: var(--primary-dark); }
+        .review-submit-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .review-login-prompt { background: var(--bg-light); border-radius: 12px; padding: 18px 20px; margin-bottom: 24px; text-align: center; color: var(--text-gray); font-size: 0.9em; }
+        .review-login-prompt a { color: var(--primary-color); font-weight: 600; text-decoration: none; }
+        .review-msg { margin-top: 10px; font-size: 0.88em; padding: 8px 12px; border-radius: 8px; display: none; }
+        .review-msg.error { display: block; background: #FDECEA; color: #C62828; }
+        .review-msg.success { display: block; background: #E8F5E9; color: #2E7D32; }
+
+        .state-box { text-align: center; padding: 100px 20px; color: var(--text-gray); }
+        .state-box .emoji { font-size: 3em; margin-bottom: 16px; }
+        .state-box a { display: inline-block; margin-top: 20px; padding: 10px 24px; background: var(--primary-color); color: white; text-decoration: none; border-radius: 24px; font-weight: 600; }
+
+        .footer { background: var(--text-dark); color: rgba(255,255,255,0.7); padding: 30px 20px; text-align: center; font-size: 0.85em; margin-top: 40px; }
+        .footer a { color: #FF7FA8; text-decoration: underline; }
+
+        .lightbox-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.85); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 30px; }
+        .lightbox-overlay.open { display: flex; }
+        .lightbox-overlay img { max-width: 100%; max-height: 100%; border-radius: 8px; }
+        .lightbox-close { position: absolute; top: 24px; right: 30px; color: white; font-size: 2em; cursor: pointer; background: none; border: none; }
+
+        @media (max-width: 768px) {
+            .detail-grid { grid-template-columns: 1fr; gap: 25px; }
+            .detail-image { height: 300px; font-size: 5em; }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-main">
+            <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+            <div class="header-actions">
+                <a class="icon-button" id="account-link" href="/login" style="text-decoration:none;">👤</a>
+                <a class="icon-button" href="/cart" style="text-decoration:none;">🛒<span class="cart-badge">0</span></a>
+            </div>
+        </div>
+    </header>
+
+    <div class="breadcrumb"><a href="/">홈</a> &gt; <span id="breadcrumb-current">상품</span></div>
+
+    <div class="detail-wrap" id="detail-wrap">
+        <div class="state-box">
+            <div class="emoji">⏳</div>
+            <h3>상품 정보를 불러오는 중입니다...</h3>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <p>&copy; 2024-2026 WITH+ Co., Ltd. All Rights Reserved. | <a href="/">홈으로</a></p>
+    </footer>
+
+    <div class="lightbox-overlay" id="lightbox-overlay">
+        <button class="lightbox-close" id="lightbox-close">✕</button>
+        <img id="lightbox-img" src="" alt="">
+    </div>
+
+    <script src="/vendor/supabase.min.js"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        (async function () {
+            WithPlus.initHeader();
+            await Promise.all([WithPlus.refreshMileageRates(), WithPlus.refreshCategoryMap()]);
+            const id = location.pathname.split('/').filter(Boolean).pop();
+            const wrap = document.getElementById('detail-wrap');
+
+            try {
+                const { ok, json } = await WithPlus.fetchJSON('/api/products/' + encodeURIComponent(id));
+                if (!ok || !json.success || !json.data) {
+                    wrap.innerHTML = `
+                        <div class="state-box">
+                            <div class="emoji">😕</div>
+                            <h3>상품을 찾을 수 없습니다</h3>
+                            <p>삭제되었거나 존재하지 않는 상품입니다.</p>
+                            <a href="/">홈으로 돌아가기</a>
+                        </div>`;
+                    return;
+                }
+
+                const p = json.data;
+                WithPlus.recordRecentlyViewed(p.id);
+
+                document.title = p.name + ' - WITH+';
+                document.getElementById('breadcrumb-current').textContent = p.name;
+
+                const emoji = WithPlus.CATEGORY_EMOJI[p.category] || WithPlus.CATEGORY_EMOJI.default;
+                const images = Array.isArray(p.images_urls) ? p.images_urls.filter(Boolean) : [];
+                const imageUrl = images.length > 0 ? images[0] : null;
+                const hasDiscount = p.discount_price && Number(p.discount_price) < Number(p.price);
+                const currentPrice = hasDiscount ? p.discount_price : p.price;
+                const discountRate = hasDiscount ? Math.round((1 - Number(p.discount_price) / Number(p.price)) * 100) : 0;
+                const rating = Number(p.rating || 0).toFixed(1);
+                const reviewCount = p.review_count || 0;
+                const outOfStock = Number(p.stock) <= 0;
+                const mileageRates = WithPlus.getMileageRatesCached();
+                const personalMileage = Math.floor(Number(currentPrice) * mileageRates.personal);
+                const communityMileage = Math.floor(Number(currentPrice) * mileageRates.community);
+                const personalPct = WithPlus.formatPercent(mileageRates.personalPercent);
+                const communityPct = WithPlus.formatPercent(mileageRates.communityPercent);
+
+                // 옵션(사이즈/색상 등)이 등록된 상품이면 옵션을 먼저 선택해야 담기/구매가 가능하다
+                const variants = Array.isArray(p.variants) ? p.variants : [];
+                const hasVariants = variants.length > 0;
+                const variantSelectHtml = hasVariants ? `
+                    <div class="variant-select-box">
+                        <label for="variant-select">옵션 선택</label>
+                        <select id="variant-select">
+                            <option value="" selected disabled>옵션을 선택해주세요</option>
+                            ${variants.map(v => `<option value="${v.id}" data-adjustment="${v.price_adjustment}" data-stock="${v.stock}" ${Number(v.stock) <= 0 ? 'disabled' : ''}>${WithPlus.escapeHtml(v.name)}${Number(v.price_adjustment) !== 0 ? ` (${Number(v.price_adjustment) > 0 ? '+' : ''}${Number(v.price_adjustment).toLocaleString('ko-KR')}원)` : ''}${Number(v.stock) <= 0 ? ' - 품절' : ''}</option>`).join('')}
+                        </select>
+                    </div>` : '';
+
+                const reviewsHtml = (p.reviews && p.reviews.length > 0)
+                    ? p.reviews.map(r => `
+                        <div class="review-item">
+                            <div class="review-stars">${'⭐'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}${r.verified_purchase ? ' <span style="font-size:0.7em; color:var(--primary-color); font-weight:600;">✅ 구매인증</span>' : ''}</div>
+                            <div class="review-comment">${WithPlus.escapeHtml(r.comment || '')}</div>
+                            <div class="review-date">${new Date(r.created_at).toLocaleDateString('ko-KR')}</div>
+                        </div>`).join('')
+                    : `<p style="color:var(--text-gray);padding:20px 0;">아직 작성된 리뷰가 없습니다. 첫 리뷰를 남겨보세요!</p>`;
+
+                const thumbStripHtml = images.length > 1
+                    ? `<div class="thumb-strip" id="thumb-strip">${images.map((url, i) => `<div class="thumb-item${i === 0 ? ' active' : ''}" data-index="${i}" style="background-image:url('${url}');"></div>`).join('')}</div>`
+                    : '';
+
+                wrap.innerHTML = `
+                    <div class="detail-grid">
+                        <div class="image-gallery">
+                            <div class="detail-image" id="main-image" ${imageUrl ? `style="background-image:url('${imageUrl}');background-size:cover;background-position:center;"` : ''}>
+                                <div class="detail-badge">💰 개인 ${personalPct}% + 커뮤니티 ${communityPct}% 적립</div>
+                                ${imageUrl ? '' : emoji}
+                            </div>
+                            ${thumbStripHtml}
+                        </div>
+                        <div class="detail-info">
+                            <h1>${WithPlus.escapeHtml(p.name)}</h1>
+                            <div class="detail-rating">⭐ ${rating} (${reviewCount}개 리뷰)</div>
+                            <div class="detail-price-box">
+                                ${hasDiscount ? `<span class="detail-original-price">${WithPlus.formatPrice(p.price)}</span><span class="detail-discount">${discountRate}%</span>` : ''}
+                                <span class="detail-price">${WithPlus.formatPrice(currentPrice)}</span>
+                            </div>
+                            <div class="mileage-box">
+                                이 상품 구매 시 <strong>개인 마일리지 ${personalMileage.toLocaleString('ko-KR')}원(${personalPct}%)</strong> +
+                                커뮤니티 참여 시 <strong>추가 ${communityMileage.toLocaleString('ko-KR')}원(${communityPct}%)</strong>이 적립됩니다.
+                            </div>
+                            <p class="detail-desc">${WithPlus.escapeHtml(p.description || '상품 설명이 준비 중입니다.')}</p>
+                            ${variantSelectHtml}
+                            <p class="stock-info" id="stock-info-text">${hasVariants ? '옵션을 선택하면 재고를 확인할 수 있어요' : (outOfStock ? '❌ 현재 품절된 상품입니다' : '✅ 재고 ' + p.stock + '개 남음 | 배송비 무료')}</p>
+                            <div class="qty-row">
+                                <div class="qty-control">
+                                    <button type="button" id="qty-minus">−</button>
+                                    <input type="text" id="qty-input" value="1" readonly>
+                                    <button type="button" id="qty-plus">+</button>
+                                </div>
+                            </div>
+                            <div class="detail-actions">
+                                <button class="btn btn-cart" id="detail-cart-btn" ${(outOfStock || hasVariants) ? 'disabled' : ''}>장바구니 담기</button>
+                                <button class="btn btn-buy" id="detail-buy-btn" ${(outOfStock || hasVariants) ? 'disabled' : ''}>바로 구매</button>
+                            </div>
+                            ${(outOfStock && !hasVariants) ? `
+                            <div class="restock-notify-box" id="restock-notify-box">
+                                <button class="btn-restock-notify" id="restock-notify-btn">🔔 재입고 알림 신청</button>
+                                <p class="restock-notify-msg" id="restock-notify-msg"></p>
+                            </div>` : ''}
+                            ${(p.subscription_available && !hasVariants) ? `
+                            <div class="subscribe-box" id="subscribe-box">
+                                <button type="button" class="subscribe-toggle-btn" id="subscribe-toggle-btn">🔄 정기배송 신청하기</button>
+                                <form class="subscribe-form" id="subscribe-form">
+                                    <div class="field">
+                                        <label>수량</label>
+                                        <input type="number" id="sub-quantity" min="1" max="99" value="1" required>
+                                    </div>
+                                    <div class="field">
+                                        <label>배송 주기</label>
+                                        <select id="sub-cycle">
+                                            <option value="7">1주마다</option>
+                                            <option value="14" selected>2주마다</option>
+                                            <option value="30">4주마다</option>
+                                            <option value="60">8주마다</option>
+                                        </select>
+                                    </div>
+                                    <div class="field">
+                                        <label>배송지</label>
+                                        <select id="sub-address-select"><option value="">불러오는 중...</option></select>
+                                    </div>
+                                    <div class="subscribe-address-manual" id="subscribe-address-manual">
+                                        <div class="field"><label>받는 분 성함</label><input type="text" id="sub-recipient-name"></div>
+                                        <div class="field"><label>연락처</label><input type="text" id="sub-recipient-phone" placeholder="010-0000-0000"></div>
+                                        <div class="field"><label>주소</label><input type="text" id="sub-address" placeholder="주소를 입력해주세요"></div>
+                                        <div class="field"><label>상세주소 (선택)</label><input type="text" id="sub-address-detail"></div>
+                                    </div>
+                                    <button type="submit" class="subscribe-submit-btn" id="subscribe-submit-btn">정기배송 신청하기</button>
+                                    <p class="subscribe-msg" id="subscribe-msg"></p>
+                                </form>
+                            </div>` : ''}
+                        </div>
+                    </div>
+
+                    ${(p.long_description || (Array.isArray(p.detail_sections) && p.detail_sections.length > 0)) ? `
+                    <div class="detail-info-section">
+                        <h2>📄 상세 정보</h2>
+                        ${p.long_description ? `<p class="long-desc">${WithPlus.escapeHtml(p.long_description)}</p>` : ''}
+                        ${(Array.isArray(p.detail_sections) ? p.detail_sections : []).map(s => `
+                            <div class="detail-section-block">
+                                ${s.image_url ? `<img src="${WithPlus.escapeHtml(s.image_url)}" alt="상품 상세 이미지" loading="lazy">` : ''}
+                                ${s.text ? `<p>${WithPlus.escapeHtml(s.text)}</p>` : ''}
+                            </div>`).join('')}
+                    </div>` : ''}
+
+                    <div class="fbt-section" id="fbt-section" style="display:none;">
+                        <h2>🛒 함께 구매한 상품</h2>
+                        <div class="fbt-scroll" id="fbt-scroll"></div>
+                    </div>
+
+                    <div class="fbt-section" id="supplier-products-section" style="display:none;">
+                        <h2 id="supplier-products-title">🏭 이 공급사의 다른 상품</h2>
+                        <div class="fbt-scroll" id="supplier-products-scroll"></div>
+                    </div>
+
+                    <div class="reviews-section">
+                        <h2>⭐ 상품 리뷰 (${reviewCount})</h2>
+                        <div id="review-write-area"></div>
+                        <div id="reviews-list">${reviewsHtml}</div>
+                    </div>
+                `;
+
+                // 이미지 갤러리: 썸네일 클릭 시 메인 이미지 전환, 메인 이미지 클릭 시 확대(라이트박스)
+                const mainImageEl = document.getElementById('main-image');
+                const thumbStrip = document.getElementById('thumb-strip');
+                let activeImageIndex = 0;
+                if (thumbStrip) {
+                    thumbStrip.querySelectorAll('.thumb-item').forEach(thumb => {
+                        thumb.addEventListener('click', () => {
+                            const idx = parseInt(thumb.getAttribute('data-index'), 10);
+                            if (!images[idx]) return;
+                            activeImageIndex = idx;
+                            mainImageEl.style.backgroundImage = `url('${images[idx]}')`;
+                            thumbStrip.querySelectorAll('.thumb-item').forEach(t => t.classList.remove('active'));
+                            thumb.classList.add('active');
+                        });
+                    });
+                }
+                if (mainImageEl && images.length > 0) {
+                    const lightboxOverlay = document.getElementById('lightbox-overlay');
+                    const lightboxImg = document.getElementById('lightbox-img');
+                    const lightboxClose = document.getElementById('lightbox-close');
+                    mainImageEl.addEventListener('click', () => {
+                        lightboxImg.src = images[activeImageIndex];
+                        lightboxOverlay.classList.add('open');
+                    });
+                    lightboxClose.addEventListener('click', () => lightboxOverlay.classList.remove('open'));
+                    lightboxOverlay.addEventListener('click', (e) => { if (e.target === lightboxOverlay) lightboxOverlay.classList.remove('open'); });
+                }
+
+                // 수량 조절 - 옵션이 있는 상품은 선택된 옵션의 재고를, 없으면 상품 전체 재고를 상한으로 쓴다
+                const qtyInput = document.getElementById('qty-input');
+                let selectedVariantId = null;
+                let selectedVariantStock = Number(p.stock) || 99;
+                function currentMaxQty() {
+                    return hasVariants ? selectedVariantStock : (Number(p.stock) || 99);
+                }
+                document.getElementById('qty-minus').addEventListener('click', () => {
+                    qtyInput.value = Math.max(1, parseInt(qtyInput.value, 10) - 1);
+                });
+                document.getElementById('qty-plus').addEventListener('click', () => {
+                    qtyInput.value = Math.min(currentMaxQty(), parseInt(qtyInput.value, 10) + 1);
+                });
+
+                // 옵션 선택 시 가격/재고/버튼 활성화 상태를 실시간으로 갱신
+                const variantSelectEl = document.getElementById('variant-select');
+                const cartBtn = document.getElementById('detail-cart-btn');
+                const buyBtn = document.getElementById('detail-buy-btn');
+                const priceEl = document.querySelector('.detail-price');
+                const stockInfoEl = document.getElementById('stock-info-text');
+                if (variantSelectEl) {
+                    variantSelectEl.addEventListener('change', () => {
+                        const opt = variantSelectEl.selectedOptions[0];
+                        selectedVariantId = variantSelectEl.value || null;
+                        selectedVariantStock = Number(opt.dataset.stock || 0);
+                        const adjustment = Number(opt.dataset.adjustment || 0);
+                        const adjustedPrice = Number(currentPrice) + adjustment;
+                        priceEl.textContent = WithPlus.formatPrice(adjustedPrice);
+                        qtyInput.value = 1;
+
+                        if (selectedVariantStock <= 0) {
+                            stockInfoEl.textContent = '❌ 선택한 옵션은 품절입니다';
+                            cartBtn.disabled = true;
+                            buyBtn.disabled = true;
+                        } else {
+                            stockInfoEl.textContent = `✅ 재고 ${selectedVariantStock}개 남음 | 배송비 무료`;
+                            cartBtn.disabled = false;
+                            buyBtn.disabled = false;
+                        }
+                    });
+                }
+
+                // 장바구니 담기 (실제 localStorage 장바구니에 저장)
+                document.getElementById('detail-cart-btn').addEventListener('click', function () {
+                    if (hasVariants && !selectedVariantId) return;
+                    WithPlus.addToCart(p.id, parseInt(qtyInput.value, 10) || 1, selectedVariantId);
+                    this.textContent = '✓ 담겼습니다';
+                    setTimeout(() => { this.textContent = '장바구니 담기'; }, 2000);
+                });
+
+                // 바로 구매: 장바구니에 담고 바로 장바구니 페이지로 이동 (거기서 로그인 확인 후 주문)
+                document.getElementById('detail-buy-btn').addEventListener('click', function () {
+                    if (hasVariants && !selectedVariantId) return;
+                    WithPlus.addToCart(p.id, parseInt(qtyInput.value, 10) || 1, selectedVariantId);
+                    location.href = '/cart';
+                });
+
+                // 재입고 알림 신청 (품절 상품에만 표시됨)
+                const restockBtn = document.getElementById('restock-notify-btn');
+                if (restockBtn) {
+                    const restockMsg = document.getElementById('restock-notify-msg');
+                    restockBtn.addEventListener('click', async () => {
+                        const session = await WithPlus.getSession();
+                        if (!session) {
+                            restockMsg.textContent = '로그인 후 신청할 수 있습니다. 로그인 페이지로 이동합니다...';
+                            setTimeout(() => { location.href = '/login'; }, 900);
+                            return;
+                        }
+                        restockBtn.disabled = true;
+                        restockBtn.textContent = '신청 중...';
+                        try {
+                            const token = await WithPlus.getAccessToken();
+                            const res = await fetch(`/api/products/${p.id}/restock-notify`, {
+                                method: 'POST', headers: { 'Authorization': 'Bearer ' + token }
+                            });
+                            const json = await res.json();
+                            if (!res.ok || !json.success) throw new Error(json.message || '신청에 실패했습니다');
+                            restockBtn.textContent = '🔔 신청 완료';
+                            restockMsg.textContent = '재입고되면 마이페이지 알림함에서 확인하실 수 있어요.';
+                        } catch (err) {
+                            restockBtn.disabled = false;
+                            restockBtn.textContent = '🔔 재입고 알림 신청';
+                            restockMsg.textContent = err.message;
+                        }
+                    });
+                }
+
+                // 🔄 정기배송 신청 (관리자가 "정기배송 가능"으로 설정한 상품에만 표시됨)
+                // - 신청/일정 관리 기능만 구현되어 있습니다(자동결제·자동주문생성은 하지 않습니다).
+                const subToggleBtn = document.getElementById('subscribe-toggle-btn');
+                if (subToggleBtn) {
+                    const subForm = document.getElementById('subscribe-form');
+                    const subMsg = document.getElementById('subscribe-msg');
+                    const subAddrSelect = document.getElementById('sub-address-select');
+                    const subAddrManual = document.getElementById('subscribe-address-manual');
+                    let addressesLoaded = false;
+
+                    subToggleBtn.addEventListener('click', async () => {
+                        const session = await WithPlus.getSession();
+                        if (!session) {
+                            location.href = '/login';
+                            return;
+                        }
+                        subForm.classList.toggle('open');
+                        if (subForm.classList.contains('open') && !addressesLoaded) {
+                            addressesLoaded = true;
+                            try {
+                                const token = await WithPlus.getAccessToken();
+                                const res = await fetch('/api/me/addresses', { headers: { 'Authorization': 'Bearer ' + token } });
+                                const json = await res.json();
+                                const addresses = (res.ok && json.success) ? json.data : [];
+                                const options = addresses.map(a => `<option value="${a.id}">${WithPlus.escapeHtml(a.label || '배송지')} - ${WithPlus.escapeHtml(a.receiver_name)} (${WithPlus.escapeHtml(a.address)})</option>`).join('');
+                                subAddrSelect.innerHTML = options + `<option value="__manual__">+ 새 배송지 직접 입력</option>`;
+                                if (addresses.length === 0) {
+                                    subAddrSelect.value = '__manual__';
+                                    subAddrManual.classList.add('open');
+                                }
+                            } catch (err) {
+                                subAddrSelect.innerHTML = `<option value="__manual__">+ 새 배송지 직접 입력</option>`;
+                                subAddrManual.classList.add('open');
+                            }
+                        }
+                    });
+
+                    subAddrSelect.addEventListener('change', () => {
+                        subAddrManual.classList.toggle('open', subAddrSelect.value === '__manual__');
+                    });
+
+                    subForm.addEventListener('submit', async (e) => {
+                        e.preventDefault();
+                        subMsg.className = 'subscribe-msg';
+                        const submitBtn = document.getElementById('subscribe-submit-btn');
+                        const payload = {
+                            product_id: p.id,
+                            quantity: document.getElementById('sub-quantity').value,
+                            cycle_days: document.getElementById('sub-cycle').value
+                        };
+                        if (subAddrSelect.value && subAddrSelect.value !== '__manual__') {
+                            payload.shipping_address_id = subAddrSelect.value;
+                        } else {
+                            payload.recipient_name = document.getElementById('sub-recipient-name').value.trim();
+                            payload.recipient_phone = document.getElementById('sub-recipient-phone').value.trim();
+                            payload.address = document.getElementById('sub-address').value.trim();
+                            payload.address_detail = document.getElementById('sub-address-detail').value.trim();
+                        }
+                        submitBtn.disabled = true;
+                        submitBtn.textContent = '신청 중...';
+                        try {
+                            const token = await WithPlus.getAccessToken();
+                            const res = await fetch('/api/subscriptions', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                                body: JSON.stringify(payload)
+                            });
+                            const json = await res.json();
+                            if (!res.ok || !json.success) throw new Error(json.message || '신청에 실패했습니다');
+                            subMsg.textContent = json.message + ' 마이페이지에서 확인/관리하실 수 있어요.';
+                            subMsg.className = 'subscribe-msg success';
+                            subForm.reset();
+                        } catch (err) {
+                            subMsg.textContent = err.message;
+                            subMsg.className = 'subscribe-msg error';
+                        } finally {
+                            submitBtn.disabled = false;
+                            submitBtn.textContent = '정기배송 신청하기';
+                        }
+                    });
+                }
+
+                // 🛒 함께 구매한 상품 (동시구매 분석) - 데이터가 충분하지 않으면 섹션 자체를 숨김
+                (async () => {
+                    try {
+                        const res = await fetch(`/api/products/${p.id}/frequently-bought-together?limit=6`);
+                        const json = await res.json();
+                        if (!res.ok || !json.success || !json.data || json.data.length === 0) return;
+                        const section = document.getElementById('fbt-section');
+                        const scroll = document.getElementById('fbt-scroll');
+                        scroll.innerHTML = json.data.map(fp => {
+                            const fImg = Array.isArray(fp.images_urls) && fp.images_urls.length > 0 ? fp.images_urls[0] : null;
+                            const fEmoji = (WithPlus.CATEGORY_EMOJI && (WithPlus.CATEGORY_EMOJI[fp.category] || WithPlus.CATEGORY_EMOJI.default)) || '🛍️';
+                            const fHasDiscount = fp.discount_price && Number(fp.discount_price) < Number(fp.price);
+                            const fPrice = fHasDiscount ? fp.discount_price : fp.price;
+                            return `
+                            <a class="fbt-card" href="/product/${WithPlus.escapeHtml(fp.id)}">
+                                <div class="fbt-image" ${fImg ? `style="background-image:url('${fImg}');"` : ''}>${fImg ? '' : fEmoji}</div>
+                                <div class="fbt-name">${WithPlus.escapeHtml(fp.name)}</div>
+                                <div class="fbt-price">${WithPlus.formatPrice(fPrice)}</div>
+                            </a>`;
+                        }).join('');
+                        section.style.display = '';
+                    } catch (err) { /* 실패해도 상품 상세 화면 전체에는 지장 없음 */ }
+                })();
+
+                // 🏭 이 공급사의 다른 상품 - 공급자 계정이 등록한 상품일 때만(관리자가 직접 등록한 상품 등 공급자가 없으면 조용히 숨김),
+                // 그리고 그 공급자의 판매중인 다른 상품이 실제로 있을 때만 섹션을 보여준다.
+                (async () => {
+                    try {
+                        const res = await fetch(`/api/products/${p.id}/supplier-products?limit=8`);
+                        const json = await res.json();
+                        if (!res.ok || !json.success || !json.supplier || !json.data || json.data.length === 0) return;
+                        const section = document.getElementById('supplier-products-section');
+                        const titleEl = document.getElementById('supplier-products-title');
+                        const scroll = document.getElementById('supplier-products-scroll');
+                        titleEl.textContent = `🏭 ${json.supplier.name}님의 다른 상품 (총 ${json.supplier.product_count}개)`;
+                        scroll.innerHTML = json.data.map(sp => {
+                            const sImg = Array.isArray(sp.images_urls) && sp.images_urls.length > 0 ? sp.images_urls[0] : null;
+                            const sEmoji = (WithPlus.CATEGORY_EMOJI && (WithPlus.CATEGORY_EMOJI[sp.category] || WithPlus.CATEGORY_EMOJI.default)) || '🛍️';
+                            const sHasDiscount = sp.discount_price && Number(sp.discount_price) < Number(sp.price);
+                            const sPrice = sHasDiscount ? sp.discount_price : sp.price;
+                            return `
+                            <a class="fbt-card" href="/product/${WithPlus.escapeHtml(sp.id)}">
+                                <div class="fbt-image" ${sImg ? `style="background-image:url('${sImg}');"` : ''}>${sImg ? '' : sEmoji}</div>
+                                <div class="fbt-name">${WithPlus.escapeHtml(sp.name)}</div>
+                                <div class="fbt-price">${WithPlus.formatPrice(sPrice)}</div>
+                            </a>`;
+                        }).join('');
+                        section.style.display = '';
+                    } catch (err) { /* 실패해도 상품 상세 화면 전체에는 지장 없음 */ }
+                })();
+
+                // 리뷰 작성 영역: 로그인 상태에 따라 작성 폼 또는 로그인 안내 표시
+                await renderReviewWriteArea(p.id);
+
+            } catch (err) {
+                wrap.innerHTML = `
+                    <div class="state-box">
+                        <div class="emoji">⚠️</div>
+                        <h3>상품 정보를 불러오는 중 문제가 발생했습니다</h3>
+                        <p>${WithPlus.escapeHtml(err.message)}</p>
+                        <a href="/">홈으로 돌아가기</a>
+                    </div>`;
+            }
+
+            // 리뷰 작성 폼 (로그인 사용자만) / 로그인 안내 (비로그인)
+            async function renderReviewWriteArea(productId) {
+                const area = document.getElementById('review-write-area');
+                if (!area) return;
+
+                const session = await WithPlus.getSession();
+                if (!session) {
+                    area.innerHTML = `<div class="review-login-prompt">리뷰를 작성하려면 <a href="/login">로그인</a>이 필요합니다.</div>`;
+                    return;
+                }
+
+                // 이 상품이 포함된 배송완료 주문이 있으면 "구매인증" 리뷰로 등록할 수 있도록 찾아둔다
+                // (서버가 실제로 다시 검증하므로, 여기서는 화면에 옵션을 보여줄지 결정하는 용도일 뿐이다)
+                let verifiedOrderId = null;
+                try {
+                    const token = await WithPlus.getAccessToken();
+                    const ordersRes = await fetch('/api/orders', { headers: { 'Authorization': 'Bearer ' + token } });
+                    const ordersJson = await ordersRes.json();
+                    if (ordersJson.success) {
+                        const eligible = (ordersJson.data || []).find(o => o.status === 'delivered' && Array.isArray(o.items) && o.items.some(i => i.product_id === productId));
+                        if (eligible) verifiedOrderId = eligible.id;
+                    }
+                } catch (e) { /* 주문 조회가 실패해도 리뷰 작성 자체는 계속 가능해야 하므로 조용히 넘어간다 */ }
+
+                area.innerHTML = `
+                    <div class="review-form">
+                        <div class="star-rating" id="review-stars">
+                            ${[1, 2, 3, 4, 5].map(n => `<span class="star" data-value="${n}">★</span>`).join('')}
+                        </div>
+                        <textarea id="review-comment" placeholder="이 상품에 대한 솔직한 후기를 남겨주세요"></textarea>
+                        <br>
+                        ${verifiedOrderId ? `<label style="display:flex; align-items:center; gap:6px; font-size:0.85em; margin:8px 0; color:var(--text-gray);"><input type="checkbox" id="review-verified-check" checked> ✅ 구매인증 리뷰로 등록 (배송완료된 주문 확인됨)</label>` : ''}
+                        <button class="review-submit-btn" id="review-submit-btn">리뷰 등록</button>
+                        <div class="review-msg" id="review-msg"></div>
+                    </div>`;
+
+                let selectedRating = 0;
+                const stars = area.querySelectorAll('.star-rating .star');
+                stars.forEach(star => {
+                    star.addEventListener('click', () => {
+                        selectedRating = parseInt(star.getAttribute('data-value'), 10);
+                        stars.forEach(s => {
+                            s.classList.toggle('active', parseInt(s.getAttribute('data-value'), 10) <= selectedRating);
+                        });
+                    });
+                });
+
+                document.getElementById('review-submit-btn').addEventListener('click', async function () {
+                    const btn = this;
+                    const msg = document.getElementById('review-msg');
+                    msg.className = 'review-msg';
+                    const comment = document.getElementById('review-comment').value.trim();
+
+                    if (selectedRating < 1) {
+                        msg.textContent = '별점을 선택해주세요.';
+                        msg.className = 'review-msg error';
+                        return;
+                    }
+                    if (!comment) {
+                        msg.textContent = '리뷰 내용을 입력해주세요.';
+                        msg.className = 'review-msg error';
+                        return;
+                    }
+
+                    btn.disabled = true;
+                    btn.textContent = '등록 중...';
+
+                    try {
+                        const token = await WithPlus.getAccessToken();
+                        const verifiedCheck = document.getElementById('review-verified-check');
+                        const useOrderId = (verifiedOrderId && (!verifiedCheck || verifiedCheck.checked)) ? verifiedOrderId : null;
+                        const res = await fetch('/api/reviews', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                            body: JSON.stringify({ product_id: productId, order_id: useOrderId, rating: selectedRating, comment })
+                        });
+                        const json = await res.json();
+                        if (!res.ok || !json.success) throw new Error(json.message || '리뷰 등록에 실패했습니다');
+
+                        msg.textContent = '리뷰가 등록되었습니다. 감사합니다!';
+                        msg.className = 'review-msg success';
+
+                        // 새 리뷰를 목록 맨 위에 즉시 반영 (전체 새로고침 없이)
+                        const list = document.getElementById('reviews-list');
+                        const newItemHtml = `
+                            <div class="review-item">
+                                <div class="review-stars">${'⭐'.repeat(selectedRating)}${'☆'.repeat(5 - selectedRating)}${json.data.verified_purchase ? ' <span style="font-size:0.7em; color:var(--primary-color); font-weight:600;">✅ 구매인증</span>' : ''}</div>
+                                <div class="review-comment">${WithPlus.escapeHtml(comment)}</div>
+                                <div class="review-date">${new Date().toLocaleDateString('ko-KR')}</div>
+                            </div>`;
+                        if (list.querySelector('p')) list.innerHTML = '';
+                        list.insertAdjacentHTML('afterbegin', newItemHtml);
+
+                        document.getElementById('review-comment').value = '';
+                        selectedRating = 0;
+                        stars.forEach(s => s.classList.remove('active'));
+                        btn.disabled = false;
+                        btn.textContent = '리뷰 등록';
+                    } catch (err) {
+                        msg.textContent = err.message;
+                        msg.className = 'review-msg error';
+                        btn.disabled = false;
+                        btn.textContent = '리뷰 등록';
+                    }
+                });
+            }
+        })();
+    </script>
+</body>
+</html>

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>회사소개 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B; --primary-dark: #B0154F;
+            --bg-white: #FFFFFF; --bg-light: #F5F5F5;
+            --text-dark: #333333; --text-gray: #666666;
+            --border-color: #E0E0E0; --success: #2E7D32;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; background: var(--bg-white); }
+        .header { background: var(--bg-white); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-main { max-width: 1200px; margin: 0 auto; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; }
+        .logo span { font-size: 0.7em; color: var(--text-gray); display: block; font-weight: normal; }
+        .icon-button { background: none; border: none; cursor: pointer; font-size: 1.3em; color: var(--text-dark); position: relative; text-decoration: none; display: inline-block; }
+        .cart-badge { position: absolute; top: -8px; right: -8px; background: var(--primary-color); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: bold; }
+
+        .page-hero { background: linear-gradient(135deg, var(--primary-color), var(--primary-dark)); color: white; padding: 50px 20px; text-align: center; }
+        .page-hero h1 { font-size: 2em; margin-bottom: 10px; }
+        .page-hero p { opacity: 0.95; }
+
+        .wrap { max-width: 900px; margin: 40px auto 80px; padding: 0 20px; }
+
+        .notice-box { background: linear-gradient(135deg, #FFF7E5, #FFF0F0); border: 1px solid #F5C97A; border-radius: 12px; padding: 20px 24px; margin-bottom: 36px; font-size: 0.92em; }
+        .notice-box strong { color: #B8571E; }
+
+        .content h2 { font-size: 1.3em; margin: 36px 0 14px; color: var(--primary-dark); border-bottom: 2px solid var(--border-color); padding-bottom: 8px; }
+        .content h2:first-of-type { margin-top: 0; }
+        .content h3 { font-size: 1.05em; margin: 22px 0 10px; color: var(--text-dark); }
+        .content p { margin-bottom: 12px; font-size: 0.96em; color: var(--text-dark); }
+        .content ol, .content ul { margin: 8px 0 16px 22px; font-size: 0.96em; }
+        .content li { margin-bottom: 8px; }
+        .content .placeholder { background: #FFF3CD; padding: 1px 6px; border-radius: 4px; color: #7A5200; font-weight: 600; }
+        .content table { width: 100%; border-collapse: collapse; margin: 10px 0 20px; font-size: 0.92em; }
+        .content table th, .content table td { border: 1px solid var(--border-color); padding: 10px 12px; text-align: left; }
+        .content table th { background: var(--bg-light); }
+
+        .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 20px 0 28px; }
+        .card { background: var(--bg-light); border-radius: 12px; padding: 20px; border: 1px solid var(--border-color); }
+        .card h3 { margin-top: 0; color: var(--primary-dark); font-size: 1em; }
+        .card p { font-size: 0.9em; color: var(--text-gray); margin-bottom: 0; }
+
+        .faq-item { border: 1px solid var(--border-color); border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+        .faq-q { background: var(--bg-light); padding: 14px 18px; font-weight: 600; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+        .faq-a { padding: 16px 18px; font-size: 0.93em; color: var(--text-gray); display: none; border-top: 1px solid var(--border-color); }
+        .faq-item.open .faq-a { display: block; }
+        .faq-item.open .faq-toggle { transform: rotate(45deg); }
+        .faq-toggle { transition: transform 0.2s; font-size: 1.1em; color: var(--primary-color); }
+        .faq-cat { display: inline-block; background: var(--primary-color); color: white; font-size: 0.75em; padding: 2px 10px; border-radius: 20px; margin-right: 8px; }
+
+        .contact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin: 20px 0; }
+        .contact-card { text-align: center; padding: 24px 16px; background: var(--bg-light); border-radius: 12px; }
+        .contact-card .icon { font-size: 1.8em; margin-bottom: 8px; }
+        .contact-card a { color: var(--primary-color); font-weight: 600; text-decoration: none; }
+
+        .btn-primary { display: inline-block; background: var(--primary-color); color: white; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 8px; }
+        .btn-primary:hover { background: var(--primary-dark); }
+
+        .footer { background: var(--text-dark); color: rgba(255,255,255,0.7); padding: 30px 20px; text-align: center; font-size: 0.85em; }
+        .footer a { color: #FF7FA8; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-main">
+            <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+            <div style="display:flex; gap:20px; align-items:center;">
+                <a class="icon-button" id="account-link" href="/login">👤</a>
+                <a class="icon-button" href="/cart">🛒<span class="cart-badge">0</span></a>
+            </div>
+        </div>
+    </header>
+
+    <div class="page-hero">
+        <h1>🏢 회사소개</h1>
+        <p>함께할수록 더 큰 가치를 만드는 WITH+ 이야기</p>
+    </div>
+
+    <div class="wrap">
+
+        <div class="content">
+
+            <h2>WITH+가 만드는 가치</h2>
+            <p>WITH+는 "함께할수록 더해지는 가치"라는 이름 그대로, 개인의 소비가 곧 커뮤니티(교회·단체·모임)의 자산으로 함께 쌓이는 커뮤니티 기반 프리미엄 쇼핑몰입니다. 건강기능식품부터 생활용품까지, 회원이 상품을 구매할 때마다 본인에게는 개인 마일리지가, 소속된 커뮤니티에는 별도의 커뮤니티 마일리지가 동시에 적립되어, 개인의 쇼핑이 자연스럽게 공동체를 위한 나눔으로 이어지도록 설계했습니다.</p>
+
+            <h2>미션</h2>
+            <p>"좋은 소비가 좋은 관계를 만든다"는 믿음으로, 합리적인 가격의 좋은 상품과, 그 소비가 만들어내는 공동체적 가치를 함께 제공합니다.</p>
+
+            <h2>핵심 가치</h2>
+            <div class="card-grid">
+                <div class="card"><h3>🤝 함께하는 소비</h3><p>개인 구매가 소속 커뮤니티의 마일리지로 함께 적립되는 구조</p></div>
+                <div class="card"><h3>✅ 신뢰할 수 있는 상품</h3><p>실제 구매 인증 기반 리뷰와 투명한 판매자 정보</p></div>
+                <div class="card"><h3>🎁 지속적인 혜택</h3><p>회원 등급, 추천인 프로그램, 프로모션을 통한 지속적인 적립 기회</p></div>
+                <div class="card"><h3>🌱 성장하는 플랫폼</h3><p>분양형 멀티테넌트 구조로 다양한 커뮤니티와 함께 성장</p></div>
+            </div>
+
+            <h2>회사 정보</h2>
+            <table>
+                <tr><th>상호</th><td>삼육오이사 (WITH+)</td></tr>
+                <tr><th>대표자</th><td>최창훈</td></tr>
+                <tr><th>사업자등록번호</th><td>255-31-01883</td></tr>
+                <tr><th>통신판매업신고번호</th><td class="placeholder">[통신판매업 신고 진행 예정 — 신고 완료 즉시 게시]</td></tr>
+                <tr><th>주소</th><td>서울 서초구 논현로17길 3, 3층</td></tr>
+                <tr><th>대표전화 / 이메일</th><td>010-6202-0304 / polhun0304@naver.com</td></tr>
+            </table>
+            <p style="font-size:0.85em;color:var(--text-gray);">통신판매업신고가 완료되는 대로 실제 신고번호로 교체됩니다. 자세한 이용조건은 <a href="/terms" style="color:var(--primary-color);">이용약관</a>을 참고해주세요.</p>
+
+        </div>
+    </div>
+
+    <footer class="footer">
+        &copy; 2026 WITH+. All rights reserved. · <a href="/terms">이용약관</a> · <a href="/privacy">개인정보처리방침</a>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        if (window.WithPlus && WithPlus.initHeader) { WithPlus.initHeader(); }
+        function toggleFaq(el) { el.parentElement.classList.toggle('open'); }
+    </script>
+</body>
+</html>

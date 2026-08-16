@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>커뮤니티 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B; --primary-dark: #B0154F;
+            --bg-white: #FFFFFF; --bg-light: #F5F5F5;
+            --text-dark: #333333; --text-gray: #666666;
+            --border-color: #E0E0E0; --success: #2E7D32;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; background: var(--bg-white); }
+        .header { background: var(--bg-white); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-main { max-width: 1200px; margin: 0 auto; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; }
+        .logo span { font-size: 0.7em; color: var(--text-gray); display: block; font-weight: normal; }
+        .icon-button { background: none; border: none; cursor: pointer; font-size: 1.3em; color: var(--text-dark); position: relative; text-decoration: none; display: inline-block; }
+        .cart-badge { position: absolute; top: -8px; right: -8px; background: var(--primary-color); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: bold; }
+
+        .page-hero { background: linear-gradient(135deg, var(--primary-color), var(--primary-dark)); color: white; padding: 50px 20px; text-align: center; }
+        .page-hero h1 { font-size: 2em; margin-bottom: 10px; }
+        .page-hero p { opacity: 0.95; }
+
+        .wrap { max-width: 1100px; margin: 40px auto 80px; padding: 0 20px; }
+        .community-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
+        .community-card { border: 1px solid var(--border-color); border-radius: 14px; padding: 24px; transition: all 0.3s; }
+        .community-card:hover { box-shadow: 0 8px 24px rgba(233, 30, 99, 0.12); transform: translateY(-3px); border-color: var(--primary-color); }
+        .community-card .icon { font-size: 2.4em; margin-bottom: 12px; }
+        .community-card .icon-img { width: 48px; height: 48px; object-fit: cover; border-radius: 10px; margin-bottom: 12px; }
+        .community-card h3 { font-size: 1.15em; margin-bottom: 8px; }
+        .community-card p { color: var(--text-gray); font-size: 0.9em; margin-bottom: 16px; min-height: 40px; }
+        .community-stats { display: flex; justify-content: space-between; font-size: 0.85em; color: var(--text-gray); border-top: 1px solid var(--border-color); padding-top: 14px; }
+        .community-stats strong { color: var(--primary-color); }
+
+        .info-note { background: linear-gradient(135deg, #FFF0F6, #FFE5E5); border-radius: 12px; padding: 18px 22px; margin-bottom: 30px; font-size: 0.92em; }
+        .info-note strong { color: var(--primary-color); }
+
+        .state-box { text-align: center; padding: 80px 20px; color: var(--text-gray); }
+        .state-box .emoji { font-size: 3em; margin-bottom: 16px; }
+        .state-box a { display: inline-block; margin-top: 20px; padding: 10px 24px; background: var(--primary-color); color: white; text-decoration: none; border-radius: 24px; font-weight: 600; }
+
+        .footer { background: var(--text-dark); color: rgba(255,255,255,0.7); padding: 30px 20px; text-align: center; font-size: 0.85em; }
+        .footer a { color: #FF7FA8; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-main">
+            <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+            <div style="display:flex; gap:20px; align-items:center;">
+                <a class="icon-button" id="account-link" href="/login">👤</a>
+                <a class="icon-button" href="/cart">🛒<span class="cart-badge">0</span></a>
+            </div>
+        </div>
+    </header>
+
+    <div class="page-hero">
+        <h1>🤝 WITH+ 커뮤니티</h1>
+        <p>함께 참여하고, 함께 마일리지를 나눠요</p>
+    </div>
+
+    <div class="wrap">
+        <div class="info-note" id="rate-info-note">
+            주문 시 커뮤니티에 참여하면 개인 적립에 더해 <strong>커뮤니티 보너스</strong>가 추가로 적립됩니다. (장바구니에서 커뮤니티 선택)
+        </div>
+        <div id="communities-area">
+            <div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중입니다...</h3></div>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <p>&copy; 2024-2026 WITH+ Co., Ltd. All Rights Reserved. | <a href="/">홈으로</a></p>
+    </footer>
+
+    <script src="/vendor/supabase.min.js"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        (async function () {
+            WithPlus.initHeader();
+            const area = document.getElementById('communities-area');
+
+            // 플랫폼 기본 적립율을 실제로 조회해서 표시 (하드코딩하지 않음 - 관리자가 언제든 변경 가능하고, 조직별로 다른 값을 쓸 수도 있음)
+            try {
+                const { ok, json } = await WithPlus.fetchJSON('/api/settings/mileage-rates');
+                if (ok && json.success) {
+                    document.getElementById('rate-info-note').innerHTML =
+                        `주문 시 커뮤니티에 참여하면 개인 적립 ${json.data.personalPercent}%에 더해 <strong>커뮤니티 보너스 ${json.data.communityPercent}%</strong>가 추가로 적립됩니다. (장바구니에서 커뮤니티 선택 · 일부 조직은 자체 적립율을 운영할 수 있습니다)`;
+                }
+            } catch (e) { /* 실패해도 기본 안내 문구 유지 */ }
+
+            try {
+                const { ok, json } = await WithPlus.fetchJSON('/api/communities');
+                if (!ok || !json.success) throw new Error(json.message || '커뮤니티 목록을 불러오지 못했습니다');
+
+                const communities = json.data;
+                if (communities.length === 0) {
+                    area.innerHTML = `
+                        <div class="state-box">
+                            <div class="emoji">🤝</div>
+                            <h3>아직 개설된 커뮤니티가 없습니다</h3>
+                            <p>곧 다양한 커뮤니티로 찾아뵙겠습니다!</p>
+                            <a href="/">홈으로 돌아가기</a>
+                        </div>`;
+                    return;
+                }
+
+                area.innerHTML = `<div class="community-grid">${communities.map(c => `
+                    <div class="community-card">
+                        ${c.logo_url
+                            ? `<img src="${WithPlus.escapeHtml(c.logo_url)}" alt="${WithPlus.escapeHtml(c.name)} 로고" class="icon-img">`
+                            : `<div class="icon">🏅</div>`}
+                        <h3>${WithPlus.escapeHtml(c.name)}</h3>
+                        <p>${WithPlus.escapeHtml(c.description || '커뮤니티 소개가 아직 등록되지 않았습니다.')}</p>
+                        <div class="community-stats">
+                            <span>참여 인원 <strong>${c.member_count}명</strong></span>
+                            <span>누적 적립 <strong>${Number(c.total_points_earned || 0).toLocaleString('ko-KR')}원</strong></span>
+                        </div>
+                    </div>
+                `).join('')}</div>`;
+            } catch (err) {
+                area.innerHTML = `
+                    <div class="state-box">
+                        <div class="emoji">⚠️</div>
+                        <h3>커뮤니티 목록을 불러오는 중 문제가 발생했습니다</h3>
+                        <p>${WithPlus.escapeHtml(err.message)}</p>
+                    </div>`;
+            }
+        })();
+    </script>
+</body>
+</html>

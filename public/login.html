@@ -1,0 +1,313 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>로그인 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --primary-color: #D32F5B; --primary-dark: #B0154F; --bg-light: #F5F5F5; --text-dark: #333; --text-gray: #666; --border-color: #E0E0E0; }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); }
+        .top-logo { text-align: center; padding: 30px 20px 10px; }
+        .top-logo a { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; }
+        .auth-wrap { max-width: 420px; margin: 20px auto 80px; padding: 0 20px; }
+        .auth-box { background: white; border: 1px solid var(--border-color); border-radius: 16px; padding: 40px 30px; }
+        .auth-box h1 { font-size: 1.4em; text-align: center; margin-bottom: 25px; }
+        .field { margin-bottom: 16px; }
+        .field label { display: block; font-size: 0.85em; color: var(--text-gray); margin-bottom: 6px; }
+        .field input { width: 100%; padding: 12px 14px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 1em; }
+        .field input:focus { outline: none; border-color: var(--primary-color); }
+        .submit-btn { width: 100%; padding: 14px; background: var(--primary-color); color: white; border: none; border-radius: 8px; font-weight: 600; font-size: 1em; cursor: pointer; margin-top: 8px; }
+        .submit-btn:hover { background: var(--primary-dark); }
+        .submit-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .msg { margin-top: 14px; font-size: 0.9em; padding: 10px 12px; border-radius: 8px; display: none; }
+        .msg.error { display: block; background: #FDECEA; color: #C62828; }
+        .msg.success { display: block; background: #E8F5E9; color: #2E7D32; }
+        .links-row { text-align: center; margin-top: 20px; font-size: 0.9em; color: var(--text-gray); }
+        .links-row a { color: var(--primary-color); text-decoration: none; font-weight: 600; }
+        .back-home { text-align: center; margin-top: 16px; }
+        .back-home a { color: var(--text-gray); text-decoration: none; font-size: 0.85em; }
+
+        /* ===== 로그인 "스플릿형" 디자인 템플릿 (관리자 → 디자인 부품 갤러리에서 선택 가능) =====
+           - 기존 DOM/로직은 그대로 두고, 브랜드 패널을 좌측에 추가로 붙여 화면을 둘로 나눈다. */
+        .brand-panel { display: none; }
+        body.login-split { display: flex; min-height: 100vh; }
+        body.login-split .brand-panel {
+            display: flex; flex: 1; align-items: center; justify-content: center; text-align: center;
+            background: linear-gradient(135deg, var(--primary-color), var(--primary-dark)); color: white; padding: 40px;
+        }
+        body.login-split .brand-panel .inner { max-width: 360px; }
+        body.login-split .brand-panel .emoji { font-size: 3.2em; margin-bottom: 16px; }
+        body.login-split .brand-panel h2 { font-size: 1.6em; margin-bottom: 10px; }
+        body.login-split .brand-panel p { opacity: 0.9; line-height: 1.7; }
+        body.login-split .login-side { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+        body.login-split .top-logo { display: none; }
+        body.login-split .auth-wrap { margin: 0 auto; }
+        @media (max-width: 800px) {
+            body.login-split { flex-direction: column; }
+            body.login-split .brand-panel { padding: 30px 20px; flex: none; }
+        }
+    </style>
+</head>
+<body>
+    <div class="brand-panel" id="brand-panel">
+        <div class="inner">
+            <div class="emoji">🤝</div>
+            <h2>WITH+</h2>
+            <p>함께할수록 더해지는 가치<br>가입한 분양 조직과 함께 마일리지를 쌓아보세요</p>
+        </div>
+    </div>
+    <div class="login-side">
+    <div class="top-logo"><a href="/">WITH+</a></div>
+    <div class="auth-wrap">
+        <div class="auth-box">
+            <h1>로그인</h1>
+            <form id="login-form">
+                <div class="field">
+                    <label for="email">이메일</label>
+                    <input type="email" id="email" required autocomplete="email">
+                </div>
+                <div class="field">
+                    <label for="password">비밀번호</label>
+                    <input type="password" id="password" required autocomplete="current-password">
+                </div>
+                <button type="submit" class="submit-btn" id="submit-btn">로그인</button>
+                <div class="msg" id="msg"></div>
+            </form>
+
+            <div id="social-login-area" style="margin-top:18px;">
+                <div style="display:flex; align-items:center; gap:10px; margin:18px 0; color:var(--text-gray); font-size:0.82em;">
+                    <div style="flex:1; height:1px; background:var(--border-color);"></div>
+                    <span>또는 소셜 계정으로 로그인</span>
+                    <div style="flex:1; height:1px; background:var(--border-color);"></div>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:10px;">
+                    <button type="button" id="social-google-btn" style="width:100%; padding:12px; border:1px solid var(--border-color); border-radius:8px; background:#fff; font-weight:600; font-size:0.95em; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px;">
+                        <span aria-hidden="true">🔵</span> Google로 로그인
+                    </button>
+                    <button type="button" id="social-kakao-btn" style="width:100%; padding:12px; border:none; border-radius:8px; background:#FEE500; color:#191919; font-weight:600; font-size:0.95em; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px;">
+                        <span aria-hidden="true">💬</span> 카카오로 로그인
+                    </button>
+                    <button type="button" id="social-naver-btn" style="width:100%; padding:12px; border:none; border-radius:8px; background:#03C75A; color:#fff; font-weight:600; font-size:0.95em; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px;">
+                        <span aria-hidden="true">N</span> 네이버로 로그인
+                    </button>
+                </div>
+                <div class="msg" id="social-msg"></div>
+            </div>
+
+            <form id="mfa-form" style="display:none;">
+                <p style="font-size:0.88em; color:var(--text-gray); margin-bottom:18px; line-height:1.6;">
+                    🔐 이 계정은 2단계 인증이 설정되어 있습니다. 인증 앱(Google Authenticator 등)에 표시된 6자리 코드를 입력해주세요.
+                </p>
+                <div class="field">
+                    <label for="mfa-code">인증 코드</label>
+                    <input type="text" id="mfa-code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="one-time-code" required style="letter-spacing:4px; text-align:center; font-size:1.2em;">
+                </div>
+                <button type="submit" class="submit-btn" id="mfa-submit-btn">확인</button>
+                <div class="msg" id="mfa-msg"></div>
+            </form>
+
+            <div class="links-row" style="margin-top:12px;" id="forgot-link-row"><a href="#" id="forgot-link">비밀번호를 잊으셨나요?</a></div>
+            <div class="links-row" id="join-link-row">아직 회원이 아니신가요? <a href="/join">회원가입</a></div>
+
+            <form id="forgot-form" style="display:none; margin-top:20px; padding-top:20px; border-top:1px solid var(--border-color);">
+                <div class="field">
+                    <label for="forgot-email">가입하신 이메일을 입력해주세요</label>
+                    <input type="email" id="forgot-email" required autocomplete="email">
+                </div>
+                <button type="submit" class="submit-btn" id="forgot-submit-btn">비밀번호 재설정 메일 받기</button>
+                <div class="msg" id="forgot-msg"></div>
+            </form>
+        </div>
+        <div class="back-home"><a href="/">← 홈으로 돌아가기</a></div>
+    </div>
+    </div>
+
+    <script src="/vendor/supabase.min.js"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        (async function () {
+            // 관리자가 디자인 부품 갤러리에서 "스플릿형"을 골라뒀으면 좌측 브랜드 패널을 보여준다.
+            WithPlus.refreshPageTemplates().then(t => {
+                if (t.login === 'split') document.body.classList.add('login-split');
+            });
+            const form = document.getElementById('login-form');
+            const msg = document.getElementById('msg');
+            const submitBtn = document.getElementById('submit-btn');
+            const mfaForm = document.getElementById('mfa-form');
+            const mfaMsg = document.getElementById('mfa-msg');
+            const mfaSubmitBtn = document.getElementById('mfa-submit-btn');
+            const forgotLinkRow = document.getElementById('forgot-link-row');
+            const joinLinkRow = document.getElementById('join-link-row');
+            let pendingFactorId = null;
+
+            // ============================================
+            // 소셜 로그인 (구글/카카오/네이버)
+            // - 구글/카카오는 Supabase Auth가 기본 제공하는 OAuth Provider라 signInWithOAuth 호출
+            //   하나로 전체 흐름(동의화면 이동 → 콜백 → 세션발급 → 이 화면으로 복귀)이 처리된다.
+            //   단, 관리자가 Supabase 대시보드에서 해당 제공자를 먼저 활성화해둬야 실제로 동작한다.
+            // - 네이버는 Supabase가 기본 제공하지 않아 서버가 직접 처리하는 /api/auth/naver/login으로
+            //   페이지 전체를 이동시킨다(팝업이 아닌 전체 리다이렉트 방식 - 네이버 정책상 더 안정적).
+            // ============================================
+            const socialMsg = document.getElementById('social-msg');
+            const urlParams = new URLSearchParams(location.search);
+            const socialError = urlParams.get('social_error');
+            if (socialError) {
+                socialMsg.textContent = socialError;
+                socialMsg.className = 'msg error';
+            }
+
+            document.getElementById('social-google-btn').addEventListener('click', async () => {
+                const client = await WithPlus.getClient();
+                const { error } = await client.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + '/' } });
+                if (error) { socialMsg.textContent = 'Google 로그인을 시작하지 못했습니다: ' + error.message; socialMsg.className = 'msg error'; }
+            });
+            document.getElementById('social-kakao-btn').addEventListener('click', async () => {
+                const client = await WithPlus.getClient();
+                const { error } = await client.auth.signInWithOAuth({ provider: 'kakao', options: { redirectTo: location.origin + '/' } });
+                if (error) { socialMsg.textContent = '카카오 로그인을 시작하지 못했습니다: ' + error.message; socialMsg.className = 'msg error'; }
+            });
+            document.getElementById('social-naver-btn').addEventListener('click', () => {
+                location.href = '/api/auth/naver/login';
+            });
+
+            // 이미 로그인되어 있으면 - 단, 2단계 인증이 걸려있는 계정이 아직 인증 코드를 입력하지 않은
+            // 상태(aal1)일 수도 있으므로, 무조건 통과시키지 않고 실제로 필요한 인증 수준을 먼저 확인한다.
+            const session = await WithPlus.getSession();
+            if (session) {
+                const client = await WithPlus.getClient();
+                const { data: aalData } = await client.auth.mfa.getAuthenticatorAssuranceLevel();
+                if (!aalData || aalData.nextLevel === aalData.currentLevel || aalData.nextLevel === 'aal1') {
+                    location.href = '/';
+                    return;
+                }
+                // 2단계 인증이 아직 완료되지 않은 세션 - 코드 입력 화면으로
+                await showMfaStep(client);
+            }
+
+            async function showMfaStep(client) {
+                const { data: factorsData } = await client.auth.mfa.listFactors();
+                const verifiedTotp = (factorsData?.totp || []).find(f => f.status === 'verified');
+                if (!verifiedTotp) { location.href = '/'; return; } // 이론상 도달하지 않지만 방어적으로 처리
+                pendingFactorId = verifiedTotp.id;
+                form.style.display = 'none';
+                forgotLinkRow.style.display = 'none';
+                joinLinkRow.style.display = 'none';
+                mfaForm.style.display = 'block';
+                document.getElementById('mfa-code').focus();
+            }
+
+            form.addEventListener('submit', async function (e) {
+                e.preventDefault();
+                msg.className = 'msg';
+                submitBtn.disabled = true;
+                submitBtn.textContent = '로그인 중...';
+
+                try {
+                    const client = await WithPlus.getClient();
+                    const { error } = await client.auth.signInWithPassword({
+                        email: document.getElementById('email').value.trim(),
+                        password: document.getElementById('password').value
+                    });
+
+                    if (error) {
+                        msg.textContent = error.message === 'Invalid login credentials'
+                            ? '이메일 또는 비밀번호가 올바르지 않습니다.'
+                            : error.message;
+                        msg.className = 'msg error';
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = '로그인';
+                        return;
+                    }
+
+                    // 비밀번호 인증(aal1) 성공 - 이 계정에 2단계 인증이 설정되어 있으면 코드 입력을 한 번 더 요구한다.
+                    const { data: aalData } = await client.auth.mfa.getAuthenticatorAssuranceLevel();
+                    if (aalData && aalData.nextLevel === 'aal2' && aalData.currentLevel !== aalData.nextLevel) {
+                        msg.className = 'msg';
+                        await showMfaStep(client);
+                        return;
+                    }
+
+                    msg.textContent = '로그인 성공! 이동 중...';
+                    msg.className = 'msg success';
+                    setTimeout(() => { location.href = '/'; }, 600);
+                } catch (err) {
+                    msg.textContent = '로그인 중 오류가 발생했습니다: ' + err.message;
+                    msg.className = 'msg error';
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = '로그인';
+                }
+            });
+
+            mfaForm.addEventListener('submit', async function (e) {
+                e.preventDefault();
+                mfaMsg.className = 'msg';
+                mfaSubmitBtn.disabled = true;
+                mfaSubmitBtn.textContent = '확인 중...';
+                try {
+                    const client = await WithPlus.getClient();
+                    const code = document.getElementById('mfa-code').value.trim();
+                    const { error } = await client.auth.mfa.challengeAndVerify({ factorId: pendingFactorId, code });
+                    if (error) {
+                        mfaMsg.textContent = '인증 코드가 올바르지 않습니다. 다시 확인해주세요.';
+                        mfaMsg.className = 'msg error';
+                        mfaSubmitBtn.disabled = false;
+                        mfaSubmitBtn.textContent = '확인';
+                        return;
+                    }
+                    mfaMsg.textContent = '인증 완료! 이동 중...';
+                    mfaMsg.className = 'msg success';
+                    setTimeout(() => { location.href = '/'; }, 500);
+                } catch (err) {
+                    mfaMsg.textContent = '인증 중 오류가 발생했습니다: ' + err.message;
+                    mfaMsg.className = 'msg error';
+                    mfaSubmitBtn.disabled = false;
+                    mfaSubmitBtn.textContent = '확인';
+                }
+            });
+
+            // ============================================
+            // 비밀번호 찾기 (Supabase 표준 비밀번호 재설정 메일)
+            // ============================================
+            const forgotLink = document.getElementById('forgot-link');
+            const forgotForm = document.getElementById('forgot-form');
+            const forgotMsg = document.getElementById('forgot-msg');
+            const forgotBtn = document.getElementById('forgot-submit-btn');
+
+            forgotLink.addEventListener('click', function (e) {
+                e.preventDefault();
+                forgotForm.style.display = forgotForm.style.display === 'none' ? 'block' : 'none';
+            });
+
+            forgotForm.addEventListener('submit', async function (e) {
+                e.preventDefault();
+                forgotMsg.className = 'msg';
+                forgotBtn.disabled = true;
+                forgotBtn.textContent = '전송 중...';
+
+                try {
+                    const client = await WithPlus.getClient();
+                    const email = document.getElementById('forgot-email').value.trim();
+                    const { error } = await client.auth.resetPasswordForEmail(email, {
+                        redirectTo: location.origin + '/reset-password'
+                    });
+
+                    if (error) {
+                        forgotMsg.textContent = error.message;
+                        forgotMsg.className = 'msg error';
+                    } else {
+                        forgotMsg.textContent = '입력하신 이메일로 비밀번호 재설정 링크를 보내드렸습니다. 메일함을 확인해주세요.';
+                        forgotMsg.className = 'msg success';
+                    }
+                } catch (err) {
+                    forgotMsg.textContent = '요청 중 오류가 발생했습니다: ' + err.message;
+                    forgotMsg.className = 'msg error';
+                } finally {
+                    forgotBtn.disabled = false;
+                    forgotBtn.textContent = '비밀번호 재설정 메일 받기';
+                }
+            });
+        })();
+    </script>
+</body>
+</html>

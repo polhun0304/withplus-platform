@@ -1,0 +1,34 @@
+# Render 블루프린트 — WITH+ API (Express + Supabase)
+# 사용법: Render 대시보드 → New → Blueprint → 이 저장소 선택 → 아래 서비스 자동 생성.
+# 시크릿(sync:false)은 커밋되지 않으며 Render 대시보드에서 직접 입력합니다.
+services:
+  - type: web
+    name: withplus-api
+    runtime: node
+    region: singapore          # 한국에서 가장 가까운 Render 리전
+    plan: starter              # $7/월 always-on (무료 플랜은 15분 후 슬립 → node-cron 미작동)
+    branch: main
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true           # main 푸시 시 자동 배포
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # PORT 는 Render 가 자동 주입하므로 설정하지 않음 (server.js 가 process.env.PORT 사용)
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: JWT_EXPIRY
+        sync: false
+      - key: REFRESH_TOKEN_EXPIRY
+        sync: false
+      - key: NTS_API_KEY
+        sync: false
+      - key: SITE_URL
+        sync: false

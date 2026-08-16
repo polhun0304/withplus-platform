@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>자주 묻는 질문 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B; --primary-dark: #B0154F;
+            --bg-white: #FFFFFF; --bg-light: #F5F5F5;
+            --text-dark: #333333; --text-gray: #666666;
+            --border-color: #E0E0E0; --success: #2E7D32;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; background: var(--bg-white); }
+        .header { background: var(--bg-white); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-main { max-width: 1200px; margin: 0 auto; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; }
+        .logo span { font-size: 0.7em; color: var(--text-gray); display: block; font-weight: normal; }
+        .icon-button { background: none; border: none; cursor: pointer; font-size: 1.3em; color: var(--text-dark); position: relative; text-decoration: none; display: inline-block; }
+        .cart-badge { position: absolute; top: -8px; right: -8px; background: var(--primary-color); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: bold; }
+
+        .page-hero { background: linear-gradient(135deg, var(--primary-color), var(--primary-dark)); color: white; padding: 50px 20px; text-align: center; }
+        .page-hero h1 { font-size: 2em; margin-bottom: 10px; }
+        .page-hero p { opacity: 0.95; }
+
+        .wrap { max-width: 900px; margin: 40px auto 80px; padding: 0 20px; }
+
+        .notice-box { background: linear-gradient(135deg, #FFF7E5, #FFF0F0); border: 1px solid #F5C97A; border-radius: 12px; padding: 20px 24px; margin-bottom: 36px; font-size: 0.92em; }
+        .notice-box strong { color: #B8571E; }
+
+        .content h2 { font-size: 1.3em; margin: 36px 0 14px; color: var(--primary-dark); border-bottom: 2px solid var(--border-color); padding-bottom: 8px; }
+        .content h2:first-of-type { margin-top: 0; }
+        .content h3 { font-size: 1.05em; margin: 22px 0 10px; color: var(--text-dark); }
+        .content p { margin-bottom: 12px; font-size: 0.96em; color: var(--text-dark); }
+        .content ol, .content ul { margin: 8px 0 16px 22px; font-size: 0.96em; }
+        .content li { margin-bottom: 8px; }
+        .content .placeholder { background: #FFF3CD; padding: 1px 6px; border-radius: 4px; color: #7A5200; font-weight: 600; }
+        .content table { width: 100%; border-collapse: collapse; margin: 10px 0 20px; font-size: 0.92em; }
+        .content table th, .content table td { border: 1px solid var(--border-color); padding: 10px 12px; text-align: left; }
+        .content table th { background: var(--bg-light); }
+
+        .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 20px 0 28px; }
+        .card { background: var(--bg-light); border-radius: 12px; padding: 20px; border: 1px solid var(--border-color); }
+        .card h3 { margin-top: 0; color: var(--primary-dark); font-size: 1em; }
+        .card p { font-size: 0.9em; color: var(--text-gray); margin-bottom: 0; }
+
+        .faq-item { border: 1px solid var(--border-color); border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+        .faq-q { background: var(--bg-light); padding: 14px 18px; font-weight: 600; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+        .faq-a { padding: 16px 18px; font-size: 0.93em; color: var(--text-gray); display: none; border-top: 1px solid var(--border-color); }
+        .faq-item.open .faq-a { display: block; }
+        .faq-item.open .faq-toggle { transform: rotate(45deg); }
+        .faq-toggle { transition: transform 0.2s; font-size: 1.1em; color: var(--primary-color); }
+        .faq-cat { display: inline-block; background: var(--primary-color); color: white; font-size: 0.75em; padding: 2px 10px; border-radius: 20px; margin-right: 8px; }
+
+        .contact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin: 20px 0; }
+        .contact-card { text-align: center; padding: 24px 16px; background: var(--bg-light); border-radius: 12px; }
+        .contact-card .icon { font-size: 1.8em; margin-bottom: 8px; }
+        .contact-card a { color: var(--primary-color); font-weight: 600; text-decoration: none; }
+
+        .btn-primary { display: inline-block; background: var(--primary-color); color: white; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 8px; }
+        .btn-primary:hover { background: var(--primary-dark); }
+
+        .footer { background: var(--text-dark); color: rgba(255,255,255,0.7); padding: 30px 20px; text-align: center; font-size: 0.85em; }
+        .footer a { color: #FF7FA8; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-main">
+            <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+            <div style="display:flex; gap:20px; align-items:center;">
+                <a class="icon-button" id="account-link" href="/login">👤</a>
+                <a class="icon-button" href="/cart">🛒<span class="cart-badge">0</span></a>
+            </div>
+        </div>
+    </header>
+
+    <div class="page-hero">
+        <h1>❓ 자주 묻는 질문</h1>
+        <p>궁금하신 점을 카테고리별로 빠르게 확인하세요</p>
+    </div>
+
+    <div class="wrap">
+
+        <div class="content">
+
+            <h2>FAQ</h2>
+            <div class="faq-item">
+                <div class="faq-q" onclick="toggleFaq(this.parentElement)"><span><span class="faq-cat">회원</span>회원가입은 어떻게 하나요?</span><span class="faq-toggle">＋</span></div>
+                <div class="faq-a">홈 화면 우측 상단의 회원가입 버튼을 눌러 이메일과 비밀번호만으로 간편하게 가입하실 수 있습니다. 추천인 코드가 있다면 가입 화면에서 함께 입력해주세요.</div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-q" onclick="toggleFaq(this.parentElement)"><span><span class="faq-cat">회원</span>비밀번호를 잊어버렸어요.</span><span class="faq-toggle">＋</span></div>
+                <div class="faq-a">로그인 화면의 '비밀번호 찾기'를 눌러 가입하신 이메일로 재설정 링크를 받으실 수 있습니다.</div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-q" onclick="toggleFaq(this.parentElement)"><span><span class="faq-cat">주문/결제</span>어떤 결제수단을 사용할 수 있나요?</span><span class="faq-toggle">＋</span></div>
+                <div class="faq-a">신용카드 결제(토스페이먼츠) 외에 카카오페이, 네이버페이 간편결제를 지원합니다. 관리자가 설정한 활성화 상태에 따라 결제 화면에 노출되는 수단이 달라질 수 있습니다.</div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-q" onclick="toggleFaq(this.parentElement)"><span><span class="faq-cat">주문/결제</span>마일리지는 어떻게 적립되고 사용하나요?</span><span class="faq-toggle">＋</span></div>
+                <div class="faq-a">구매 확정 시 결제금액의 일정 비율이 개인 마일리지로 적립되며, 소속 커뮤니티가 있다면 커뮤니티 마일리지도 함께 적립됩니다. 적립된 마일리지는 다음 주문 시 장바구니에서 결제금액 한도 내에서 사용하실 수 있습니다.</div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-q" onclick="toggleFaq(this.parentElement)"><span><span class="faq-cat">배송</span>배송비는 어떻게 계산되나요?</span><span class="faq-toggle">＋</span></div>
+                <div class="faq-a">기본 배송비와 무료배송 기준금액이 적용되며, 제주 등 도서산간 지역은 별도 추가배송비가 부과될 수 있습니다. 장바구니에서 배송지를 입력하시면 실시간으로 정확한 배송비를 확인하실 수 있습니다.</div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-q" onclick="toggleFaq(this.parentElement)"><span><span class="faq-cat">배송</span>배송조회는 어디서 하나요?</span><span class="faq-toggle">＋</span></div>
+                <div class="faq-a">마이페이지 주문내역에서 택배사와 운송장번호를 확인하고, '배송조회' 링크를 통해 실시간 배송상태를 확인하실 수 있습니다.</div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-q" onclick="toggleFaq(this.parentElement)"><span><span class="faq-cat">반품/교환</span>주문을 취소하고 싶어요.</span><span class="faq-toggle">＋</span></div>
+                <div class="faq-a">배송이 시작되기 전(주문접수/결제완료/준비중 상태)이라면 마이페이지에서 직접 주문취소를 신청하실 수 있습니다. 자세한 절차는 <a href="/returns" style="color:var(--primary-color);">반품/교환 안내</a> 페이지를 참고해주세요.</div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-q" onclick="toggleFaq(this.parentElement)"><span><span class="faq-cat">반품/교환</span>배송완료 후 반품/교환이 가능한가요?</span><span class="faq-toggle">＋</span></div>
+                <div class="faq-a">상품 수령 후 7일 이내에 마이페이지에서 반품/교환을 신청하실 수 있습니다. 단순 변심의 경우 반품 배송비가 발생할 수 있으며, 상품 하자의 경우 배송비 없이 처리됩니다.</div>
+            </div>
+
+            <div class="faq-item">
+                <div class="faq-q" onclick="toggleFaq(this.parentElement)"><span><span class="faq-cat">프로모션</span>추천인 프로그램은 어떻게 참여하나요?</span><span class="faq-toggle">＋</span></div>
+                <div class="faq-a">마이페이지의 추천인 코드/링크를 지인에게 공유해, 그 지인이 가입 후 첫 주문을 완료하면 추천인과 신규 회원 모두에게 마일리지가 지급됩니다. (프로그램 활성화 여부는 운영 정책에 따라 달라질 수 있습니다.)</div>
+            </div>
+
+            <p style="margin-top:24px;font-size:0.9em;color:var(--text-gray);">원하는 답변을 찾지 못하셨다면 <a href="/contact" style="color:var(--primary-color);">문의하기</a>를 통해 직접 문의해주세요.</p>
+
+        </div>
+    </div>
+
+    <footer class="footer">
+        &copy; 2026 WITH+. All rights reserved. · <a href="/terms">이용약관</a> · <a href="/privacy">개인정보처리방침</a>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        if (window.WithPlus && WithPlus.initHeader) { WithPlus.initHeader(); }
+        function toggleFaq(el) { el.parentElement.classList.toggle('open'); }
+    </script>
+</body>
+</html>

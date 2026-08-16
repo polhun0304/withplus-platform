@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>결제 결과 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --primary-color: #D32F5B; --primary-dark: #B0154F; --bg-light: #F5F5F5; --text-dark: #333; --text-gray: #666; --border-color: #E0E0E0; }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); background: var(--bg-light); min-height: 100vh; }
+        .top-logo { text-align: center; padding: 30px 20px 10px; }
+        .top-logo a { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; }
+        .result-wrap { max-width: 480px; margin: 20px auto 80px; padding: 0 20px; }
+        .result-box { background: white; border: 1px solid var(--border-color); border-radius: 16px; padding: 40px 30px; text-align: center; }
+        .emoji { font-size: 3em; margin-bottom: 14px; }
+        h1 { font-size: 1.3em; margin-bottom: 10px; }
+        .order-no { color: var(--text-gray); font-size: 0.9em; margin-bottom: 16px; }
+        .detail-msg { color: var(--text-gray); font-size: 0.9em; margin-bottom: 24px; line-height: 1.5; }
+        .btn-row a { display: inline-block; padding: 12px 22px; border-radius: 8px; text-decoration: none; font-weight: 600; margin: 4px; }
+        .btn-row a.primary { background: var(--primary-color); color: white; }
+        .btn-row a.secondary { background: #F0F0F0; color: var(--text-dark); }
+        .loading { color: var(--text-gray); font-size: 0.95em; }
+    </style>
+</head>
+<body>
+    <div class="top-logo"><a href="/">WITH+</a></div>
+    <div class="result-wrap">
+        <div class="result-box" id="result-box">
+            <div class="loading">결제 결과를 확인하는 중입니다...</div>
+        </div>
+    </div>
+
+    <script src="/withplus-common.js"></script>
+    <script>
+        (async function () {
+            const box = document.getElementById('result-box');
+            const params = new URLSearchParams(location.search);
+
+            function renderSuccess(orderNumber) {
+                box.innerHTML = `
+                    <div class="emoji">🎉</div>
+                    <h1>결제가 완료되었습니다!</h1>
+                    ${orderNumber ? `<div class="order-no">주문번호: ${WithPlus.escapeHtml(orderNumber)}</div>` : ''}
+                    <div class="btn-row">
+                        <a href="/mypage" class="primary">주문내역 보기</a>
+                        <a href="/" class="secondary">쇼핑 계속하기</a>
+                    </div>`;
+            }
+
+            function renderFail(orderNumber, detailMsg) {
+                box.innerHTML = `
+                    <div class="emoji">😥</div>
+                    <h1>결제가 완료되지 않았습니다</h1>
+                    ${orderNumber ? `<div class="order-no">주문번호: ${WithPlus.escapeHtml(orderNumber)}</div>` : ''}
+                    <div class="detail-msg">${WithPlus.escapeHtml(detailMsg || '결제가 취소되었거나 승인에 실패했습니다. 주문내역에서 다시 시도해주세요.')}</div>
+                    <div class="btn-row">
+                        <a href="/mypage" class="primary">주문내역 보기</a>
+                        <a href="/" class="secondary">쇼핑 계속하기</a>
+                    </div>`;
+            }
+
+            const provider = params.get('provider');
+
+            if (provider === 'kakaopay' || provider === 'naverpay') {
+                // 카카오페이/네이버페이는 서버(콜백 라우트)가 이미 승인 처리를 마친 뒤 이 페이지로
+                // 리다이렉트한 것이므로, 여기서는 그 결과(status 쿼리파라미터)만 보여주면 된다 - 추가 API 호출 없음.
+                const status = params.get('status');
+                const order = params.get('order');
+                const reason = params.get('reason');
+                if (status === 'success') renderSuccess(order);
+                else renderFail(order, reason === 'user_cancelled' || status === 'cancel' ? '결제를 취소하셨습니다.' : undefined);
+                return;
+            }
+
+            // 토스페이먼츠: 결제위젯이 successUrl/failUrl로 paymentKey/orderId/amount(성공) 또는
+            // code/message(실패) 쿼리파라미터를 붙여 이 페이지로 보낸다. 성공이어도 아직 우리 서버가
+            // 승인(confirm) 처리를 하지 않은 상태이므로, 여기서 반드시 서버에 확정 요청을 보내야 한다
+            // (클라이언트가 보낸 금액을 그대로 믿지 않고 서버가 DB 주문 금액과 대조 - 위변조 방지).
+            const paymentKey = params.get('paymentKey');
+            const orderId = params.get('orderId');
+            const amount = params.get('amount');
+            const failCode = params.get('code');
+            const failMessage = params.get('message');
+
+            if (failCode) {
+                renderFail(orderId, failMessage);
+                return;
+            }
+            if (!paymentKey || !orderId || !amount) {
+                renderFail(orderId, '결제 정보가 올바르지 않습니다.');
+                return;
+            }
+
+            try {
+                const token = await WithPlus.getAccessToken();
+                const res = await fetch('/api/payments/toss/confirm', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+                    body: JSON.stringify({ paymentKey, orderId, amount })
+                });
+                const json = await res.json();
+                if (res.ok && json.success) {
+                    renderSuccess(orderId);
+                } else {
+                    renderFail(orderId, json.message);
+                }
+            } catch (err) {
+                renderFail(orderId, '결제 확인 중 오류가 발생했습니다: ' + err.message);
+            }
+        })();
+    </script>
+</body>
+</html>

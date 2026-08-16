@@ -1,0 +1,9365 @@
+const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const crypto = require('crypto');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+require('dotenv').config();
+// 참고: 인증은 전부 Supabase Auth(supabase.auth.getUser)로 처리하므로
+// jsonwebtoken을 이용한 자체 JWT 발급/검증 로직은 사용하지 않습니다.
+
+const { createClient } = require('@supabase/supabase-js');
+const cron = require('node-cron');
+
+// ============================================
+// Supabase 초기화
+// ============================================
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+// 관리자 권한 클라이언트 (SERVICE_ROLE_KEY)
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+// 공개 클라이언트 (ANON_KEY) - RLS 정책이 적용됨
+const supabasePublic = createClient(supabaseUrl, supabaseAnonKey);
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+// ============================================
+// 미들웨어
+// ============================================
+// 홈페이지의 인라인 스크립트/스타일 허용을 위해 CSP 비활성화
+app.use(helmet({ contentSecurityPolicy: false }));
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// ============================================
+// Rate Limiting - 격차분석에서 짚었던 "API 남용 방어 전무" 항목 해결.
+// 로그인 자체는 클라이언트가 Supabase Auth를 직접 호출하므로(이 서버를 거치지 않음) 여기서 막을 수 없지만,
+// 이 서버가 직접 처리하는 API 전반(특히 쿠폰 코드처럼 무작위 대입 공격이 가능한 것들)은 방어가 전혀 없었다.
+// 프록시(ALB/nginx) 뒤에 놓일 가능성을 고려해 X-Forwarded-For 첫 번째 IP를 신뢰한다(현재는 EC2에 직접
+// 노출되어 있지만, 도메인 연결 시 CloudFront/ALB를 앞에 두는 것이 일반적인 구성이라 미리 대응해둔다).
+app.set('trust proxy', 1);
+
+// 전체 API 공통 - 넉넉하지만 스크래핑/전수조사성 남용은 막는 기본 방어선
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15분
+  max: 600,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too Many Requests', message: '요청이 너무 많습니다. 잠시 후 다시 시도해주세요.', timestamp: new Date().toISOString() }
+});
+app.use('/api/', apiLimiter);
+
+// 쿠폰 코드(시리얼 쿠폰/일반 쿠폰) 검증·등록 - 코드를 무작위로 대입해보는 공격이 가능한 엔드포인트라 훨씬 엄격하게 제한
+const couponLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too Many Requests', message: '쿠폰 코드 시도 횟수가 너무 많습니다. 15분 후 다시 시도해주세요.', timestamp: new Date().toISOString() }
+});
+app.use('/api/serial-coupons/redeem', couponLimiter);
+app.use('/api/coupons/validate', couponLimiter);
+
+// 정적 파일 서빙 (홈페이지: public/index.html)
+app.use(express.static(path.join(__dirname, 'public')));
+
+// 인증 미들웨어
+// 회원가입(join.html)은 client.auth.signUp()만 호출하는 순수 Supabase Auth 방식이라, auth.users에는
+// 계정이 생기지만 이 코드베이스 어디에도 profiles 행을 만들어주는 곳이 없었다(테스트 스크립트만
+// admin.auth.admin.createUser 직후 별도로 profiles를 upsert해왔기 때문에 지금까지 드러나지 않았던
+// 실제 버그). profiles가 없으면 주문/리뷰/마일리지 등 거의 모든 기능이 조회 실패로 조용히 깨지므로,
+// 인증 미들웨어에서 매 요청마다 정직하게 확인해 없으면 만들어준다. 이미 확인된 사용자는 메모리에
+// 캐시해 매 요청마다 DB를 다시 조회하지 않도록 한다(서버 재시작 전까지 유효 - shippingPolicyCache 등
+// 기존의 인메모리 캐시 패턴과 동일).
+// knownProfileUserIds는 "존재 + 탈퇴하지 않음(활성)"이 확인된 사용자만 캐시한다. 탈퇴 처리(회원탈퇴 API)
+// 시점에 이 캐시에서 즉시 제거되므로, 캐시에 없는 사용자는 항상 DB에서 다시 확인한다.
+const knownProfileUserIds = new Set();
+async function ensureProfileExists(user) {
+  if (knownProfileUserIds.has(user.id)) return { active: true };
+  try {
+    const { data: existing } = await supabase.from('profiles').select('id, is_active').eq('id', user.id).maybeSingle();
+    if (existing) {
+      // is_active가 명시적으로 false면 탈퇴한 계정 - is_active 컬럼 자체를 아직 안 쓰는 기존 회원은
+      // null/undefined이므로 활성으로 취급한다(회원탈퇴 API가 탈퇴 시에만 명시적으로 false를 넣음).
+      if (existing.is_active === false) return { active: false };
+      knownProfileUserIds.add(user.id);
+      return { active: true };
+    }
+    const meta = user.user_metadata || {};
+    const { error: insertErr } = await supabase.from('profiles').upsert([{
+      id: user.id,
+      email: user.email,
+      full_name: meta.full_name || meta.name || null, // 소셜 로그인(구글/카카오) 제공자별로 메타데이터 키가 다를 수 있어 둘 다 확인
+      role: 'member',
+      member_type: 'general'
+    }], { onConflict: 'id', ignoreDuplicates: true });
+    if (insertErr) throw insertErr;
+    knownProfileUserIds.add(user.id);
+    return { active: true };
+  } catch (err) {
+    console.error('Error ensuring profile exists for user', user.id, ':', err.message);
+    // 조회 자체가 실패한 경우(일시적 DB 오류 등)까지 차단하면 서비스 전체가 막히므로, 기존 동작과 동일하게 통과시킨다.
+    return { active: true };
+  }
+}
+
+// JWT의 페이로드(가운데 부분)만 디코딩해 AAL(Authenticator Assurance Level) 클레임을 읽어온다.
+// 서명 검증은 이미 supabase.auth.getUser(token)이 Supabase 서버에 물어봐서 대신해주므로, 여기서는
+// 이미 신뢰할 수 있다고 확인된 토큰의 클레임만 꺼내 쓴다(추가 서명 검증이 필요 없음).
+function decodeJwtAal(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf8'));
+    return payload.aal || 'aal1';
+  } catch (e) {
+    return 'aal1';
+  }
+}
+
+const authenticate = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+
+    if (!token) {
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Authentication token required',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // Supabase에서 토큰 검증
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+
+    if (error || !user) {
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or expired token',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    req.user = user;
+    req.authAal = decodeJwtAal(token);
+    const profileStatus = await ensureProfileExists(user);
+    if (!profileStatus.active) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: '탈퇴 처리된 계정입니다',
+        timestamp: new Date().toISOString()
+      });
+    }
+    next();
+  } catch (err) {
+    res.status(401).json({
+      error: 'Unauthorized',
+      message: err.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+// ============================================
+// 헬스 체크 엔드포인트
+// ============================================
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    service: 'WITH+ Community E-commerce Platform',
+    port: PORT,
+    database: 'Supabase (GMWOS 통합)',
+  });
+});
+
+// ============================================
+// 클라이언트 설정 엔드포인트 (ANON_KEY는 공개 정보이므로 노출 안전)
+// 프론트엔드(login.html 등)가 Supabase Auth를 직접 사용할 수 있도록 제공
+// ============================================
+app.get('/api/config', (req, res) => {
+  res.json({
+    supabaseUrl,
+    supabaseAnonKey
+  });
+});
+
+// ============================================
+// API 정보 엔드포인트
+// (루트 '/'는 이제 홈페이지 index.html이 서빙됨)
+// ============================================
+app.get('/api', (req, res) => {
+  res.json({
+    message: 'WITH+ Community E-commerce Platform API',
+    version: '1.0.0',
+    mode: '통합 모드 (GMWOS Supabase)',
+    endpoints: {
+      health: '/api/health',
+      products: '/api/products',
+      orders: '/api/orders',
+      reviews: '/api/reviews'
+    }
+  });
+});
+
+// ============================================
+// 역할(Role) 기반 접근 제어
+// profiles.role 은 GMWOS 와 공유하는 컬럼이므로 읽기만 하고 절대 쓰지 않음.
+// WITH+ 에서 의미있는 역할: provider(공급자) / admin / super_admin
+// ============================================
+const requireRole = (allowedRoles) => async (req, res, next) => {
+  try {
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('role')
+      .eq('id', req.user.id)
+      .single();
+
+    if (error || !profile) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: '프로필 정보를 확인할 수 없습니다',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    if (!allowedRoles.includes(profile.role)) {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: '이 작업을 수행할 권한이 없습니다',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 🔒 관리자 2단계 인증(2FA) - 격차분석에서 지적된 "관리자 계정에 2FA 없음" 항목 해결.
+    // 계정을 탈취당하면 전체 회원/주문/결제설정까지 조작 가능한 admin/super_admin에 한해 강제한다.
+    // 아직 2FA를 등록하지 않은 관리자까지 당장 차단하면 형님 계정을 포함해 기존 관리자들이 전부
+    // 잠길 수 있으므로, "TOTP를 등록해둔 계정만" 2단계 인증(세션이 aal2)을 요구한다 - 즉 등록하는
+    // 순간부터 그 계정은 반드시 2단계 인증을 통과해야 로그인이 완성되는 방식(선택적 활성화, 활성화 후 강제).
+    if (isAdminRole(profile.role)) {
+      const hasVerifiedTotp = Array.isArray(req.user.factors) && req.user.factors.some(f => f.factor_type === 'totp' && f.status === 'verified');
+      if (hasVerifiedTotp && req.authAal !== 'aal2') {
+        return res.status(403).json({
+          error: 'Forbidden',
+          message: '2단계 인증이 필요합니다. 로그인 시 인증 앱의 코드를 입력해주세요.',
+          mfaRequired: true,
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+
+    req.userRole = profile.role;
+
+    // 🕵️ 관리자 감사로그: admin/super_admin의 상태변경 요청만 기록(조회성 GET은 제외)
+    if (isAdminRole(profile.role) && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+      res.on('finish', () => { logAdminAction(req, res, profile.role); });
+    }
+
+    next();
+  } catch (err) {
+    res.status(403).json({
+      error: 'Forbidden',
+      message: err.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+};
+
+const isAdminRole = (role) => role === 'admin' || role === 'super_admin';
+
+// ============================================
+// 🕵️ 관리자 감사로그 (Admin Audit Log)
+// admin/super_admin이 상태를 변경하는 요청(POST/PUT/PATCH/DELETE)을 보낼 때마다
+// requireRole 통과 직후 등록되어, 응답이 실제로 나간 다음(res.on('finish')) 비동기로 기록한다.
+// 요청 처리 자체를 막지 않기 위해 실패해도 조용히 콘솔에만 남기고 넘어간다(fire-and-forget).
+// ============================================
+const AUDIT_SENSITIVE_KEY_PATTERN = /pass|token|secret|api[-_]?key|credential/i;
+function redactSensitiveFields(value, depth = 0) {
+  if (depth > 4 || value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map(v => redactSensitiveFields(v, depth + 1));
+  if (typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = AUDIT_SENSITIVE_KEY_PATTERN.test(k) ? '[REDACTED]' : redactSensitiveFields(v, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
+async function logAdminAction(req, res, role) {
+  try {
+    let bodySnapshot = redactSensitiveFields(req.body);
+    let serialized = JSON.stringify(bodySnapshot);
+    if (serialized && serialized.length > 4000) {
+      bodySnapshot = { _truncated: true, preview: serialized.slice(0, 4000) };
+    }
+    await supabase.from('admin_audit_logs_with').insert([{
+      admin_id: req.user.id,
+      admin_email: req.user.email || null,
+      role,
+      method: req.method,
+      path: req.originalUrl || req.path,
+      status_code: res.statusCode,
+      body_snapshot: bodySnapshot,
+      ip_address: (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim() || null
+    }]);
+  } catch (err) {
+    console.error('감사로그 기록 실패:', err.message);
+  }
+}
+
+// 현재 로그인한 사용자의 프로필/권한 정보 (관리자 페이지 접근 가능 여부 확인용)
+app.get('/api/me', authenticate, async (req, res) => {
+  try {
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('id, email, full_name, role')
+      .eq('id', req.user.id)
+      .single();
+
+    if (error || !profile) {
+      return res.json({
+        success: true,
+        data: { id: req.user.id, email: req.user.email, role: 'member' },
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    res.json({ success: true, data: profile, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch profile', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 회원 배송지 관리 (마이페이지 배송지록 + 장바구니 자동 불러오기용)
+// 여러 개 저장 가능, 그중 하나를 기본 배송지(is_default)로 지정
+// ============================================
+function validateAddressInput(body) {
+  const { receiver_name, receiver_phone, address } = body;
+  if (!receiver_name || !String(receiver_name).trim()) return '받는 분 성함을 입력해주세요';
+  if (!receiver_phone || !String(receiver_phone).trim()) return '연락처를 입력해주세요';
+  if (!address || !String(address).trim()) return '주소를 입력해주세요';
+  return null;
+}
+
+app.get('/api/me/addresses', authenticate, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('shipping_addresses_with')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .order('is_default', { ascending: false })
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching addresses:', err);
+    res.status(500).json({ error: 'Failed to fetch addresses', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/me/addresses', authenticate, async (req, res) => {
+  try {
+    const validationError = validateAddressInput(req.body);
+    if (validationError) {
+      return res.status(400).json({ error: 'Bad Request', message: validationError, timestamp: new Date().toISOString() });
+    }
+    const { label, receiver_name, receiver_phone, postal_code, address, address_detail, is_default } = req.body;
+
+    const { count } = await supabase
+      .from('shipping_addresses_with')
+      .select('id', { count: 'exact', head: true })
+      .eq('user_id', req.user.id);
+    const makeDefault = !!is_default || (count || 0) === 0; // 첫 배송지는 자동으로 기본 배송지
+
+    if (makeDefault) {
+      await supabase.from('shipping_addresses_with').update({ is_default: false }).eq('user_id', req.user.id);
+    }
+
+    const { data, error } = await supabase
+      .from('shipping_addresses_with')
+      .insert([{
+        user_id: req.user.id,
+        label: (label && String(label).trim()) || '배송지',
+        receiver_name: String(receiver_name).trim(),
+        receiver_phone: String(receiver_phone).trim(),
+        postal_code: postal_code || null,
+        address: String(address).trim(),
+        address_detail: address_detail ? String(address_detail).trim() : null,
+        is_default: makeDefault
+      }])
+      .select()
+      .single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data, message: '배송지가 등록되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating address:', err);
+    res.status(500).json({ error: 'Failed to create address', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/me/addresses/:id', authenticate, async (req, res) => {
+  try {
+    const { data: existing } = await supabase
+      .from('shipping_addresses_with')
+      .select('id, user_id')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (!existing || existing.user_id !== req.user.id) {
+      return res.status(404).json({ error: 'Not Found', message: '배송지를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { label, receiver_name, receiver_phone, postal_code, address, address_detail, is_default } = req.body;
+    const updates = { updated_at: new Date().toISOString() };
+    if (label !== undefined) updates.label = (label && String(label).trim()) || '배송지';
+    if (receiver_name !== undefined) {
+      if (!String(receiver_name).trim()) return res.status(400).json({ error: 'Bad Request', message: '받는 분 성함을 입력해주세요', timestamp: new Date().toISOString() });
+      updates.receiver_name = String(receiver_name).trim();
+    }
+    if (receiver_phone !== undefined) {
+      if (!String(receiver_phone).trim()) return res.status(400).json({ error: 'Bad Request', message: '연락처를 입력해주세요', timestamp: new Date().toISOString() });
+      updates.receiver_phone = String(receiver_phone).trim();
+    }
+    if (postal_code !== undefined) updates.postal_code = postal_code || null;
+    if (address !== undefined) {
+      if (!String(address).trim()) return res.status(400).json({ error: 'Bad Request', message: '주소를 입력해주세요', timestamp: new Date().toISOString() });
+      updates.address = String(address).trim();
+    }
+    if (address_detail !== undefined) updates.address_detail = address_detail ? String(address_detail).trim() : null;
+
+    if (is_default === true) {
+      await supabase.from('shipping_addresses_with').update({ is_default: false }).eq('user_id', req.user.id);
+      updates.is_default = true;
+    }
+
+    const { data, error } = await supabase
+      .from('shipping_addresses_with')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, data, message: '배송지가 수정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating address:', err);
+    res.status(500).json({ error: 'Failed to update address', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.delete('/api/me/addresses/:id', authenticate, async (req, res) => {
+  try {
+    const { data: existing } = await supabase
+      .from('shipping_addresses_with')
+      .select('id, user_id, is_default')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (!existing || existing.user_id !== req.user.id) {
+      return res.status(404).json({ error: 'Not Found', message: '배송지를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { error } = await supabase.from('shipping_addresses_with').delete().eq('id', req.params.id);
+    if (error) throw error;
+
+    // 기본 배송지를 삭제한 경우, 남은 배송지 중 가장 최근 것을 새 기본 배송지로 자동 승격
+    if (existing.is_default) {
+      const { data: rest } = await supabase
+        .from('shipping_addresses_with')
+        .select('id')
+        .eq('user_id', req.user.id)
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (rest && rest.length > 0) {
+        await supabase.from('shipping_addresses_with').update({ is_default: true }).eq('id', rest[0].id);
+      }
+    }
+
+    res.json({ success: true, message: '배송지가 삭제되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting address:', err);
+    res.status(500).json({ error: 'Failed to delete address', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/me/addresses/:id/default', authenticate, async (req, res) => {
+  try {
+    const { data: existing } = await supabase
+      .from('shipping_addresses_with')
+      .select('id, user_id')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (!existing || existing.user_id !== req.user.id) {
+      return res.status(404).json({ error: 'Not Found', message: '배송지를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    await supabase.from('shipping_addresses_with').update({ is_default: false }).eq('user_id', req.user.id);
+    const { data, error } = await supabase
+      .from('shipping_addresses_with')
+      .update({ is_default: true })
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, data, message: '기본 배송지로 설정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error setting default address:', err);
+    res.status(500).json({ error: 'Failed to set default address', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 회원탈퇴 - 개인정보보호법상 회원은 언제든 자신의 개인정보 삭제(탈퇴)를 요청할 수 있어야 한다.
+// 다만 전자상거래법(전자상거래 등에서의 소비자보호에 관한 법률)상 거래기록(주문내역)은 5년간 보관
+// 의무가 있으므로, 주문(orders_with)/쿠폰사용(coupon_redemptions)/마일리지(mileage_adjustments_with)
+// 기록은 삭제하지 않고 user_id 연결은 유지하되, 그 외 불필요한 개인정보(이름/연락처/주소/카드정보/
+// 배송지/장바구니/찜/재입고알림/알림함/게시글·댓글 작성자명)는 즉시 삭제·익명화한다.
+// 탈퇴 후에는 (1) Supabase Auth 계정을 밴 처리해 재로그인을 막고, (2) 이미 발급된(아직 만료 전인)
+// 액세스 토큰도 이 서버 프로세스 안에서는 즉시 거부되도록 authenticate 미들웨어의 캐시에서 제거한다.
+// ============================================
+app.post('/api/me/withdraw', authenticate, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { data: profile } = await supabase.from('profiles').select('id, is_active').eq('id', userId).maybeSingle();
+    if (profile && profile.is_active === false) {
+      return res.status(400).json({ error: 'Bad Request', message: '이미 탈퇴 처리된 계정입니다', timestamp: new Date().toISOString() });
+    }
+
+    const { reason } = req.body || {};
+
+    // 1) 프로필 익명화 - 완전 삭제 대신 비식별화(다른 테이블의 user_id 참조 무결성을 지키면서
+    //    실제 개인정보만 제거). 이메일은 관리자 화면 등에서 문자열로 다뤄지는 곳이 많아 null 대신
+    //    고유한 자리표시자로 대체해 이후 어떤 화면에서도 실제 이메일이 노출되지 않게 한다.
+    const placeholderEmail = `withdrawn-${userId}@withplus.local`;
+    const { error: profileErr } = await supabase.from('profiles').update({
+      full_name: '탈퇴한 회원',
+      email: placeholderEmail,
+      phone: null,
+      birth_date: null,
+      address: null,
+      // card_token은 WITH+ 코드베이스 어디에서도 쓰지 않는 GMWOS 공유 컬럼이고 NOT NULL 제약이 걸려있어
+      // (기본값이 자동 채번되는 방식으로 보임) 건드리지 않는다 - null로 지우면 제약 위반으로 탈퇴 자체가 실패한다.
+      is_active: false
+    }).eq('id', userId);
+    if (profileErr) throw profileErr;
+
+    // 2) 더 이상 필요 없는 개인정보성 데이터 삭제 (거래기록이 아닌 것들)
+    await Promise.all([
+      supabase.from('shipping_addresses_with').delete().eq('user_id', userId),
+      supabase.from('cart_snapshots_with').delete().eq('user_id', userId),
+      supabase.from('wishlist_with').delete().eq('user_id', userId),
+      supabase.from('restock_subscriptions_with').delete().eq('user_id', userId),
+      supabase.from('notifications_with').delete().eq('user_id', userId)
+    ].map(p => Promise.resolve(p).catch(err => { console.error('회원탈퇴 부가데이터 정리 중 일부 실패(계속 진행):', err.message); return null; })));
+
+    // 게시판에 남긴 글/댓글 자체는 커뮤니티 기록으로 유지하되(작성자 삭제 시 다른 회원의 답글 맥락이 깨지는 것을 방지),
+    // 화면에 노출되는 작성자명 스냅샷만 익명화한다.
+    await Promise.all([
+      supabase.from('board_posts').update({ author_name: '탈퇴한 회원' }).eq('author_id', userId),
+      supabase.from('board_comments').update({ author_name: '탈퇴한 회원' }).eq('author_id', userId)
+    ].map(p => Promise.resolve(p).catch(err => { console.error('회원탈퇴 게시글 익명화 중 일부 실패(계속 진행):', err.message); return null; })));
+
+    // 3) 탈퇴 사유 기록 (선택 입력, 운영 참고용 - 별도 테이블 없이 email_logs 성격의 감사 로그가 없으므로
+    //    가장 단순하게 콘솔에 남긴다. 향후 관리자 감사로그 기능이 생기면 그쪽으로 옮길 수 있다.)
+    if (reason) {
+      console.log(`[회원탈퇴] user_id=${userId} 사유: ${String(reason).slice(0, 500)}`);
+    }
+
+    // 4) Supabase Auth 계정 밴 처리 - 재로그인 자체를 막는다 (탈퇴는 되돌릴 수 없는 것으로 취급)
+    try {
+      await supabase.auth.admin.updateUserById(userId, { ban_duration: '876000h' }); // 약 100년 = 사실상 영구
+    } catch (banErr) {
+      console.error('회원탈퇴 - Auth 계정 밴 처리 실패(프로필 비식별화는 완료됨):', banErr.message);
+    }
+
+    // 5) 이 서버 프로세스의 프로필 캐시에서 제거 - 이미 발급된 액세스 토큰이 만료 전이라도
+    //    다음 요청부터는 authenticate 미들웨어가 DB를 다시 확인해 탈퇴 계정을 즉시 차단하게 한다.
+    knownProfileUserIds.delete(userId);
+
+    res.json({ success: true, message: '회원탈퇴가 완료되었습니다. 그동안 이용해주셔서 감사합니다.', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error processing account withdrawal:', err);
+    res.status(500).json({ error: 'Failed to process withdrawal', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 상품 slug 생성 헬퍼
+// products_with.slug 는 NOT NULL + UNIQUE 라서 상품 등록 시 반드시 채워줘야 함
+// ============================================
+function slugify(name) {
+  const base = String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, '-') // 한글 포함 유니코드 문자/숫자 외 전부 하이픈으로
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60) || 'product';
+  const suffix = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  return `${base}-${suffix}`;
+}
+
+// ============================================
+// 플랫폼 설정 (마일리지 적립율 등, 관리자가 언제든 동적으로 변경 가능)
+// ============================================
+const DEFAULT_MILEAGE_RATES = { personal: 0.01, community: 0.02 };
+let mileageRatesCache = null;
+let mileageRatesCacheAt = 0;
+const MILEAGE_RATES_CACHE_TTL_MS = 30 * 1000; // 30초 캐시 (관리자 변경이 최대 30초 내 전체 반영)
+
+async function getMileageRates() {
+  const now = Date.now();
+  if (mileageRatesCache && (now - mileageRatesCacheAt) < MILEAGE_RATES_CACHE_TTL_MS) {
+    return mileageRatesCache;
+  }
+  try {
+    const { data, error } = await supabase
+      .from('platform_settings')
+      .select('value')
+      .eq('key', 'mileage_rates')
+      .single();
+    if (error || !data) return mileageRatesCache || DEFAULT_MILEAGE_RATES;
+    const value = data.value || {};
+    const rates = {
+      personal: typeof value.personal === 'number' ? value.personal : DEFAULT_MILEAGE_RATES.personal,
+      community: typeof value.community === 'number' ? value.community : DEFAULT_MILEAGE_RATES.community
+    };
+    mileageRatesCache = rates;
+    mileageRatesCacheAt = now;
+    return rates;
+  } catch (err) {
+    console.error('Error fetching mileage rates:', err);
+    return mileageRatesCache || DEFAULT_MILEAGE_RATES;
+  }
+}
+
+// 특정 주문에 실제로 적용할 적립율을 계산한다.
+// - 분양 조직(community)이 personal_point_rate / community_point_rate 를 직접 지정해두었으면 그 값을 우선 사용
+// - 지정해두지 않았으면(null) 플랫폼 기본값(getMileageRates)을 그대로 사용
+// - community_id가 없는 주문(조직 미소속 개인 구매)은 항상 플랫폼 기본 개인 적립율만 적용하고, 커뮤니티 적립율은 0
+async function getEffectiveMileageRates(communityId) {
+  const platformRates = await getMileageRates();
+  if (!communityId) {
+    return { personal: platformRates.personal, community: 0 };
+  }
+  const { data: community, error } = await supabase
+    .from('communities')
+    .select('personal_point_rate, community_point_rate')
+    .eq('id', communityId)
+    .maybeSingle();
+  if (error || !community) {
+    return { personal: platformRates.personal, community: platformRates.community };
+  }
+  const personal = (community.personal_point_rate !== null && community.personal_point_rate !== undefined)
+    ? Number(community.personal_point_rate)
+    : platformRates.personal;
+  const communityRate = (community.community_point_rate !== null && community.community_point_rate !== undefined)
+    ? Number(community.community_point_rate)
+    : platformRates.community;
+  return { personal, community: communityRate };
+}
+
+// 공개: 현재 마일리지 적립율 조회 (누구나, 로그인 불필요 - 상품 카드/상세페이지에 표시하기 위함)
+app.get('/api/settings/mileage-rates', async (req, res) => {
+  try {
+    const rates = await getMileageRates();
+    res.json({
+      success: true,
+      data: {
+        personal: rates.personal,
+        community: rates.community,
+        personalPercent: Math.round(rates.personal * 10000) / 100,
+        communityPercent: Math.round(rates.community * 10000) / 100
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch mileage rates', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 마일리지 적립율 변경
+app.patch('/api/admin/settings/mileage-rates', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { personal, community } = req.body;
+    const personalNum = Number(personal);
+    const communityNum = Number(community);
+
+    if (!Number.isFinite(personalNum) || !Number.isFinite(communityNum)) {
+      return res.status(400).json({ error: 'Bad Request', message: 'personal, community는 숫자여야 합니다', timestamp: new Date().toISOString() });
+    }
+    if (personalNum < 0 || personalNum > 0.5 || communityNum < 0 || communityNum > 0.5) {
+      return res.status(400).json({ error: 'Bad Request', message: '적립율은 0% ~ 50% 사이여야 합니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data, error } = await supabase
+      .from('platform_settings')
+      .upsert({
+        key: 'mileage_rates',
+        value: { personal: personalNum, community: communityNum },
+        updated_at: new Date().toISOString(),
+        updated_by: req.user.id
+      }, { onConflict: 'key' })
+      .select()
+      .single();
+    if (error) throw error;
+
+    mileageRatesCache = { personal: personalNum, community: communityNum };
+    mileageRatesCacheAt = Date.now();
+
+    res.json({
+      success: true,
+      data: { personal: personalNum, community: communityNum },
+      message: '마일리지 적립율이 변경되었습니다',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error updating mileage rates:', err);
+    res.status(500).json({ error: 'Failed to update mileage rates', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 배송비 정책 (관리자가 언제든 변경 가능 - platform_settings(key='shipping_policy'))
+// 다른 쇼핑몰들의 일반적인 방식(기본 배송비 + 조건부 무료배송 + 제주/도서산간 추가배송비)을 참고해 구성했다.
+// 도서산간 추가배송비 구간(surcharge_zones)은 "우편번호 범위 + 추가금액"으로 정의하며, 기본값은
+// 제주(우편번호 63000~63644, 전국 공통으로 신뢰할 수 있는 범위)만 들어있다. 울릉도/백령도 등 그 외
+// 도서산간 지역은 택배사 계약(실비)마다 금액이 다르고 우편번호가 연속 범위가 아니라 정확한 전국 목록을
+// 함부로 하드코딩하지 않았다 - 관리자가 "⚙️ 설정 > 배송비 정책"에서 우편번호 범위를 직접 추가/조정할 수 있다.
+// ============================================
+const DEFAULT_SHIPPING_POLICY = {
+  base_fee: 3000,
+  free_shipping_threshold: 30000,
+  surcharge_zones: [
+    { label: '제주', postal_start: '63000', postal_end: '63644', fee: 3000 }
+  ]
+};
+let shippingPolicyCache = null;
+let shippingPolicyCacheAt = 0;
+const SHIPPING_POLICY_CACHE_TTL_MS = 30 * 1000; // 30초 캐시 (관리자 변경이 최대 30초 내 전체 반영)
+
+function normalizeShippingPolicy(value) {
+  const v = value || {};
+  const base_fee = Number.isFinite(Number(v.base_fee)) ? Math.max(0, Math.floor(Number(v.base_fee))) : DEFAULT_SHIPPING_POLICY.base_fee;
+  const free_shipping_threshold = Number.isFinite(Number(v.free_shipping_threshold)) ? Math.max(0, Math.floor(Number(v.free_shipping_threshold))) : DEFAULT_SHIPPING_POLICY.free_shipping_threshold;
+  const zonesSrc = Array.isArray(v.surcharge_zones) ? v.surcharge_zones : DEFAULT_SHIPPING_POLICY.surcharge_zones;
+  const surcharge_zones = zonesSrc
+    .filter(z => z && z.postal_start !== undefined && z.postal_end !== undefined)
+    .map(z => ({
+      label: String(z.label || '추가배송비 지역').trim().slice(0, 30),
+      postal_start: String(z.postal_start).replace(/[^0-9]/g, '').padStart(5, '0').slice(0, 5),
+      postal_end: String(z.postal_end).replace(/[^0-9]/g, '').padStart(5, '0').slice(0, 5),
+      fee: Number.isFinite(Number(z.fee)) ? Math.max(0, Math.floor(Number(z.fee))) : 0
+    }));
+  return { base_fee, free_shipping_threshold, surcharge_zones };
+}
+
+async function getShippingPolicy() {
+  const now = Date.now();
+  if (shippingPolicyCache && (now - shippingPolicyCacheAt) < SHIPPING_POLICY_CACHE_TTL_MS) {
+    return shippingPolicyCache;
+  }
+  try {
+    const { data, error } = await supabase.from('platform_settings').select('value').eq('key', 'shipping_policy').single();
+    const policy = normalizeShippingPolicy(error || !data ? null : data.value);
+    shippingPolicyCache = policy;
+    shippingPolicyCacheAt = now;
+    return policy;
+  } catch (err) {
+    console.error('Error fetching shipping policy:', err);
+    return shippingPolicyCache || DEFAULT_SHIPPING_POLICY;
+  }
+}
+
+// 상품 합계금액 + 배송지 우편번호를 받아 실제 배송비를 계산한다 (서버가 최종 권한을 가짐 - 클라이언트가 보낸 배송비 값은 신뢰하지 않음)
+// 도서산간 추가배송비는 무료배송 조건 충족 여부와 무관하게 항상 별도로 부과된다(대부분의 쇼핑몰과 동일한 관행).
+function calcShippingFee(policy, subtotal, postalCode) {
+  const base = subtotal >= policy.free_shipping_threshold ? 0 : policy.base_fee;
+  let surcharge = 0, surchargeLabel = null;
+  const postal = postalCode ? String(postalCode).replace(/[^0-9]/g, '').padStart(5, '0').slice(0, 5) : null;
+  if (postal) {
+    const zone = policy.surcharge_zones.find(z => postal >= z.postal_start && postal <= z.postal_end);
+    if (zone) { surcharge = zone.fee; surchargeLabel = zone.label; }
+  }
+  return { fee: base + surcharge, base_fee: base, surcharge_fee: surcharge, surcharge_label: surchargeLabel };
+}
+
+// 공개: 현재 배송비 정책 조회 (누구나, 로그인 불필요 - 장바구니 화면에 실시간 배송비 표시하기 위함)
+app.get('/api/settings/shipping-policy', async (req, res) => {
+  try {
+    const policy = await getShippingPolicy();
+    res.json({ success: true, data: policy, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch shipping policy', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 배송비 정책 변경
+app.patch('/api/admin/settings/shipping-policy', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const policy = normalizeShippingPolicy(req.body);
+    if (policy.surcharge_zones.some(z => z.postal_start > z.postal_end)) {
+      return res.status(400).json({ error: 'Bad Request', message: '우편번호 시작값은 끝값보다 작거나 같아야 합니다', timestamp: new Date().toISOString() });
+    }
+    const { error } = await supabase.from('platform_settings').upsert({
+      key: 'shipping_policy',
+      value: policy,
+      updated_at: new Date().toISOString(),
+      updated_by: req.user.id
+    }, { onConflict: 'key' });
+    if (error) throw error;
+
+    shippingPolicyCache = policy;
+    shippingPolicyCacheAt = Date.now();
+
+    res.json({ success: true, data: policy, message: '배송비 정책이 저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating shipping policy:', err);
+    res.status(500).json({ error: 'Failed to update shipping policy', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 택배사 목록 + 운송장 조회 URL 자동 생성
+// 이전에는 관리자가 택배사명을 자유 텍스트로 입력해 오타가 나거나(예: "CJ대한통운" vs "cj대한통운") 조회 링크를
+// 전혀 제공하지 못했다. 이제 표준 택배사 목록에서 고르면(목록에 없으면 "기타"로 직접 입력 가능) 서버가
+// 운송장번호와 조합해 조회 링크를 자동 생성해 회원(마이페이지)과 관리자 화면에 모두 보여준다.
+// ============================================
+const COURIERS = [
+  { name: 'CJ대한통운', trackingUrl: n => `https://trace.cjlogistics.com/next/tracking.html?wblNo=${n}` },
+  { name: '우체국택배', trackingUrl: n => `https://service.epost.go.kr/trace.RetrieveDomRigiTraceList.comm?sid1=${n}` },
+  { name: '한진택배', trackingUrl: n => `https://www.hanjin.com/kor/CMS/DeliveryMgr/WaybillResult.do?mCode=MN038&wblnumText2=${n}` },
+  { name: '롯데택배', trackingUrl: n => `https://www.lotteglogis.com/open/tracking?InvNo=${n}` },
+  { name: '로젠택배', trackingUrl: n => `https://www.ilogen.com/web/personal/trace/${n}` },
+  { name: '대신택배', trackingUrl: n => `https://www.ds3211.co.kr/freight/internalFreightSearch.ht?billno=${n}` },
+  { name: '경동택배', trackingUrl: n => `https://kdexp.com/newDeliverySearch.kd?barcode=${n}` },
+  { name: 'GS Postbox 택배', trackingUrl: n => `https://www.cvsnet.co.kr/invoice/tracking.do?invoice_no=${n}` },
+  { name: 'CU 편의점택배', trackingUrl: n => `https://www.cupost.co.kr/postbox/delivery/localResult.cupost?invoice_no=${n}` },
+  { name: '일양로지스', trackingUrl: n => `https://www.ilyanglogis.com/functionality/popup_result.asp?hawb_no=${n}` },
+  { name: '기타', trackingUrl: null }
+];
+function buildTrackingUrl(courierName, trackingNumber) {
+  if (!courierName || !trackingNumber) return null;
+  const courier = COURIERS.find(c => c.name === courierName);
+  if (!courier || !courier.trackingUrl) return null;
+  return courier.trackingUrl(encodeURIComponent(String(trackingNumber).trim()));
+}
+
+// 공개: 택배사 목록 (관리자 화면 드롭다운용)
+app.get('/api/couriers', (req, res) => {
+  res.json({ success: true, data: COURIERS.map(c => c.name), timestamp: new Date().toISOString() });
+});
+
+// ============================================
+// 디자인 부품 갤러리 (카페24 "모듈리스트"를 참고해, 화면 구성요소별로 여러 디자인 템플릿 중 하나를
+// 관리자가 골라 끼울 수 있게 하는 기능). 플랫폼 전체에 적용되는 단일 설정이며(조직별 랜딩페이지
+// 템플릿과는 별개), platform_settings(key='page_design_templates')에 저장되어 언제든 변경 가능하다.
+// ============================================
+const PAGE_TEMPLATE_COMPONENTS = {
+  product_list: {
+    label: '상품목록',
+    options: [
+      { value: 'grid', label: '그리드형', desc: '카드형 상품을 격자로 배치 (기본)' },
+      { value: 'list', label: '리스트형', desc: '가로로 긴 줄 형태로 상품 정보를 더 자세히 표시' }
+    ]
+  },
+  cart: {
+    label: '장바구니',
+    options: [
+      { value: 'classic', label: '기본형', desc: '여유있는 카드형 장바구니 아이템 (기본)' },
+      { value: 'compact', label: '컴팩트형', desc: '한 줄에 더 많은 정보를 담는 밀도 높은 표 형태' }
+    ]
+  },
+  login: {
+    label: '로그인',
+    options: [
+      { value: 'classic', label: '기본형', desc: '중앙 정렬된 카드형 로그인 화면 (기본)' },
+      { value: 'split', label: '스플릿형', desc: '좌측 브랜드 패널 + 우측 로그인 폼으로 나뉜 화면' }
+    ]
+  },
+  mypage: {
+    label: '마이페이지',
+    options: [
+      { value: 'classic', label: '기본형', desc: '모든 섹션을 위에서 아래로 순서대로 표시 (기본)' },
+      { value: 'tabs', label: '탭형', desc: '배송지·찜한상품·주문내역을 탭으로 전환해서 표시' }
+    ]
+  }
+};
+const DEFAULT_PAGE_TEMPLATES = { product_list: 'grid', cart: 'classic', login: 'classic', mypage: 'classic' };
+let pageTemplatesCache = null;
+let pageTemplatesCacheAt = 0;
+const PAGE_TEMPLATES_CACHE_TTL_MS = 30 * 1000;
+
+async function getPageTemplates() {
+  const now = Date.now();
+  if (pageTemplatesCache && (now - pageTemplatesCacheAt) < PAGE_TEMPLATES_CACHE_TTL_MS) {
+    return pageTemplatesCache;
+  }
+  try {
+    const { data, error } = await supabase
+      .from('platform_settings')
+      .select('value')
+      .eq('key', 'page_design_templates')
+      .single();
+    if (error || !data) return pageTemplatesCache || DEFAULT_PAGE_TEMPLATES;
+    const value = data.value || {};
+    const templates = {};
+    Object.keys(PAGE_TEMPLATE_COMPONENTS).forEach(key => {
+      const allowed = PAGE_TEMPLATE_COMPONENTS[key].options.map(o => o.value);
+      templates[key] = allowed.includes(value[key]) ? value[key] : DEFAULT_PAGE_TEMPLATES[key];
+    });
+    pageTemplatesCache = templates;
+    pageTemplatesCacheAt = now;
+    return templates;
+  } catch (err) {
+    return pageTemplatesCache || DEFAULT_PAGE_TEMPLATES;
+  }
+}
+
+// 공개: 현재 선택된 디자인 템플릿 + 고를 수 있는 옵션 목록 조회 (누구나, 로그인 불필요 - 각 화면이 렌더링 전에 참조)
+app.get('/api/settings/page-templates', async (req, res) => {
+  try {
+    const templates = await getPageTemplates();
+    res.json({
+      success: true,
+      data: { selected: templates, components: PAGE_TEMPLATE_COMPONENTS },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch page templates', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 화면 구성요소별 디자인 템플릿 변경
+app.patch('/api/admin/settings/page-templates', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const updates = req.body || {};
+    const current = await getPageTemplates();
+    const next = { ...current };
+    for (const key of Object.keys(updates)) {
+      if (!PAGE_TEMPLATE_COMPONENTS[key]) {
+        return res.status(400).json({ error: 'Bad Request', message: `알 수 없는 화면 구성요소입니다: ${key}`, timestamp: new Date().toISOString() });
+      }
+      const allowed = PAGE_TEMPLATE_COMPONENTS[key].options.map(o => o.value);
+      if (!allowed.includes(updates[key])) {
+        return res.status(400).json({ error: 'Bad Request', message: `'${key}'에는 허용되지 않는 템플릿 값입니다: ${updates[key]}`, timestamp: new Date().toISOString() });
+      }
+      next[key] = updates[key];
+    }
+
+    const { error } = await supabase
+      .from('platform_settings')
+      .upsert({
+        key: 'page_design_templates',
+        value: next,
+        updated_at: new Date().toISOString(),
+        updated_by: req.user.id
+      }, { onConflict: 'key' });
+    if (error) throw error;
+
+    pageTemplatesCache = next;
+    pageTemplatesCacheAt = Date.now();
+
+    res.json({ success: true, data: next, message: '디자인 템플릿이 변경되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating page templates:', err);
+    res.status(500).json({ error: 'Failed to update page templates', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 회원 등급/혜택 시스템
+// - 누적 구매액(취소/환불 제외) 기준으로 등급이 자동 산정된다 (관리자가 등급을 수동 부여하지 않음 - 실제 구매실적 그대로 반영)
+// - 등급별 혜택은 지금 실제로 계산에 반영되는 것만 제공한다: 개인 마일리지 추가 적립율(%p)
+// - 등급 기준/혜택은 platform_settings(key='member_grades')에 저장되어 관리자가 언제든 조정 가능
+// ============================================
+const DEFAULT_MEMBER_GRADES = [
+  { key: 'general', label: '일반', min_spent: 0, bonus_personal_rate: 0 },
+  { key: 'silver', label: '실버', min_spent: 300000, bonus_personal_rate: 0.005 },
+  { key: 'gold', label: '골드', min_spent: 1000000, bonus_personal_rate: 0.01 },
+  { key: 'vip', label: 'VIP', min_spent: 3000000, bonus_personal_rate: 0.02 }
+];
+let memberGradesCache = null;
+let memberGradesCacheAt = 0;
+
+async function getMemberGrades() {
+  const now = Date.now();
+  if (memberGradesCache && (now - memberGradesCacheAt) < MILEAGE_RATES_CACHE_TTL_MS) {
+    return memberGradesCache;
+  }
+  try {
+    const { data, error } = await supabase.from('platform_settings').select('value').eq('key', 'member_grades').single();
+    if (error || !data || !Array.isArray(data.value) || data.value.length === 0) {
+      return memberGradesCache || DEFAULT_MEMBER_GRADES;
+    }
+    const grades = data.value
+      .filter(g => g && g.key && g.label)
+      .map(g => ({
+        key: String(g.key),
+        label: String(g.label),
+        min_spent: Number(g.min_spent) || 0,
+        bonus_personal_rate: Number(g.bonus_personal_rate) || 0
+      }))
+      .sort((a, b) => a.min_spent - b.min_spent);
+    memberGradesCache = grades.length > 0 ? grades : DEFAULT_MEMBER_GRADES;
+    memberGradesCacheAt = now;
+    return memberGradesCache;
+  } catch (err) {
+    console.error('Error fetching member grades:', err);
+    return memberGradesCache || DEFAULT_MEMBER_GRADES;
+  }
+}
+
+// 누적 구매액(취소/환불 제외) 기준으로 지금 등급 + 다음 등급을 판정한다
+function resolveMemberGrade(totalSpent, grades) {
+  let current = grades[0];
+  for (const g of grades) {
+    if (Number(totalSpent) >= Number(g.min_spent)) current = g;
+  }
+  const next = grades.find(g => Number(g.min_spent) > Number(current.min_spent)) || null;
+  return { current, next };
+}
+
+async function getUserCumulativeSpent(userId) {
+  const { data, error } = await supabase
+    .from('orders_with')
+    .select('final_price, status')
+    .eq('user_id', userId)
+    .not('status', 'in', '(cancelled,refunded)');
+  if (error || !data) return 0;
+  return data.reduce((sum, o) => sum + Number(o.final_price || 0), 0);
+}
+
+// 💰 마일리지 수동 적립 원장 (mileage_adjustments_with) - 시리얼쿠폰/출석체크처럼 "주문과 무관하게" 지급되는 마일리지용.
+// 기존 마일리지 잔액은 orders_with의 적립/사용 필드만으로 계산되고 있었는데, 그 구조에는 주문 없이 지급되는
+// 보상을 넣을 곳이 없었다. 그래서 이 원장 테이블을 새로 두고, getUserMileageBalance가 여기 쌓인 금액도
+// 함께 더하도록 확장했다(원장에 아무 것도 없으면 지금까지와 완전히 동일하게 동작 - 기존 동작 100% 유지).
+async function creditMileageAdjustment(userId, amount, reason, reference) {
+  const { error } = await supabase.from('mileage_adjustments_with').insert([{
+    user_id: userId,
+    amount: Math.round(Number(amount)),
+    reason,
+    reference: reference || null
+  }]);
+  if (error) throw error;
+}
+
+async function getMileageAdjustmentTotal(userId) {
+  const { data, error } = await supabase.from('mileage_adjustments_with').select('amount').eq('user_id', userId);
+  if (error || !data) return 0;
+  return data.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+}
+
+// 사용 가능한 마일리지 잔액 = (취소/환불되지 않은 주문에서 적립된 개인+커뮤니티 마일리지 합) - (같은 주문들에서 이미 사용한 마일리지 합) + (시리얼쿠폰/출석체크 등 주문과 무관하게 지급된 수동 적립분)
+// 취소/환불된 주문은 적립분도, 사용분도 함께 제외되므로(= 둘 다 무효화) 별도의 "마일리지 복구" 로직 없이도 자연스럽게 잔액이 원상복구된다.
+async function getUserMileageBalance(userId) {
+  const { data, error } = await supabase
+    .from('orders_with')
+    .select('personal_earned_points, community_earned_points, used_mileage, status')
+    .eq('user_id', userId)
+    .not('status', 'in', '(cancelled,refunded)');
+  if (error || !data) return 0;
+  const earned = data.reduce((sum, o) => sum + Number(o.personal_earned_points || 0) + Number(o.community_earned_points || 0), 0);
+  const used = data.reduce((sum, o) => sum + Number(o.used_mileage || 0), 0);
+  const adjustments = await getMileageAdjustmentTotal(userId);
+  return Math.max(0, earned - used + adjustments);
+}
+
+// 내 마일리지 사용 가능 잔액 조회 (장바구니에서 결제 시 사용할 마일리지 입력 전 참고용)
+app.get('/api/me/mileage-balance', authenticate, async (req, res) => {
+  try {
+    const balance = await getUserMileageBalance(req.user.id);
+    res.json({ success: true, data: { balance }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching mileage balance:', err);
+    res.status(500).json({ error: 'Failed to fetch mileage balance', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공개: 등급 기준/혜택 조회 (마이페이지·등급 안내에 필요, 로그인 불필요)
+app.get('/api/settings/member-grades', async (req, res) => {
+  try {
+    const grades = await getMemberGrades();
+    res.json({ success: true, data: grades, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch member grades', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 등급 기준/혜택 전체 교체
+app.patch('/api/admin/settings/member-grades', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { grades } = req.body;
+    if (!Array.isArray(grades) || grades.length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '등급을 하나 이상 입력해주세요', timestamp: new Date().toISOString() });
+    }
+    const cleaned = [];
+    for (const g of grades) {
+      const label = g && g.label ? String(g.label).trim() : '';
+      const key = g && g.key ? String(g.key).trim() : '';
+      const minSpent = Number(g && g.min_spent);
+      const bonusRate = Number(g && g.bonus_personal_rate);
+      if (!key || !label) {
+        return res.status(400).json({ error: 'Bad Request', message: '모든 등급에 이름을 입력해주세요', timestamp: new Date().toISOString() });
+      }
+      if (!Number.isFinite(minSpent) || minSpent < 0) {
+        return res.status(400).json({ error: 'Bad Request', message: `${label} 등급의 기준 금액이 올바르지 않습니다`, timestamp: new Date().toISOString() });
+      }
+      if (!Number.isFinite(bonusRate) || bonusRate < 0 || bonusRate > 0.1) {
+        return res.status(400).json({ error: 'Bad Request', message: `${label} 등급의 추가 적립율은 0~10% 사이여야 합니다`, timestamp: new Date().toISOString() });
+      }
+      cleaned.push({ key, label, min_spent: minSpent, bonus_personal_rate: bonusRate });
+    }
+    cleaned.sort((a, b) => a.min_spent - b.min_spent);
+    if (cleaned[0].min_spent !== 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '가장 낮은 등급의 기준 금액은 0원이어야 합니다 (모든 회원이 속할 기본 등급)', timestamp: new Date().toISOString() });
+    }
+
+    const { error } = await supabase
+      .from('platform_settings')
+      .upsert({ key: 'member_grades', value: cleaned, updated_at: new Date().toISOString(), updated_by: req.user.id }, { onConflict: 'key' });
+    if (error) throw error;
+
+    memberGradesCache = cleaned;
+    memberGradesCacheAt = Date.now();
+
+    res.json({ success: true, data: cleaned, message: '회원 등급 설정이 저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating member grades:', err);
+    res.status(500).json({ error: 'Failed to update member grades', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 내 등급 조회 (마이페이지) - 누적 구매액, 현재 등급, 다음 등급까지 남은 금액
+app.get('/api/me/grade', authenticate, async (req, res) => {
+  try {
+    const [grades, totalSpent] = await Promise.all([
+      getMemberGrades(),
+      getUserCumulativeSpent(req.user.id)
+    ]);
+    const { current, next } = resolveMemberGrade(totalSpent, grades);
+    res.json({
+      success: true,
+      data: {
+        totalSpent,
+        current,
+        next,
+        amountToNext: next ? Math.max(0, Number(next.min_spent) - totalSpent) : null
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching my grade:', err);
+    res.status(500).json({ error: 'Failed to fetch grade', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🎟️ 시리얼 쿠폰 - 관리자가 고유 코드를 대량 생성해 배포하고, 회원이 코드를 입력하면
+// 1회성으로 마일리지가 지급된다 (카페24 관리자 화면 실사 때 확인했던 "시리얼 쿠폰" 기능을 참고해 구현).
+// 기존 coupons 테이블(장바구니에서 쓰는 할인쿠폰, 여러 명이 같은 코드를 공유·사용 가능)과는 성격이 완전히
+// 달라서 별도의 테이블/API로 분리했다 - 시리얼 코드는 1개당 딱 1명만, 딱 1번만 사용할 수 있다.
+// ============================================
+function generateSerialCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 혼동되기 쉬운 0/O, 1/I는 제외
+  const seg = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  return `WITH-${seg()}-${seg()}`;
+}
+
+// 관리자: 시리얼 쿠폰 배치 생성 (한 번에 여러 개의 고유 코드를 만든다)
+app.post('/api/admin/serial-coupons/generate', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { batch_name, reward_mileage, count, expires_at } = req.body;
+    const rewardNum = Number(reward_mileage);
+    const countNum = Number(count);
+    if (!batch_name || !String(batch_name).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: 'batch_name이 필요합니다', timestamp: new Date().toISOString() });
+    }
+    if (!Number.isFinite(rewardNum) || rewardNum <= 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'reward_mileage는 0보다 큰 숫자여야 합니다', timestamp: new Date().toISOString() });
+    }
+    if (!Number.isInteger(countNum) || countNum < 1 || countNum > 1000) {
+      return res.status(400).json({ error: 'Bad Request', message: 'count는 1~1000 사이여야 합니다', timestamp: new Date().toISOString() });
+    }
+
+    const rows = [];
+    const seen = new Set();
+    while (rows.length < countNum) {
+      const code = generateSerialCode();
+      if (seen.has(code)) continue; // 배치 내 중복 방지 (DB unique 제약과 별개의 1차 방어)
+      seen.add(code);
+      rows.push({
+        batch_name: String(batch_name).trim(),
+        code,
+        reward_mileage: Math.round(rewardNum),
+        expires_at: expires_at || null,
+        created_by: req.user.id
+      });
+    }
+
+    const { data, error } = await supabase.from('serial_coupons_with').insert(rows).select();
+    if (error) throw error;
+
+    res.status(201).json({ success: true, data, message: `${data.length}개의 시리얼 코드가 생성되었습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error generating serial coupons:', err);
+    res.status(500).json({ error: 'Failed to generate serial coupons', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 시리얼 쿠폰 배치 목록(배치별 발급/사용 현황 집계)
+app.get('/api/admin/serial-coupons/batches', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('serial_coupons_with')
+      .select('batch_name, reward_mileage, is_redeemed, expires_at, created_at')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    const byBatch = {};
+    (data || []).forEach(row => {
+      if (!byBatch[row.batch_name]) {
+        byBatch[row.batch_name] = { batch_name: row.batch_name, reward_mileage: row.reward_mileage, expires_at: row.expires_at, total: 0, redeemed: 0, created_at: row.created_at };
+      }
+      byBatch[row.batch_name].total += 1;
+      if (row.is_redeemed) byBatch[row.batch_name].redeemed += 1;
+      if (row.created_at > byBatch[row.batch_name].created_at) byBatch[row.batch_name].created_at = row.created_at;
+    });
+    const batches = Object.values(byBatch).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    res.json({ success: true, data: batches, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching serial coupon batches:', err);
+    res.status(500).json({ error: 'Failed to fetch serial coupon batches', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 특정 배치의 코드 목록 (복사해서 이벤트 참가자에게 전달하기 위함)
+app.get('/api/admin/serial-coupons', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { batch_name } = req.query;
+    if (!batch_name) {
+      return res.status(400).json({ error: 'Bad Request', message: 'batch_name이 필요합니다', timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase
+      .from('serial_coupons_with')
+      .select('id, code, is_redeemed, redeemed_at, expires_at, created_at')
+      .eq('batch_name', batch_name)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching serial coupons:', err);
+    res.status(500).json({ error: 'Failed to fetch serial coupons', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 미사용 시리얼 코드 삭제 (이미 사용된 코드는 회원의 지급 이력 보존을 위해 삭제할 수 없게 막는다)
+app.delete('/api/admin/serial-coupons/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: existing, error: findErr } = await supabase.from('serial_coupons_with').select('is_redeemed').eq('id', req.params.id).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) return res.status(404).json({ error: 'Not Found', message: '존재하지 않는 코드입니다', timestamp: new Date().toISOString() });
+    if (existing.is_redeemed) {
+      return res.status(400).json({ error: 'Bad Request', message: '이미 사용된 코드는 삭제할 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    const { error } = await supabase.from('serial_coupons_with').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true, message: '삭제되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting serial coupon:', err);
+    res.status(500).json({ error: 'Failed to delete serial coupon', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 회원: 시리얼 코드 등록 -> 검증 통과 시 즉시 마일리지 지급 (1코드 1인 1회)
+app.post('/api/serial-coupons/redeem', authenticate, async (req, res) => {
+  try {
+    const { code } = req.body;
+    if (!code || !String(code).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: '시리얼 코드를 입력해주세요', timestamp: new Date().toISOString() });
+    }
+    const normalized = String(code).trim().toUpperCase();
+
+    const { data: coupon, error: findErr } = await supabase.from('serial_coupons_with').select('*').eq('code', normalized).maybeSingle();
+    if (findErr) throw findErr;
+    if (!coupon) {
+      return res.status(404).json({ error: 'Not Found', message: '존재하지 않는 시리얼 코드입니다', timestamp: new Date().toISOString() });
+    }
+    if (coupon.is_redeemed) {
+      return res.status(409).json({ error: 'Conflict', message: '이미 사용된 코드입니다', timestamp: new Date().toISOString() });
+    }
+    if (coupon.expires_at && new Date(coupon.expires_at) < new Date()) {
+      return res.status(400).json({ error: 'Bad Request', message: '유효기간이 지난 코드입니다', timestamp: new Date().toISOString() });
+    }
+
+    // 동시에 같은 코드를 등록하는 경합 상황 방어: is_redeemed=false 조건이 걸린 채로 업데이트해서
+    // 먼저 도착한 요청만 실제로 성공하게 하고, 늦게 도착한 요청은 0건 매칭되어 아래에서 409로 처리된다.
+    const { data: updated, error: updateErr } = await supabase
+      .from('serial_coupons_with')
+      .update({ is_redeemed: true, redeemed_by: req.user.id, redeemed_at: new Date().toISOString() })
+      .eq('id', coupon.id)
+      .eq('is_redeemed', false)
+      .select()
+      .maybeSingle();
+    if (updateErr) throw updateErr;
+    if (!updated) {
+      return res.status(409).json({ error: 'Conflict', message: '이미 사용된 코드입니다', timestamp: new Date().toISOString() });
+    }
+
+    await creditMileageAdjustment(req.user.id, updated.reward_mileage, 'serial_coupon', updated.code);
+    const newBalance = await getUserMileageBalance(req.user.id);
+
+    res.json({
+      success: true,
+      data: { reward_mileage: updated.reward_mileage, new_balance: newBalance },
+      message: `시리얼 코드가 등록되어 ${Number(updated.reward_mileage).toLocaleString('ko-KR')} 마일리지가 지급되었습니다`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error redeeming serial coupon:', err);
+    res.status(500).json({ error: 'Failed to redeem serial coupon', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 📅 출석체크 이벤트 - 하루 1회 출석 시 마일리지 지급, N일 연속 출석 시 추가 보너스 지급
+// - 설정은 platform_settings(key='attendance_event')에 저장되어 관리자가 언제든 조정 가능
+//   (마일리지 적립율·회원등급과 동일한 캐시 패턴 - 최대 30초 내 전체 반영)
+// - "오늘"/"연속 출석" 판정은 서버 시각(UTC) 기준 날짜로 한다. 실제 배포 서버가 UTC로 동작하고 있어
+//   한국시간 자정과 서버 날짜 경계가 다를 수 있다는 점은 정직하게 밝혀둔다(예: 한국시간 오전 9시가
+//   서버 기준 날짜가 바뀌는 시점).
+// ============================================
+const DEFAULT_ATTENDANCE_SETTINGS = { is_active: true, daily_reward: 10, streak_bonus_days: 7, streak_bonus_reward: 50 };
+let attendanceSettingsCache = null;
+let attendanceSettingsCacheAt = 0;
+
+async function getAttendanceSettings() {
+  const now = Date.now();
+  if (attendanceSettingsCache && (now - attendanceSettingsCacheAt) < MILEAGE_RATES_CACHE_TTL_MS) {
+    return attendanceSettingsCache;
+  }
+  try {
+    const { data, error } = await supabase.from('platform_settings').select('value').eq('key', 'attendance_event').single();
+    if (error || !data || !data.value) return attendanceSettingsCache || DEFAULT_ATTENDANCE_SETTINGS;
+    const v = data.value;
+    const settings = {
+      is_active: typeof v.is_active === 'boolean' ? v.is_active : DEFAULT_ATTENDANCE_SETTINGS.is_active,
+      daily_reward: Number.isFinite(Number(v.daily_reward)) ? Number(v.daily_reward) : DEFAULT_ATTENDANCE_SETTINGS.daily_reward,
+      streak_bonus_days: (Number.isInteger(Number(v.streak_bonus_days)) && Number(v.streak_bonus_days) > 0) ? Number(v.streak_bonus_days) : DEFAULT_ATTENDANCE_SETTINGS.streak_bonus_days,
+      streak_bonus_reward: Number.isFinite(Number(v.streak_bonus_reward)) ? Number(v.streak_bonus_reward) : DEFAULT_ATTENDANCE_SETTINGS.streak_bonus_reward
+    };
+    attendanceSettingsCache = settings;
+    attendanceSettingsCacheAt = now;
+    return settings;
+  } catch (err) {
+    console.error('Error fetching attendance settings:', err);
+    return attendanceSettingsCache || DEFAULT_ATTENDANCE_SETTINGS;
+  }
+}
+
+function todayDateString() {
+  return new Date().toISOString().slice(0, 10);
+}
+function yesterdayDateString() {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
+
+// 공개: 출석체크 이벤트 설정 조회 (로그인 불필요 - 비회원에게도 안내문구를 보여주기 위함)
+app.get('/api/settings/attendance-event', async (req, res) => {
+  try {
+    const settings = await getAttendanceSettings();
+    res.json({ success: true, data: settings, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch attendance settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 출석체크 이벤트 설정 변경
+app.patch('/api/admin/settings/attendance-event', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { is_active, daily_reward, streak_bonus_days, streak_bonus_reward } = req.body;
+    const dailyNum = Number(daily_reward);
+    const streakDaysNum = Number(streak_bonus_days);
+    const streakRewardNum = Number(streak_bonus_reward);
+    if (!Number.isFinite(dailyNum) || dailyNum < 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'daily_reward는 0 이상의 숫자여야 합니다', timestamp: new Date().toISOString() });
+    }
+    if (!Number.isInteger(streakDaysNum) || streakDaysNum < 1) {
+      return res.status(400).json({ error: 'Bad Request', message: 'streak_bonus_days는 1 이상의 정수여야 합니다', timestamp: new Date().toISOString() });
+    }
+    if (!Number.isFinite(streakRewardNum) || streakRewardNum < 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'streak_bonus_reward는 0 이상의 숫자여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const settings = {
+      is_active: !!is_active,
+      daily_reward: Math.round(dailyNum),
+      streak_bonus_days: Math.round(streakDaysNum),
+      streak_bonus_reward: Math.round(streakRewardNum)
+    };
+    const { error } = await supabase
+      .from('platform_settings')
+      .upsert({ key: 'attendance_event', value: settings, updated_at: new Date().toISOString(), updated_by: req.user.id }, { onConflict: 'key' });
+    if (error) throw error;
+
+    attendanceSettingsCache = settings;
+    attendanceSettingsCacheAt = Date.now();
+
+    res.json({ success: true, data: settings, message: '출석체크 이벤트 설정이 저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating attendance settings:', err);
+    res.status(500).json({ error: 'Failed to update attendance settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 회원: 내 출석체크 현황 (이번 달 출석일 목록, 연속 출석일수, 오늘 출석 여부, 이벤트 설정을 한 번에)
+app.get('/api/attendance/status', authenticate, async (req, res) => {
+  try {
+    const settings = await getAttendanceSettings();
+    const today = todayDateString();
+    const monthPrefix = today.slice(0, 7); // YYYY-MM
+
+    const { data: checkins, error } = await supabase
+      .from('attendance_checkins_with')
+      .select('checkin_date, streak_count')
+      .eq('user_id', req.user.id)
+      .order('checkin_date', { ascending: false })
+      .limit(370); // 최근 1년치 - 연속 출석일수 판정에 충분
+    if (error) throw error;
+
+    const checkedInToday = (checkins || []).some(c => c.checkin_date === today);
+    const currentStreak = (checkins && checkins.length > 0 && (checkedInToday || checkins[0].checkin_date === yesterdayDateString()))
+      ? checkins[0].streak_count
+      : 0; // 어제도 오늘도 출석하지 않았다면 연속 기록은 끊긴 것
+    const thisMonthDates = (checkins || []).filter(c => c.checkin_date.startsWith(monthPrefix)).map(c => c.checkin_date);
+
+    res.json({
+      success: true,
+      data: { ...settings, checked_in_today: checkedInToday, current_streak: currentStreak, this_month_dates: thisMonthDates },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching attendance status:', err);
+    res.status(500).json({ error: 'Failed to fetch attendance status', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 회원: 오늘 출석체크 (하루 1회만 가능, 연속 출석일수가 streak_bonus_days의 배수가 될 때마다 보너스 지급)
+app.post('/api/attendance/checkin', authenticate, async (req, res) => {
+  try {
+    const settings = await getAttendanceSettings();
+    if (!settings.is_active) {
+      return res.status(400).json({ error: 'Bad Request', message: '현재 출석체크 이벤트가 진행 중이 아닙니다', timestamp: new Date().toISOString() });
+    }
+    const today = todayDateString();
+
+    const { data: existing, error: existErr } = await supabase
+      .from('attendance_checkins_with')
+      .select('id')
+      .eq('user_id', req.user.id)
+      .eq('checkin_date', today)
+      .maybeSingle();
+    if (existErr) throw existErr;
+    if (existing) {
+      return res.status(400).json({ error: 'Bad Request', message: '오늘은 이미 출석체크를 완료했습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: prevRow } = await supabase
+      .from('attendance_checkins_with')
+      .select('streak_count')
+      .eq('user_id', req.user.id)
+      .eq('checkin_date', yesterdayDateString())
+      .maybeSingle();
+    const streakCount = prevRow ? prevRow.streak_count + 1 : 1;
+    const bonusMileage = (streakCount % settings.streak_bonus_days === 0) ? settings.streak_bonus_reward : 0;
+    const rewardMileage = settings.daily_reward;
+
+    const { error: insertErr } = await supabase.from('attendance_checkins_with').insert([{
+      user_id: req.user.id,
+      checkin_date: today,
+      streak_count: streakCount,
+      reward_mileage: rewardMileage,
+      bonus_mileage: bonusMileage
+    }]);
+    if (insertErr) {
+      if (insertErr.code === '23505') { // unique(user_id, checkin_date) 위반 = 동시요청으로 이미 출석 처리됨
+        return res.status(400).json({ error: 'Bad Request', message: '오늘은 이미 출석체크를 완료했습니다', timestamp: new Date().toISOString() });
+      }
+      throw insertErr;
+    }
+
+    const totalAwarded = rewardMileage + bonusMileage;
+    if (totalAwarded > 0) {
+      await creditMileageAdjustment(req.user.id, totalAwarded, 'attendance', today);
+    }
+    const newBalance = await getUserMileageBalance(req.user.id);
+
+    res.json({
+      success: true,
+      data: { streak_count: streakCount, reward_mileage: rewardMileage, bonus_mileage: bonusMileage, total_awarded: totalAwarded, new_balance: newBalance },
+      message: bonusMileage > 0
+        ? `출석체크 완료! ${rewardMileage}마일리지 + ${streakCount}일 연속 보너스 ${bonusMileage}마일리지가 지급되었습니다`
+        : `출석체크 완료! ${rewardMileage}마일리지가 지급되었습니다`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error processing attendance checkin:', err);
+    res.status(500).json({ error: 'Failed to process attendance checkin', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🎁 추천인(리퍼럴) 프로그램
+// - 회원마다 고유 추천코드를 가지고, 그 코드로 가입한 신규 회원이 첫 주문을 만들면
+//   추천인·피추천인 양쪽에게 마일리지를 지급한다(시리얼쿠폰/출석체크와 동일하게 mileage_adjustments_with 재사용).
+// - 가입 즉시가 아니라 "첫 주문 생성 시점"에 보상하는 이유: 실제 구매 의사가 없는 허위/중복 가입으로
+//   마일리지만 챙기는 어뷰징을 막기 위함(다른 쇼핑몰들의 일반적인 리퍼럴 프로그램 관행과 동일).
+// - 참고: 이 Supabase 프로젝트에는 이미 접두사 없는 referrals/referral_codes 등 GMWOS 소유로 보이는
+//   테이블이 존재하지만, 코드베이스의 "_with 접미사 = WITH+ 전용 테이블" 규칙에 따라 완전히 별도의
+//   referral_profiles_with/referrals_with 테이블을 새로 만들어 충돌 없이 분리했다(과거 notifications
+//   테이블 충돌 사례와 동일한 원칙).
+// ============================================
+const DEFAULT_REFERRAL_SETTINGS = {
+  enabled: false,
+  referrer_reward: 3000,  // 추천인(코드를 공유한 사람)에게 지급되는 마일리지
+  referred_reward: 3000   // 피추천인(코드로 가입한 신규 회원)에게 지급되는 마일리지
+};
+let referralSettingsCache = null;
+let referralSettingsCacheAt = 0;
+const REFERRAL_SETTINGS_CACHE_TTL_MS = 30 * 1000;
+
+function normalizeReferralSettings(value) {
+  const v = value || {};
+  return {
+    enabled: !!v.enabled,
+    referrer_reward: Number.isFinite(Number(v.referrer_reward)) ? Math.max(0, Math.floor(Number(v.referrer_reward))) : DEFAULT_REFERRAL_SETTINGS.referrer_reward,
+    referred_reward: Number.isFinite(Number(v.referred_reward)) ? Math.max(0, Math.floor(Number(v.referred_reward))) : DEFAULT_REFERRAL_SETTINGS.referred_reward
+  };
+}
+
+async function getReferralSettings() {
+  const now = Date.now();
+  if (referralSettingsCache && (now - referralSettingsCacheAt) < REFERRAL_SETTINGS_CACHE_TTL_MS) {
+    return referralSettingsCache;
+  }
+  try {
+    const { data, error } = await supabase.from('platform_settings').select('value').eq('key', 'referral_settings').single();
+    const settings = normalizeReferralSettings(error || !data ? null : data.value);
+    referralSettingsCache = settings;
+    referralSettingsCacheAt = now;
+    return settings;
+  } catch (err) {
+    console.error('Error fetching referral settings:', err);
+    return referralSettingsCache || DEFAULT_REFERRAL_SETTINGS;
+  }
+}
+
+// 헷갈리는 문자(0/O/1/I) 제외한 8자리 추천코드 생성 (시리얼쿠폰과 동일한 문자셋 관행)
+function generateReferralCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+// 이 회원의 추천코드를 조회하고, 없으면 새로 발급한다(최초 조회 시점에 지연 생성 - 가입 시점에 미리 만들어두지 않음)
+async function getOrCreateReferralCode(userId) {
+  const { data: existing } = await supabase.from('referral_profiles_with').select('referral_code').eq('user_id', userId).maybeSingle();
+  if (existing) return existing.referral_code;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = generateReferralCode();
+    const { data: inserted, error } = await supabase.from('referral_profiles_with').insert([{ user_id: userId, referral_code: code }]).select('referral_code').maybeSingle();
+    if (!error && inserted) return inserted.referral_code;
+    // unique 충돌(극히 낮은 확률)이면 다시 시도, 그 외 동시요청으로 이미 생성됐을 수 있으니 재조회
+    const { data: raceCheck } = await supabase.from('referral_profiles_with').select('referral_code').eq('user_id', userId).maybeSingle();
+    if (raceCheck) return raceCheck.referral_code;
+  }
+  throw new Error('추천코드 생성에 실패했습니다');
+}
+
+// 신규 가입 회원이 추천코드를 입력했을 때, 서버에서 유효성을 다시 검증하고 관계만 기록한다(보상은 아직 지급하지 않음 - 첫 주문 시 지급).
+app.post('/api/me/apply-referral', authenticate, async (req, res) => {
+  try {
+    const code = String(req.body?.code || '').trim().toUpperCase();
+    if (!code) {
+      return res.status(400).json({ error: 'Bad Request', message: '추천코드를 입력해주세요', timestamp: new Date().toISOString() });
+    }
+
+    const { data: referrerProfile } = await supabase.from('referral_profiles_with').select('user_id').eq('referral_code', code).maybeSingle();
+    if (!referrerProfile) {
+      return res.status(404).json({ error: 'Not Found', message: '존재하지 않는 추천코드입니다', timestamp: new Date().toISOString() });
+    }
+    if (referrerProfile.user_id === req.user.id) {
+      return res.status(400).json({ error: 'Bad Request', message: '본인의 추천코드는 사용할 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: existingReferral } = await supabase.from('referrals_with').select('id').eq('referred_id', req.user.id).maybeSingle();
+    if (existingReferral) {
+      return res.status(409).json({ error: 'Conflict', message: '이미 추천인이 등록되어 있습니다(1회만 등록 가능)', timestamp: new Date().toISOString() });
+    }
+
+    const { error: insertErr } = await supabase.from('referrals_with').insert([{
+      referrer_id: referrerProfile.user_id,
+      referred_id: req.user.id,
+      referral_code_used: code,
+      status: 'pending'
+    }]);
+    if (insertErr) throw insertErr;
+
+    res.json({ success: true, message: '추천인이 등록되었습니다. 첫 주문을 완료하면 서로 마일리지가 지급됩니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error applying referral code:', err);
+    res.status(500).json({ error: 'Failed to apply referral code', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 신규 가입 회원의 첫 주문이 생성됐을 때 호출되어, 대기 중인(pending) 추천 관계가 있으면 양쪽에 마일리지를 지급한다.
+// 이미 rewarded 상태면 아무 것도 하지 않고, 프로그램이 비활성화 상태여도 이미 등록된 pending 관계는 정직하게 보상하지 않고 넘어간다(설정 확인 후 지급).
+async function rewardReferralIfEligible(referredUserId, orderId) {
+  try {
+    const { data: referral } = await supabase.from('referrals_with').select('*').eq('referred_id', referredUserId).eq('status', 'pending').maybeSingle();
+    if (!referral) return;
+
+    const settings = await getReferralSettings();
+    if (!settings.enabled) return;
+
+    // 이 주문이 피추천인의 "첫 주문"인지 확인 (재구매/추가주문에는 중복 지급하지 않기 위함 - referrals_with.status가 이미 이를 보장하지만 이중 방어)
+    const { count } = await supabase.from('orders_with').select('id', { count: 'exact', head: true }).eq('user_id', referredUserId);
+    if ((count || 0) > 1) return; // 방금 생성된 주문을 포함해 2건 이상이면 이미 첫 주문이 아님
+
+    if (settings.referrer_reward > 0) {
+      await creditMileageAdjustment(referral.referrer_id, settings.referrer_reward, 'referral_referrer', String(orderId));
+    }
+    if (settings.referred_reward > 0) {
+      await creditMileageAdjustment(referredUserId, settings.referred_reward, 'referral_referred', String(orderId));
+    }
+    await supabase.from('referrals_with').update({ status: 'rewarded', rewarded_at: new Date().toISOString() }).eq('id', referral.id);
+  } catch (err) {
+    console.error('Error rewarding referral:', err);
+  }
+}
+
+// 내 추천코드/추천 링크/실적 조회
+app.get('/api/me/referral', authenticate, async (req, res) => {
+  try {
+    const code = await getOrCreateReferralCode(req.user.id);
+    const { data: myReferrals } = await supabase
+      .from('referrals_with')
+      .select('status, created_at, rewarded_at, referred_id')
+      .eq('referrer_id', req.user.id)
+      .order('created_at', { ascending: false });
+
+    const referredIds = (myReferrals || []).map(r => r.referred_id);
+    let nameMap = {};
+    if (referredIds.length > 0) {
+      const { data: profiles } = await supabase.from('profiles').select('id, full_name, email').in('id', referredIds);
+      (profiles || []).forEach(p => { nameMap[p.id] = p.full_name || (p.email ? p.email.replace(/(.{2}).+(@.+)/, '$1***$2') : '회원'); });
+    }
+    const rewardedCount = (myReferrals || []).filter(r => r.status === 'rewarded').length;
+    const settings = await getReferralSettings();
+
+    res.json({
+      success: true,
+      data: {
+        referral_code: code,
+        referral_link: `${req.protocol}://${req.get('host')}/join?ref=${code}`,
+        total_referrals: (myReferrals || []).length,
+        rewarded_referrals: rewardedCount,
+        total_earned_mileage: rewardedCount * settings.referrer_reward,
+        referred_reward: settings.referred_reward,
+        referrals: (myReferrals || []).map(r => ({
+          name: nameMap[r.referred_id] || '회원',
+          status: r.status,
+          created_at: r.created_at,
+          rewarded_at: r.rewarded_at
+        }))
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching referral info:', err);
+    res.status(500).json({ error: 'Failed to fetch referral info', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공개: 추천인 프로그램 활성화 여부만 (가입 화면에서 추천코드 입력란을 보여줄지 판단하는 용도)
+app.get('/api/settings/referral-program', async (req, res) => {
+  try {
+    const settings = await getReferralSettings();
+    res.json({ success: true, data: { enabled: settings.enabled }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch referral settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 추천인 프로그램 설정 + 누적 통계 조회
+app.get('/api/admin/settings/referral-program', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const settings = await getReferralSettings();
+    const { count: totalCount } = await supabase.from('referrals_with').select('id', { count: 'exact', head: true });
+    const { count: rewardedCount } = await supabase.from('referrals_with').select('id', { count: 'exact', head: true }).eq('status', 'rewarded');
+    res.json({
+      success: true,
+      data: settings,
+      stats: { total_referrals: totalCount || 0, rewarded_referrals: rewardedCount || 0, pending_referrals: (totalCount || 0) - (rewardedCount || 0) },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching referral admin settings:', err);
+    res.status(500).json({ error: 'Failed to fetch referral settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 추천인 프로그램 설정 저장
+app.patch('/api/admin/settings/referral-program', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const settings = normalizeReferralSettings(req.body);
+    const { error } = await supabase.from('platform_settings').upsert({
+      key: 'referral_settings',
+      value: settings,
+      updated_at: new Date().toISOString(),
+      updated_by: req.user.id
+    }, { onConflict: 'key' });
+    if (error) throw error;
+
+    referralSettingsCache = settings;
+    referralSettingsCacheAt = Date.now();
+
+    res.json({ success: true, data: settings, message: '저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating referral settings:', err);
+    res.status(500).json({ error: 'Failed to update referral settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🧩 기능 모듈 카탈로그 ("카페24 모듈리스트"를 참고한 모듈형 기능 카탈로그)
+// - 지금은 각 기능이 독립된 설정 키/화면을 가진 채로 관리자 화면 여기저기에 흩어져 있는데,
+//   이 카탈로그는 그것들을 한눈에 모아 보여주는 안내판(런처) 역할을 한다.
+// - status: 'active'(지금 실제로 쓸 수 있음) | 'planned'(로드맵엔 있지만 아직 미구현/보류 중)
+// - tabTarget: 관리자 화면에서 해당 기능을 관리하는 탭의 data-tab 값 (없으면 아직 이동할 화면이 없다는 뜻)
+// - 각 항목을 독립 단위(키/카테고리/설명)로 정의해둔 이유: 나중에 정말 플러그인 구조로 확장하게 되더라도
+//   이 목록을 설치형 모듈 메타데이터의 기초로 그대로 재사용할 수 있게 하기 위함.
+// ============================================
+const MODULE_REGISTRY = [
+  { key: 'products', category: '판매·상품 관리', icon: '📦', name: '상품 관리', desc: '상품 등록, 옵션/재고 관리를 합니다.', status: 'active', tabTarget: 'products' },
+  { key: 'categories', category: '판매·상품 관리', icon: '🏷️', name: '카테고리 관리', desc: '상품을 분류하는 카테고리를 자유롭게 추가/수정하고, 드래그로 순서를 바꿀 수 있습니다.', status: 'active', tabTarget: 'categories' },
+  { key: 'ai_category_recommender', category: '판매·상품 관리', icon: '🤖', name: 'AI 카테고리 추천', desc: '원하는 방향을 입력하면 Anthropic API로 어울리는 카테고리 후보를 만들어줍니다. (Anthropic API 키 등록 필요)', status: 'active', tabTarget: 'settings' },
+  { key: 'suppliers', category: '판매·상품 관리', icon: '🏭', name: '공급자 관리', desc: '상품을 공급하는 업체 정보를 관리합니다.', status: 'active', tabTarget: 'suppliers' },
+  { key: 'coupons', category: '판매·상품 관리', icon: '🎟️', name: '쿠폰/할인 관리', desc: '할인 쿠폰을 발급하고 사용 조건을 설정합니다.', status: 'active', tabTarget: 'coupons' },
+  { key: 'returns', category: '판매·상품 관리', icon: '↩️', name: '반품/교환 관리', desc: '회원의 반품·교환 신청을 접수하고 처리합니다.', status: 'active', tabTarget: 'returns' },
+  { key: 'members', category: '회원·커뮤니티', icon: '👥', name: '회원 관리', desc: '가입 회원 목록과 등급, 활동 내역을 확인합니다.', status: 'active', tabTarget: 'members' },
+  { key: 'communities', category: '회원·커뮤니티', icon: '🏢', name: '분양 조직 관리', desc: '분양받은 조직별로 담당 관리자, 상품 노출 범위를 설정합니다.', status: 'active', tabTarget: 'communities' },
+  { key: 'boards', category: '회원·커뮤니티', icon: '📝', name: '게시판 관리', desc: '공지사항 등 커뮤니티 게시글을 관리합니다.', status: 'active', tabTarget: 'boards' },
+  { key: 'mileage', category: '적립·혜택', icon: '💰', name: '마일리지 적립율', desc: '구매 시 적립되는 기본 적립율(개인/커뮤니티 참여)을 설정합니다.', status: 'active', tabTarget: 'settings' },
+  { key: 'grades', category: '적립·혜택', icon: '🏅', name: '회원 등급/혜택', desc: '누적 구매액 기준 회원 등급과 등급별 추가 적립율을 설정합니다.', status: 'active', tabTarget: 'settings' },
+  { key: 'serial_coupons', category: '적립·혜택', icon: '🎫', name: '시리얼 쿠폰', desc: '고유 시리얼 코드를 대량 발급해 배포하고, 회원이 코드를 등록하면 마일리지가 지급됩니다.', status: 'active', tabTarget: 'promotions' },
+  { key: 'attendance', category: '적립·혜택', icon: '📅', name: '출석체크 이벤트', desc: '하루 1회 출석 시 마일리지를 지급하고, N일 연속 출석하면 추가 보너스를 지급합니다.', status: 'active', tabTarget: 'promotions' },
+  { key: 'design_gallery', category: '디자인', icon: '🎨', name: '디자인 부품 갤러리', desc: '상품목록·장바구니·로그인·마이페이지 화면마다 디자인 템플릿을 골라 적용합니다.', status: 'active', tabTarget: 'settings' },
+  { key: 'landing_templates', category: '디자인', icon: '🖼️', name: '랜딩페이지 템플릿', desc: '분양 조직별로 전용 랜딩페이지 디자인 템플릿을 선택합니다.', status: 'active', tabTarget: 'communities' },
+  { key: 'payment_gateway', category: '판매·상품 관리', icon: '💳', name: '결제(PG) 연동', desc: '토스페이먼츠로 실제 카드 결제를 받습니다. (실제 승인에는 판매자의 토스페이먼츠 키가 필요 - 테스트 키는 가입 없이도 발급 가능)', status: 'active', tabTarget: 'settings' },
+  { key: 'kakaopay', category: '판매·상품 관리', icon: '🟡', name: '카카오페이 간편결제', desc: '카카오페이로 결제를 받습니다. (실제 승인에는 판매자의 CID/SECRET_KEY가 필요 - 테스트 CID는 가입 없이도 발급 가능)', status: 'active', tabTarget: 'settings' },
+  { key: 'naverpay', category: '판매·상품 관리', icon: '🟢', name: '네이버페이 간편결제', desc: '네이버페이로 결제를 받습니다. (실제 승인에는 판매자의 Client-Id/Secret/파트너ID가 필요 - 네이버페이 가맹 심사 통과 후 발급됨)', status: 'active', tabTarget: 'settings' },
+  { key: 'cart_reminder', category: '판매·상품 관리', icon: '🛒', name: '장바구니 이탈 리마인더', desc: '장바구니에 담아두고 결제하지 않은 회원에게 일정 시간 후 이메일/인앱 알림을 보냅니다. (node-cron으로 30분마다 자동 스캔 - SMTP 미설정 시 인앱 알림만 발송됩니다)', status: 'active', tabTarget: 'settings' },
+  { key: 'referral_program', category: '적립·혜택', icon: '🎁', name: '추천인(리퍼럴) 프로그램', desc: '회원마다 고유 추천코드를 발급하고, 그 코드로 가입한 신규 회원이 첫 주문을 하면 추천인·피추천인 양쪽에 마일리지를 지급합니다.', status: 'active', tabTarget: 'settings' },
+  { key: 'social_login', category: '회원·커뮤니티', icon: '📱', name: '소셜 로그인', desc: '구글/카카오/네이버 계정으로 간편 로그인하는 기능입니다. 구글·카카오는 Supabase 대시보드에서, 네이버는 이 화면(설정 탭)에서 클라이언트ID/시크릿을 등록해야 실제로 동작합니다.', status: 'active', tabTarget: 'settings' },
+  { key: 'phone_verify', category: '앞으로 추가될 모듈', icon: '🔒', name: '휴대폰 본인인증', desc: '가입/비밀번호 찾기 시 휴대폰 인증(PASS/NICE)입니다. 화면은 준비되어 있으나 본인인증 서비스사(PASS/NICE 등)와의 실제 제휴·계약이 필요해 보류 중입니다.', status: 'planned', tabTarget: null },
+  { key: 'product_import', category: '판매·상품 관리', icon: '📥', name: '외부 상품 가져오기', desc: '도매매(도매꾹) 오픈API로 실시간 검색 후 우리 플랫폼 상품으로 가져옵니다. (요청 형식 최종 검증에는 실제 API 키가 필요)', status: 'active', tabTarget: 'import' },
+  { key: 'point_redeem', category: '적립·혜택', icon: '💸', name: '마일리지 사용(차감)', desc: '장바구니에서 보유 마일리지를 결제에 사용할 수 있습니다(직접입력/전액사용, 취소 시 자동 원복). 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
+  { key: 'subscriptions', category: '판매·상품 관리', icon: '🔄', name: '정기배송(구독)', desc: '회원이 상품을 주기적으로 배송받도록 신청하고, 관리자가 배송 일정(발송 처리)을 관리합니다. 자동결제·자동주문생성은 범위 밖입니다(신청/일정 관리만).', status: 'active', tabTarget: 'subscriptions' },
+  { key: 'recommendations', category: '판매·상품 관리', icon: '🎯', name: '개인화 추천(쇼핑 큐레이션)', desc: '회원의 구매 이력·찜 목록 기반으로 관심 카테고리 상품을 추천하고, 상품 상세페이지에는 함께 구매한 상품을 보여줍니다. 규칙 기반 추천이며 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
+  { key: 'reviews', category: '판매·상품 관리', icon: '⭐', name: '리뷰 관리', desc: '실제 구매자만 작성 가능한 구매인증(verified purchase) 리뷰를 모더레이션(숨김/노출)합니다.', status: 'active', tabTarget: 'reviews' },
+  { key: 'search', category: '판매·상품 관리', icon: '🔍', name: '상품 검색 개선', desc: '전문검색, 오타 허용, 자동완성을 지원합니다. 규칙 기반으로 자동 동작하며 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
+  { key: 'seo', category: '디자인', icon: '📈', name: 'SEO 기초', desc: 'sitemap.xml/robots.txt 자동 생성과 상품·카테고리 페이지 Open Graph/구조화데이터(JSON-LD)를 자동으로 붙여줍니다. 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
+  { key: 'email_notifications', category: '회원·커뮤니티', icon: '📧', name: '주문/배송 이메일 알림', desc: 'SMTP 계정을 등록하면 주문 접수·상태 변경 시 회원에게 자동으로 이메일을 발송합니다.', status: 'active', tabTarget: 'settings' },
+  { key: 'admin_mfa', category: '회원·커뮤니티', icon: '🔐', name: '관리자 2단계 인증(2FA)', desc: '관리자 본인 계정에 TOTP 기반 2단계 인증을 설정합니다(Supabase Auth MFA 기능 사용).', status: 'active', tabTarget: 'settings' },
+  { key: 'account_withdrawal', category: '회원·커뮤니티', icon: '🚪', name: '회원 탈퇴', desc: '회원이 마이페이지에서 직접 탈퇴 신청을 할 수 있습니다. 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
+  { key: 'audit_log', category: '회원·커뮤니티', icon: '🕵️', name: '관리자 감사로그', desc: '관리자/최고관리자의 주요 API 호출(등록·수정·삭제 등 57개 엔드포인트)을 자동으로 기록합니다(최고관리자 전용, 민감정보는 마스킹). ', status: 'active', tabTarget: 'audit-log' },
+  { key: 'wms', category: '재고·물류', icon: '🏭', name: '창고관리(WMS)', desc: '이벤트소싱 재고원장, 바코드/Lot 추적, 창고 로케이션(Zone-Rack-Bin), 2D 디지털트윈 평면도(다층 지원)와 AGV 이동 시뮬레이션까지 지원합니다.', status: 'active', tabTarget: 'wms' },
+  { key: 'marketing_automation', category: '적립·혜택', icon: '📢', name: '마케팅자동화', desc: '등급/누적구매액/주문건수/미구매기간/가입일 조건으로 회원을 골라 타겟 쿠폰을 즉시 발급하는 세그먼트 캠페인과, 등급유지·구매마일스톤 조건을 매일 자동 스캔해 발급하는 자동 쿠폰 규칙을 지원합니다.', status: 'active', tabTarget: 'marketing' },
+  { key: 'supplier_settlements', category: '판매·상품 관리', icon: '💰', name: '공급자 정산 관리', desc: '기간별로 공급자(판매자)의 매출·수수료·정산금액을 자동 집계하고, 정산 처리(지급완료 표시)까지 관리합니다.', status: 'active', tabTarget: 'settlements' }
+];
+
+app.get('/api/admin/modules', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    res.json({ success: true, data: MODULE_REGISTRY, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching module catalog:', err);
+    res.status(500).json({ error: 'Failed to fetch module catalog', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 📥 외부 도매/사입 사이트 실시간 API 연동 - 1차로 도매매(도매꾹) 오픈API 지원
+// - 조사 결과: 도매매(도매꾹)는 openapi.domeggook.com에 API키 인증(계정당 최대 5개), HTTPS,
+//   분당 180회/일 15,000회 요청 제한이 걸린 실제 문서화된 오픈API를 운영 중임을 공식 가이드 페이지에서 확인했다.
+//   다만 파라미터 상세 문서(참조 페이지)는 도매매 계정으로 로그인해야 열람 가능해, 정확한 요청 파라미터명까지는
+//   이 세션에서 100% 확정하지 못했다 — 아래 요청 형식은 공개적으로 확인된 사실(키 인증 방식, 분당/일일 제한)과
+//   일반적으로 알려진 요청 규격을 바탕으로 최선을 다해 구현했고, 실제 판매회원 API 키로 처음 테스트할 때
+//   형식이 다르면 그 자리에서 바로잡아야 한다는 점을 관리자 화면에도 정직하게 안내한다.
+// - 오너클랜/젠트레이드/도매토피아는 API 존재만 일부 확인되고 공식 파라미터 문서를 찾지 못해 이번에는 미포함.
+// ============================================
+const DOMEGGOOK_BASE = 'https://domeggook.com/ssl/api/';
+
+async function callDomeggookApi(apiKey, mode, extraParams = {}) {
+  const params = new URLSearchParams({ ver: '4.1', mode, aid: apiKey, om: 'json', market: 'dome', ...extraParams });
+  const url = `${DOMEGGOOK_BASE}?${params.toString()}`;
+  const resp = await fetch(url, { method: 'GET', signal: AbortSignal.timeout(15000) });
+  const text = await resp.text();
+  let json = null;
+  try { json = JSON.parse(text); } catch (e) { /* JSON이 아니면 raw 텍스트를 그대로 보존해서 반환 */ }
+  return { httpStatus: resp.status, json, raw: text.slice(0, 4000) };
+}
+
+// 도매매 응답의 상품 배열이 어떤 키에 들어있을지 몇 가지 흔한 형태를 방어적으로 시도(정확한 스키마 미확정 상태이므로)
+function extractDomeggookItems(json) {
+  if (!json || typeof json !== 'object') return [];
+  const candidates = [json.domeggook?.item, json.domeggook?.items, json.item, json.items, json.list, json.data];
+  for (const c of candidates) {
+    if (Array.isArray(c)) return c;
+  }
+  return [];
+}
+function normalizeDomeggookItem(raw) {
+  const pick = (...keys) => { for (const k of keys) { if (raw && raw[k] !== undefined && raw[k] !== null && raw[k] !== '') return raw[k]; } return null; };
+  return {
+    external_id: String(pick('no', 'itemNo', 'item_no', 'id') ?? ''),
+    name: pick('title', 'name', 'itemName', 'item_name') || '',
+    price: Number(pick('price', 'unitPrice', 'unit_price') ?? 0) || 0,
+    image_url: pick('img', 'image', 'thumbnail', 'thumbUrl', 'thumb_url') || '',
+    stock: Number(pick('qty', 'stock', 'stockQty') ?? 0) || 0
+  };
+}
+
+// 저장된 연동 설정 조회(내부용) - API 키를 매번 반환하지 않고, 있는지 여부만 확인할 때도 이 함수를 씀
+async function getSupplierIntegration(supplierKey) {
+  const { data, error } = await supabase.from('supplier_integrations').select('*').eq('supplier_key', supplierKey).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// 목록: 등록된 외부 공급사 연동 현황 (API 키 원문은 절대 응답에 포함하지 않음 - has_key로만 알림)
+app.get('/api/admin/integrations', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('supplier_integrations').select('*').order('supplier_name');
+    if (error) throw error;
+    const safe = (data || []).map(row => ({
+      supplier_key: row.supplier_key,
+      supplier_name: row.supplier_name,
+      has_key: !!row.api_key,
+      enabled: row.enabled,
+      last_tested_at: row.last_tested_at,
+      last_test_status: row.last_test_status,
+      last_test_message: row.last_test_message
+    }));
+    res.json({ success: true, data: safe, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching supplier integrations:', err);
+    res.status(500).json({ error: 'Failed to fetch supplier integrations', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// API 키 저장/해제
+app.patch('/api/admin/integrations/:supplierKey', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { supplierKey } = req.params;
+    const existing = await getSupplierIntegration(supplierKey);
+    if (!existing) return res.status(404).json({ error: 'Not Found', message: '지원하지 않는 공급사입니다', timestamp: new Date().toISOString() });
+
+    const update = { updated_at: new Date().toISOString() };
+    if (typeof req.body.api_key === 'string') update.api_key = req.body.api_key.trim() || null;
+    if (typeof req.body.enabled === 'boolean') update.enabled = req.body.enabled;
+
+    const { data, error } = await supabase.from('supplier_integrations').update(update).eq('supplier_key', supplierKey).select().single();
+    if (error) throw error;
+    res.json({ success: true, data: { supplier_key: data.supplier_key, has_key: !!data.api_key, enabled: data.enabled }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating supplier integration:', err);
+    res.status(500).json({ error: 'Failed to update supplier integration', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 연결 테스트: 저장된 키로 실제 도매매 서버에 가벼운 요청(상품 1건 조회)을 실시간으로 보내본다
+app.post('/api/admin/integrations/:supplierKey/test', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { supplierKey } = req.params;
+    if (supplierKey !== 'domeggook') {
+      return res.status(400).json({ error: 'Bad Request', message: '아직 지원하지 않는 공급사입니다', timestamp: new Date().toISOString() });
+    }
+    const existing = await getSupplierIntegration(supplierKey);
+    if (!existing || !existing.api_key) {
+      return res.status(400).json({ error: 'Bad Request', message: 'API 키가 등록되어 있지 않습니다. 먼저 API 키를 저장해주세요.', timestamp: new Date().toISOString() });
+    }
+
+    let status, message;
+    try {
+      const { httpStatus, json, raw } = await callDomeggookApi(existing.api_key, 'getItemLst', { sz: 1, pg: 1 });
+      if (json && json.errors) {
+        // 도매매 서버가 실제로 구조화된 에러(JSON errors 객체)를 내려줬다는 것 자체가 요청이 서버에 정상 도달했다는 뜻.
+        // 다만 API 키 자체가 거절된 것이므로 실패로 표시하고, 서버가 알려준 실제 사유를 그대로 보여준다.
+        status = 'failed';
+        message = `도매매 서버에 요청은 정상 도달했지만 거절되었습니다 - ${json.errors.dmessage || json.errors.message || JSON.stringify(json.errors)} (code=${json.errors.code || json.errors.dcode || '?'})`;
+      } else if (httpStatus === 200 && json) {
+        status = 'success';
+        message = `도매매 서버로부터 정상 응답을 받았습니다(HTTP ${httpStatus}, 에러 없음).`;
+      } else {
+        status = 'failed';
+        message = `도매매 서버 응답이 예상과 다릅니다(HTTP ${httpStatus}). 응답 원문: ${raw.slice(0, 300)}`;
+      }
+    } catch (callErr) {
+      status = 'failed';
+      message = '도매매 서버 호출에 실패했습니다: ' + callErr.message;
+    }
+
+    await supabase.from('supplier_integrations').update({
+      last_tested_at: new Date().toISOString(), last_test_status: status, last_test_message: message
+    }).eq('supplier_key', supplierKey);
+
+    res.json({ success: true, data: { status, message }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error testing supplier integration:', err);
+    res.status(500).json({ error: 'Failed to test supplier integration', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 상품 검색(도매매 카탈로그를 실시간으로 검색) - 응답 스키마가 100% 확정되지 않았으므로 정규화 결과와 원문을 함께 반환
+app.get('/api/admin/integrations/:supplierKey/search', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { supplierKey } = req.params;
+    if (supplierKey !== 'domeggook') {
+      return res.status(400).json({ error: 'Bad Request', message: '아직 지원하지 않는 공급사입니다', timestamp: new Date().toISOString() });
+    }
+    const existing = await getSupplierIntegration(supplierKey);
+    if (!existing || !existing.api_key) {
+      return res.status(400).json({ error: 'Bad Request', message: 'API 키가 등록되어 있지 않습니다. 먼저 API 키를 저장해주세요.', timestamp: new Date().toISOString() });
+    }
+    const keyword = (req.query.keyword || '').toString().trim();
+    if (!keyword) return res.status(400).json({ error: 'Bad Request', message: '검색어(keyword)를 입력해주세요', timestamp: new Date().toISOString() });
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+
+    const { httpStatus, json, raw } = await callDomeggookApi(existing.api_key, 'getItemLst', { kw: keyword, pg: page, sz: 20 });
+    const items = extractDomeggookItems(json).map(normalizeDomeggookItem).filter(i => i.external_id && i.name);
+
+    let warning = null;
+    if (json && json.errors) {
+      warning = `도매매 서버가 요청을 거절했습니다 - ${json.errors.dmessage || json.errors.message || JSON.stringify(json.errors)}. "연동 설정" 카드에서 API 키를 확인해주세요.`;
+    } else if (items.length === 0) {
+      warning = '정상 응답을 받았더라도 정규화된 상품이 0건이면, 응답 스키마가 예상과 달라 자동 인식이 안 됐을 수 있습니다. rawPreview를 확인해주세요.';
+    }
+
+    res.json({
+      success: true,
+      data: { items, httpStatus, rawPreview: raw.slice(0, 1500), warning },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error searching supplier catalog:', err);
+    res.status(500).json({ error: 'Failed to search supplier catalog', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 선택한 상품들을 실제로 우리 플랫폼 상품(products_with)으로 가져오기 - 이미 가져온 external_id는 건너뜀(중복 방지)
+app.post('/api/admin/integrations/:supplierKey/import', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { supplierKey } = req.params;
+    const { items, category } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '가져올 상품(items)이 없습니다', timestamp: new Date().toISOString() });
+    }
+    if (!category || typeof category !== 'string') {
+      return res.status(400).json({ error: 'Bad Request', message: '등록할 카테고리를 선택해주세요', timestamp: new Date().toISOString() });
+    }
+
+    const results = { imported: [], skipped_duplicate: [], failed: [] };
+    for (const raw of items) {
+      const externalId = String(raw.external_id || '').trim();
+      const name = String(raw.name || '').trim();
+      const price = Number(raw.price);
+      if (!externalId || !name || !Number.isFinite(price) || price <= 0) {
+        results.failed.push({ external_id: externalId, reason: '필수 정보(상품명/가격)가 올바르지 않습니다' });
+        continue;
+      }
+      const { data: dup } = await supabase.from('supplier_product_imports').select('id').eq('supplier_key', supplierKey).eq('external_id', externalId).maybeSingle();
+      if (dup) {
+        results.skipped_duplicate.push({ external_id: externalId, name });
+        continue;
+      }
+      const { data: created, error: insertErr } = await supabase.from('products_with').insert([{
+        name,
+        slug: slugify(name) + '-' + Date.now().toString(36),
+        description: `외부 공급사(${supplierKey === 'domeggook' ? '도매매' : supplierKey})에서 가져온 상품입니다.`,
+        price,
+        category,
+        stock: Number.isFinite(Number(raw.stock)) ? Number(raw.stock) : 0,
+        images_urls: raw.image_url ? [raw.image_url] : [],
+        supplier_id: req.user.id,
+        status: 'active'
+      }]).select().single();
+      if (insertErr) {
+        results.failed.push({ external_id: externalId, reason: insertErr.message });
+        continue;
+      }
+      await supabase.from('supplier_product_imports').insert([{ supplier_key: supplierKey, external_id: externalId, product_id: created.id }]);
+      // 신규 행이라 동시성 문제가 없으므로 초기재고는 그대로 두고, 재고원장에는 "신규 등록" 이벤트만 추적용으로 남긴다
+      if (Number(created.stock) > 0) {
+        await supabase.from('stock_adjustments_with').insert([{ product_id: created.id, variant_id: null, delta: Number(created.stock), reason: '외부 공급사 일괄 등록', created_by: req.user.id, scan_source: 'admin_manual' }]);
+      }
+      results.imported.push({ external_id: externalId, name, product_id: created.id });
+    }
+
+    res.json({ success: true, data: results, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error importing supplier products:', err);
+    res.status(500).json({ error: 'Failed to import supplier products', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 📄 엑셀/CSV 상품 일괄 등록
+// - 카페24 관리자 대시보드를 실제로 열어본 결과, "상품목록 > 엑셀다운로드"로 기존에 운영 중인 쇼핑몰의
+//   실제 상품 데이터를 그대로 뽑아낼 수 있다는 것을 확인했다. 도매매 API 키가 아직 없어도(사업자 인증 전)
+//   형님이 이미 갖고 있는 실제 상품 데이터(카페24든 직접 만든 엑셀이든)를 바로 우리 플랫폼에 옮겨올 수 있도록
+//   범용 엑셀/CSV 업로드 등록 기능을 추가한다. 파일 파싱은 관리자 화면(브라우저)에서 SheetJS로 하고,
+//   서버는 이미 파싱되어 넘어온 행(items) 배열만 검증 후 저장한다.
+// - 같은 이름의 상품이 이미 등록되어 있으면(같은 판매자 기준) 중복 등록을 막기 위해 건너뛴다.
+// ============================================
+app.post('/api/admin/products/bulk-import', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { items, category } = req.body;
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '등록할 상품(items)이 없습니다', timestamp: new Date().toISOString() });
+    }
+    if (items.length > 500) {
+      return res.status(400).json({ error: 'Bad Request', message: '한 번에 최대 500건까지 등록할 수 있습니다. 파일을 나눠서 올려주세요', timestamp: new Date().toISOString() });
+    }
+    if (!category || typeof category !== 'string') {
+      return res.status(400).json({ error: 'Bad Request', message: '등록할 카테고리를 선택해주세요', timestamp: new Date().toISOString() });
+    }
+
+    // 이 판매자가 이미 등록해둔 상품명 목록(중복 등록 방지용) - 대소문자/공백 무시하고 비교
+    const { data: existingProducts } = await supabase.from('products_with').select('name').eq('supplier_id', req.user.id);
+    const existingNames = new Set((existingProducts || []).map(p => String(p.name || '').trim().toLowerCase()));
+
+    const results = { imported: [], skipped_duplicate: [], failed: [] };
+    for (const raw of items) {
+      const name = String(raw.name || '').trim();
+      const price = Number(raw.price);
+      if (!name || !Number.isFinite(price) || price <= 0) {
+        results.failed.push({ name: name || '(이름없음)', reason: '필수 정보(상품명/가격)가 올바르지 않습니다' });
+        continue;
+      }
+      const nameKey = name.toLowerCase();
+      if (existingNames.has(nameKey)) {
+        results.skipped_duplicate.push({ name });
+        continue;
+      }
+      const discountPrice = Number(raw.discount_price);
+      const stock = Number(raw.stock);
+
+      const { data: created, error: insertErr } = await supabase.from('products_with').insert([{
+        name,
+        slug: slugify(name),
+        description: (raw.description && String(raw.description).trim()) || '엑셀/CSV 일괄 등록으로 추가된 상품입니다.',
+        price,
+        discount_price: Number.isFinite(discountPrice) && discountPrice > 0 && discountPrice < price ? discountPrice : null,
+        category,
+        stock: Number.isFinite(stock) && stock >= 0 ? stock : 0,
+        images_urls: raw.image_url ? [String(raw.image_url).trim()] : [],
+        supplier_id: req.user.id,
+        status: 'active'
+      }]).select().single();
+
+      if (insertErr) {
+        results.failed.push({ name, reason: insertErr.message });
+        continue;
+      }
+      existingNames.add(nameKey); // 같은 파일 안에서의 중복도 함께 방지
+      // 신규 행이라 동시성 문제가 없으므로 초기재고는 그대로 두고, 재고원장에는 "신규 등록" 이벤트만 추적용으로 남긴다
+      if (Number(created.stock) > 0) {
+        await supabase.from('stock_adjustments_with').insert([{ product_id: created.id, variant_id: null, delta: Number(created.stock), reason: '엑셀/CSV 일괄 등록', created_by: req.user.id, scan_source: 'admin_manual' }]);
+      }
+      results.imported.push({ name, product_id: created.id });
+    }
+
+    res.json({ success: true, data: results, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error bulk-importing products from file:', err);
+    res.status(500).json({ error: 'Failed to bulk-import products', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 💳 결제(PG) 연동 - 토스페이먼츠 (카페24 관리자의 "카페24페이먼츠(PG)" 메뉴를 확인해본 결과 정리)
+// - 카페24페이먼츠는 카페24가 호스팅하는 쇼핑몰 전용 결제 기능(토스페이먼츠·나이스정보통신을 파트너PG로 사용)이라
+//   카페24 밖에 있는 우리 플랫폼(별도 Node.js 서버)에서 그 API를 직접 가져다 쓸 수는 없다는 것을 확인했다.
+// - 다만 카페24페이먼츠가 쓰는 파트너PG인 토스페이먼츠는 그 자체로 어떤 웹사이트에도 붙일 수 있는
+//   독립적인 결제 API/SDK를 공식 제공하고(docs.tosspayments.com), 회원가입 없이도 테스트 키로 바로 연동
+//   테스트가 가능하다 - 그래서 카페24페이먼츠가 아니라 토스페이먼츠를 직접 붙이는 방식으로 구현했다.
+// - 요청 URL/파라미터명(위젯 SDK, requestPayment, /v1/payments/confirm, Basic Auth 방식)은
+//   토스페이먼츠 공식 문서와 공식 블로그에서 실제로 확인된 내용을 그대로 반영했다.
+// - 다만 테스트/실서비스 키 자체는 형님(또는 판매자 계정)이 발급받아 아래 관리자 화면에 입력해야 한다
+//   (임의로 만든 키를 넣어두지 않음 - 정직하게, 실제 키가 있어야만 동작).
+// ============================================
+async function getPgConfig(providerKey) {
+  const { data, error } = await supabase.from('pg_configs').select('*').eq('provider_key', providerKey).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// 공개: 결제 위젯 초기화에 필요한 정보만(클라이언트 키는 원래 프론트엔드에 노출되는 값이라 비밀이 아님 - secret_key는 여기 포함 안 함)
+app.get('/api/payments/toss/config', async (req, res) => {
+  try {
+    const config = await getPgConfig('toss');
+    if (!config || !config.enabled || !config.client_key) {
+      return res.json({ success: true, data: { enabled: false }, timestamp: new Date().toISOString() });
+    }
+    res.json({ success: true, data: { enabled: true, clientKey: config.client_key, mode: config.mode }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching toss config:', err);
+    res.status(500).json({ error: 'Failed to fetch payment config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 연동 현황 조회 (secret_key 원문은 절대 응답에 포함하지 않음)
+app.get('/api/admin/payment-gateway', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const config = await getPgConfig('toss');
+    if (!config) return res.status(404).json({ error: 'Not Found', message: '결제 연동 정보를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({
+      success: true,
+      data: {
+        provider_key: config.provider_key,
+        provider_name: config.provider_name,
+        client_key: config.client_key || null, // 클라이언트 키는 원래 공개되는 값이므로 그대로 보여줌
+        has_secret_key: !!config.secret_key,
+        mode: config.mode,
+        enabled: config.enabled,
+        last_tested_at: config.last_tested_at,
+        last_test_status: config.last_test_status,
+        last_test_message: config.last_test_message
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching payment gateway config:', err);
+    res.status(500).json({ error: 'Failed to fetch payment gateway config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.patch('/api/admin/payment-gateway', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const update = { updated_at: new Date().toISOString() };
+    if (typeof req.body.client_key === 'string') update.client_key = req.body.client_key.trim() || null;
+    if (typeof req.body.secret_key === 'string') update.secret_key = req.body.secret_key.trim() || null;
+    if (req.body.mode === 'test' || req.body.mode === 'live') update.mode = req.body.mode;
+    if (typeof req.body.enabled === 'boolean') update.enabled = req.body.enabled;
+
+    const { data, error } = await supabase.from('pg_configs').update(update).eq('provider_key', 'toss').select().single();
+    if (error) throw error;
+    res.json({ success: true, data: { client_key: data.client_key, has_secret_key: !!data.secret_key, mode: data.mode, enabled: data.enabled }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating payment gateway config:', err);
+    res.status(500).json({ error: 'Failed to update payment gateway config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 연결 테스트: 일부러 존재하지 않는 결제건으로 승인 API를 호출해본다 - 시크릿 키가 틀리면 401(인증 실패)이,
+// 시크릿 키가 맞으면 "존재하지 않는 결제"류의 400이 돌아온다(토스 서버에 실제로 도달해 인증까지 통과했다는 뜻)
+app.post('/api/admin/payment-gateway/test', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const config = await getPgConfig('toss');
+    if (!config || !config.secret_key) {
+      return res.status(400).json({ error: 'Bad Request', message: '시크릿 키가 등록되어 있지 않습니다. 먼저 키를 저장해주세요.', timestamp: new Date().toISOString() });
+    }
+    let status, message;
+    try {
+      const authHeader = 'Basic ' + Buffer.from(config.secret_key + ':').toString('base64');
+      const resp = await fetch('https://api.tosspayments.com/v1/payments/confirm', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+        body: JSON.stringify({ paymentKey: 'test-connection-check', orderId: 'test-connection-check', amount: 1 }),
+        signal: AbortSignal.timeout(15000)
+      });
+      const json = await resp.json().catch(() => null);
+      if (resp.status === 401) {
+        status = 'failed';
+        message = '시크릿 키 인증에 실패했습니다(HTTP 401). 키가 올바른지 확인해주세요. ' + (json?.message || '');
+      } else if (resp.status >= 200 && resp.status < 500) {
+        // 400 등으로 거절되더라도, 토스 서버에 실제로 도달해서 "인증은 통과하고 결제건을 못 찾았다"는 정상적인 응답이면 연동 자체는 성공
+        status = 'success';
+        message = `토스페이먼츠 서버에 정상적으로 인증되었습니다(HTTP ${resp.status}). 응답: ${json?.message || JSON.stringify(json)}`;
+      } else {
+        status = 'failed';
+        message = `토스페이먼츠 서버 응답이 예상과 다릅니다(HTTP ${resp.status})`;
+      }
+    } catch (callErr) {
+      status = 'failed';
+      message = '토스페이먼츠 서버 호출에 실패했습니다: ' + callErr.message;
+    }
+    await supabase.from('pg_configs').update({ last_tested_at: new Date().toISOString(), last_test_status: status, last_test_message: message }).eq('provider_key', 'toss');
+    res.json({ success: true, data: { status, message }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error testing payment gateway:', err);
+    res.status(500).json({ error: 'Failed to test payment gateway', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 결제 승인: 토스 결제창에서 돌아온 뒤 프론트엔드가 이 API를 호출해 실제로 결제를 확정한다.
+// 클라이언트가 보낸 금액을 그대로 믿지 않고, 반드시 우리 DB에 저장된 주문 금액과 대조해서 위변조를 막는다.
+app.post('/api/payments/toss/confirm', authenticate, async (req, res) => {
+  try {
+    const { paymentKey, orderId, amount } = req.body;
+    if (!paymentKey || !orderId || !Number.isFinite(Number(amount))) {
+      return res.status(400).json({ error: 'Bad Request', message: 'paymentKey, orderId, amount가 모두 필요합니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: order, error: orderErr } = await supabase.from('orders_with').select('*').eq('order_number', orderId).eq('user_id', req.user.id).maybeSingle();
+    if (orderErr) throw orderErr;
+    if (!order) return res.status(404).json({ error: 'Not Found', message: '주문을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (order.status !== 'pending') {
+      return res.status(400).json({ error: 'Bad Request', message: `이미 처리된 주문입니다 (현재 상태: ${order.status})`, timestamp: new Date().toISOString() });
+    }
+    if (Math.round(Number(order.final_price)) !== Math.round(Number(amount))) {
+      return res.status(400).json({ error: 'Bad Request', message: '결제 금액이 주문 금액과 일치하지 않습니다', timestamp: new Date().toISOString() });
+    }
+
+    const config = await getPgConfig('toss');
+    if (!config || !config.enabled || !config.secret_key) {
+      return res.status(400).json({ error: 'Bad Request', message: '결제 연동이 활성화되어 있지 않습니다', timestamp: new Date().toISOString() });
+    }
+
+    const authHeader = 'Basic ' + Buffer.from(config.secret_key + ':').toString('base64');
+    const tossResp = await fetch('https://api.tosspayments.com/v1/payments/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify({ paymentKey, orderId, amount: Number(amount) }),
+      signal: AbortSignal.timeout(20000)
+    });
+    const tossJson = await tossResp.json().catch(() => null);
+
+    if (tossResp.ok) {
+      await supabase.from('order_payments').insert([{ order_id: order.id, provider_key: 'toss', payment_key: paymentKey, amount: Number(amount), status: 'approved', raw_response: tossJson }]);
+      await supabase.from('orders_with').update({ status: 'paid', payment_method: 'toss' }).eq('id', order.id);
+      return res.json({ success: true, data: { order_number: order.order_number, status: 'paid' }, timestamp: new Date().toISOString() });
+    } else {
+      await supabase.from('order_payments').insert([{ order_id: order.id, provider_key: 'toss', payment_key: paymentKey, amount: Number(amount), status: 'failed', raw_response: tossJson }]);
+      return res.status(400).json({ error: 'Payment Failed', message: tossJson?.message || '결제 승인에 실패했습니다', timestamp: new Date().toISOString() });
+    }
+  } catch (err) {
+    console.error('Error confirming toss payment:', err);
+    res.status(500).json({ error: 'Failed to confirm payment', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 💳 결제(PG) 연동 - 카카오페이 / 네이버페이 간편결제 (토스페이먼츠와 동일한 pg_configs 패턴 재사용)
+// - "2순위부터 차례로 진행해줘" 5번(카카오페이/네이버페이 간편결제 추가) 작업.
+// - 카카오페이: developers.kakaopay.com 문서 기준 신규(2024~) 온라인결제 API(open-api.kakaopay.com,
+//   Authorization: "SECRET_KEY {키}")를 사용했다. 공개 테스트 CID(TC0ONETIME)와 개발용 시크릿 키는
+//   카카오 계정으로 개발자센터에 "애플리케이션"을 등록하면 사업자등록 없이 형님이 직접 바로 발급받을 수 있다.
+// - 네이버페이: 공식 "결제형 독립몰 연동 개발가이드" 기준으로 작성했다. 다만 네이버페이는 토스/카카오와 달리
+//   가맹 심사(사업자 확인 등)가 완료되어야 Client-Id/Client-Secret/파트너ID를 발급해준다고 안내되어 있어
+//   (심사 전에는 자가발급 테스트 키 자체가 없음), 이번 라운드에서는 코드는 문서에 나온 요청/응답 필드명
+//   그대로 준비해뒀지만 실제 키로 끝까지 호출 성공을 확인하지는 못했다 - 형님이 가맹 심사를 통과해 실제
+//   발급받은 개발가이드와 API 경로(reserve/apply)가 다르면 바로 맞춰 고치겠다(정직하게 밝혀둠).
+// - 두 PG 모두 결제창을 서버가 먼저 열어주는(ready/reserve) 방식이라, 토스처럼 브라우저에 시크릿 키가
+//   노출될 일이 없다(요청은 항상 우리 서버 → 카카오/네이버 서버로만 나간다).
+// ============================================
+const SIMPLE_PAY_PROVIDERS = {
+  kakaopay: { name: '카카오페이' },
+  naverpay: { name: '네이버페이' }
+};
+
+// 공개: 결제 버튼을 보여줄지 여부만 노출 (시크릿 키는 절대 포함 안 함)
+app.get('/api/payments/:provider/config', async (req, res) => {
+  try {
+    const provider = req.params.provider;
+    if (!SIMPLE_PAY_PROVIDERS[provider]) return res.status(404).json({ error: 'Not Found', message: '지원하지 않는 결제수단입니다', timestamp: new Date().toISOString() });
+    const config = await getPgConfig(provider);
+    if (!config || !config.enabled || !config.client_key || !config.secret_key) {
+      return res.json({ success: true, data: { enabled: false }, timestamp: new Date().toISOString() });
+    }
+    res.json({ success: true, data: { enabled: true, mode: config.mode }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error(`Error fetching ${req.params.provider} config:`, err);
+    res.status(500).json({ error: 'Failed to fetch payment config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 카카오페이/네이버페이 연동 현황 조회 (secret_key 원문은 절대 응답에 포함하지 않음) - 토스와 동일 패턴
+app.get('/api/admin/payment-gateway/:provider', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const provider = req.params.provider;
+    if (!SIMPLE_PAY_PROVIDERS[provider]) return res.status(404).json({ error: 'Not Found', message: '지원하지 않는 결제수단입니다', timestamp: new Date().toISOString() });
+    const config = await getPgConfig(provider);
+    if (!config) return res.status(404).json({ error: 'Not Found', message: '결제 연동 정보를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({
+      success: true,
+      data: {
+        provider_key: config.provider_key,
+        provider_name: config.provider_name,
+        client_key: config.client_key || null, // 카카오페이는 CID, 네이버페이는 Client-Id (둘 다 비밀값이 아님)
+        has_secret_key: !!config.secret_key, // 카카오페이는 SECRET_KEY, 네이버페이는 Client-Secret
+        extra_config: config.extra_config || {}, // 네이버페이 파트너 ID 등 공급자별 추가 값
+        mode: config.mode,
+        enabled: config.enabled,
+        last_tested_at: config.last_tested_at,
+        last_test_status: config.last_test_status,
+        last_test_message: config.last_test_message
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching payment gateway config:', err);
+    res.status(500).json({ error: 'Failed to fetch payment gateway config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.patch('/api/admin/payment-gateway/:provider', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const provider = req.params.provider;
+    if (!SIMPLE_PAY_PROVIDERS[provider]) return res.status(404).json({ error: 'Not Found', message: '지원하지 않는 결제수단입니다', timestamp: new Date().toISOString() });
+    const current = await getPgConfig(provider);
+    if (!current) return res.status(404).json({ error: 'Not Found', message: '결제 연동 정보를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const update = { updated_at: new Date().toISOString() };
+    if (typeof req.body.client_key === 'string') update.client_key = req.body.client_key.trim() || null;
+    if (typeof req.body.secret_key === 'string') update.secret_key = req.body.secret_key.trim() || null;
+    if (req.body.mode === 'test' || req.body.mode === 'live') update.mode = req.body.mode;
+    if (typeof req.body.enabled === 'boolean') update.enabled = req.body.enabled;
+    if (req.body.extra_config && typeof req.body.extra_config === 'object') {
+      update.extra_config = { ...(current.extra_config || {}), ...req.body.extra_config };
+    }
+
+    const { data, error } = await supabase.from('pg_configs').update(update).eq('provider_key', provider).select().single();
+    if (error) throw error;
+    res.json({ success: true, data: { client_key: data.client_key, has_secret_key: !!data.secret_key, extra_config: data.extra_config, mode: data.mode, enabled: data.enabled }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating payment gateway config:', err);
+    res.status(500).json({ error: 'Failed to update payment gateway config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 연결 테스트: 실제로 카카오페이/네이버페이 서버에 결제 준비 요청을 보내 키가 유효한지 확인한다
+// (일부러 실패할 값을 보내는 토스와 달리, 카카오/네이버의 "준비" API는 정상 키면 그 자체로 성공 응답이 온다 -
+//  실제로 결제되는 건 아니고 사용자가 완료하지 않으면 자동 만료되는 미완료 세션이 하나 생길 뿐이다)
+app.post('/api/admin/payment-gateway/:provider/test', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const provider = req.params.provider;
+    if (!SIMPLE_PAY_PROVIDERS[provider]) return res.status(404).json({ error: 'Not Found', message: '지원하지 않는 결제수단입니다', timestamp: new Date().toISOString() });
+    const config = await getPgConfig(provider);
+    if (!config || !config.secret_key || !config.client_key) {
+      return res.status(400).json({ error: 'Bad Request', message: '키가 모두 등록되어 있지 않습니다. 먼저 키를 저장해주세요.', timestamp: new Date().toISOString() });
+    }
+    let status, message;
+    const baseUrl = getBaseUrl(req);
+    try {
+      if (provider === 'kakaopay') {
+        const resp = await fetch('https://open-api.kakaopay.com/online/v1/payment/ready', {
+          method: 'POST',
+          headers: { Authorization: 'SECRET_KEY ' + config.secret_key, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cid: config.client_key, partner_order_id: 'connection-check', partner_user_id: 'connection-check',
+            item_name: '연동 테스트', quantity: 1, total_amount: 100, tax_free_amount: 0,
+            approval_url: `${baseUrl}/api/payments/kakaopay/approve`, cancel_url: `${baseUrl}/`, fail_url: `${baseUrl}/`
+          }),
+          signal: AbortSignal.timeout(15000)
+        });
+        const json = await resp.json().catch(() => null);
+        if (resp.status === 401) { status = 'failed'; message = `SECRET_KEY 인증에 실패했습니다(HTTP 401). ${json?.error_message || json?.msg || ''}`; }
+        else if (resp.status === 200 && json?.tid) { status = 'success'; message = `카카오페이 서버에 정상적으로 인증되어 결제 준비까지 성공했습니다(tid: ${json.tid}, 사용자가 완료하지 않으면 자동 만료됩니다)`; }
+        else { status = 'failed'; message = `카카오페이 서버 응답이 예상과 다릅니다(HTTP ${resp.status}). CID가 올바른지 확인해주세요. ${json?.error_message || json?.msg || JSON.stringify(json)}`; }
+      } else if (provider === 'naverpay') {
+        const partnerId = (config.extra_config && config.extra_config.partner_id) || '';
+        if (!partnerId) { status = 'failed'; message = '네이버페이 파트너 ID(extra_config.partner_id)가 등록되어 있지 않습니다.'; }
+        else {
+          const domain = config.mode === 'live' ? 'apis.naver.com' : 'dev.apis.naver.com';
+          const resp = await fetch(`https://${domain}/${partnerId}/naverpay/payments/v2.2/reserve`, {
+            method: 'POST',
+            headers: { 'X-Naver-Client-Id': config.client_key, 'X-Naver-Client-Secret': config.secret_key, 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ merchantPayKey: 'connection-check', productName: '연동 테스트', totalPayAmount: '100', taxScopeAmount: '100', taxExScopeAmount: '0', productCount: '1', returnUrl: `${baseUrl}/` }).toString(),
+            signal: AbortSignal.timeout(15000)
+          });
+          const json = await resp.json().catch(() => null);
+          if (resp.status === 401 || resp.status === 403) { status = 'failed'; message = `Client-Id/Client-Secret 인증에 실패했습니다(HTTP ${resp.status}).`; }
+          else if (resp.ok) { status = 'success'; message = `네이버페이 서버에 정상적으로 인증되어 결제 예약까지 성공했습니다.`; }
+          else { status = 'failed'; message = `네이버페이 서버 응답이 예상과 다릅니다(HTTP ${resp.status}). 파트너 ID가 올바른지 확인해주세요. ${JSON.stringify(json)}`; }
+        }
+      }
+    } catch (callErr) {
+      status = 'failed';
+      message = `${SIMPLE_PAY_PROVIDERS[provider].name} 서버 호출에 실패했습니다: ${callErr.message}`;
+    }
+    await supabase.from('pg_configs').update({ last_tested_at: new Date().toISOString(), last_test_status: status, last_test_message: message }).eq('provider_key', provider);
+    res.json({ success: true, data: { status, message }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error testing payment gateway:', err);
+    res.status(500).json({ error: 'Failed to test payment gateway', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 카카오페이 결제 준비: 주문 접수 직후 프론트엔드가 이 API를 호출해 카카오페이 결제창 URL을 받는다
+app.post('/api/orders/:id/kakaopay/ready', authenticate, async (req, res) => {
+  try {
+    const { data: order, error: orderErr } = await supabase.from('orders_with').select('*').eq('id', req.params.id).eq('user_id', req.user.id).maybeSingle();
+    if (orderErr) throw orderErr;
+    if (!order) return res.status(404).json({ error: 'Not Found', message: '주문을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (order.status !== 'pending') return res.status(400).json({ error: 'Bad Request', message: `이미 처리된 주문입니다 (현재 상태: ${order.status})`, timestamp: new Date().toISOString() });
+
+    const config = await getPgConfig('kakaopay');
+    if (!config || !config.enabled || !config.secret_key || !config.client_key) {
+      return res.status(400).json({ error: 'Bad Request', message: '카카오페이 연동이 활성화되어 있지 않습니다', timestamp: new Date().toISOString() });
+    }
+
+    const baseUrl = getBaseUrl(req);
+    const amount = Math.round(Number(order.final_price));
+    const resp = await fetch('https://open-api.kakaopay.com/online/v1/payment/ready', {
+      method: 'POST',
+      headers: { Authorization: 'SECRET_KEY ' + config.secret_key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        cid: config.client_key, partner_order_id: order.order_number, partner_user_id: order.user_id,
+        item_name: `WITH+ 주문 (${order.order_number})`.slice(0, 100), quantity: 1, total_amount: amount, tax_free_amount: 0,
+        approval_url: `${baseUrl}/api/payments/kakaopay/approve?order_id=${order.id}`,
+        cancel_url: `${baseUrl}/payment-result.html?provider=kakaopay&status=cancel&order=${encodeURIComponent(order.order_number)}`,
+        fail_url: `${baseUrl}/payment-result.html?provider=kakaopay&status=fail&order=${encodeURIComponent(order.order_number)}`
+      }),
+      signal: AbortSignal.timeout(15000)
+    });
+    const json = await resp.json().catch(() => null);
+    if (!resp.ok || !json?.tid) {
+      return res.status(400).json({ error: 'Payment Ready Failed', message: json?.error_message || json?.msg || '카카오페이 결제 준비에 실패했습니다', timestamp: new Date().toISOString() });
+    }
+    await supabase.from('order_payments').insert([{ order_id: order.id, provider_key: 'kakaopay', payment_key: json.tid, amount, status: 'requested', raw_response: json }]);
+    res.json({ success: true, data: { redirect_url: json.next_redirect_pc_url, redirect_url_mobile: json.next_redirect_mobile_url }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error preparing kakaopay payment:', err);
+    res.status(500).json({ error: 'Failed to prepare kakaopay payment', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 카카오페이 결제 승인 콜백: 사용자가 카카오페이 결제창에서 결제를 완료하면 브라우저가 이 URL로 리다이렉트된다
+app.get('/api/payments/kakaopay/approve', async (req, res) => {
+  const redirectFail = (orderNumber, reason) => res.redirect(`/payment-result.html?provider=kakaopay&status=fail${orderNumber ? `&order=${encodeURIComponent(orderNumber)}` : ''}${reason ? `&reason=${encodeURIComponent(reason)}` : ''}`);
+  try {
+    const { order_id, pg_token } = req.query;
+    if (!order_id || !pg_token) return redirectFail(null, 'missing_params');
+
+    const { data: order, error: orderErr } = await supabase.from('orders_with').select('*').eq('id', order_id).maybeSingle();
+    if (orderErr) throw orderErr;
+    if (!order) return redirectFail(null, 'order_not_found');
+
+    const { data: payment, error: paymentErr } = await supabase.from('order_payments').select('*').eq('order_id', order.id).eq('provider_key', 'kakaopay').eq('status', 'requested').order('created_at', { ascending: false }).limit(1).maybeSingle();
+    if (paymentErr) throw paymentErr;
+    if (!payment) return redirectFail(order.order_number, 'no_ready_session');
+
+    const config = await getPgConfig('kakaopay');
+    if (!config || !config.secret_key || !config.client_key) return redirectFail(order.order_number, 'config_missing');
+
+    const resp = await fetch('https://open-api.kakaopay.com/online/v1/payment/approve', {
+      method: 'POST',
+      headers: { Authorization: 'SECRET_KEY ' + config.secret_key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cid: config.client_key, tid: payment.payment_key, partner_order_id: order.order_number, partner_user_id: order.user_id, pg_token }),
+      signal: AbortSignal.timeout(15000)
+    });
+    const json = await resp.json().catch(() => null);
+
+    if (resp.ok) {
+      await supabase.from('order_payments').update({ status: 'approved', raw_response: json }).eq('id', payment.id);
+      await supabase.from('orders_with').update({ status: 'paid', payment_method: 'kakaopay' }).eq('id', order.id);
+      return res.redirect(`/payment-result.html?provider=kakaopay&status=success&order=${encodeURIComponent(order.order_number)}`);
+    } else {
+      await supabase.from('order_payments').update({ status: 'failed', raw_response: json }).eq('id', payment.id);
+      return redirectFail(order.order_number, 'approve_rejected');
+    }
+  } catch (err) {
+    console.error('Error approving kakaopay payment:', err);
+    return redirectFail(null, 'server_error');
+  }
+});
+
+// 네이버페이 결제 예약: 주문 접수 직후 프론트엔드가 이 API를 호출해 네이버페이 결제창 URL을 받는다
+app.post('/api/orders/:id/naverpay/reserve', authenticate, async (req, res) => {
+  try {
+    const { data: order, error: orderErr } = await supabase.from('orders_with').select('*').eq('id', req.params.id).eq('user_id', req.user.id).maybeSingle();
+    if (orderErr) throw orderErr;
+    if (!order) return res.status(404).json({ error: 'Not Found', message: '주문을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (order.status !== 'pending') return res.status(400).json({ error: 'Bad Request', message: `이미 처리된 주문입니다 (현재 상태: ${order.status})`, timestamp: new Date().toISOString() });
+
+    const config = await getPgConfig('naverpay');
+    const partnerId = config && config.extra_config && config.extra_config.partner_id;
+    if (!config || !config.enabled || !config.secret_key || !config.client_key || !partnerId) {
+      return res.status(400).json({ error: 'Bad Request', message: '네이버페이 연동이 활성화되어 있지 않습니다', timestamp: new Date().toISOString() });
+    }
+
+    const baseUrl = getBaseUrl(req);
+    const amount = Math.round(Number(order.final_price));
+    const domain = config.mode === 'live' ? 'apis.naver.com' : 'dev.apis.naver.com';
+    const resp = await fetch(`https://${domain}/${partnerId}/naverpay/payments/v2.2/reserve`, {
+      method: 'POST',
+      headers: { 'X-Naver-Client-Id': config.client_key, 'X-Naver-Client-Secret': config.secret_key, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        merchantPayKey: order.order_number, productName: `WITH+ 주문 (${order.order_number})`.slice(0, 100),
+        totalPayAmount: String(amount), taxScopeAmount: String(amount), taxExScopeAmount: '0', productCount: '1',
+        returnUrl: `${baseUrl}/api/payments/naverpay/approve?order_id=${order.id}`
+      }).toString(),
+      signal: AbortSignal.timeout(15000)
+    });
+    const json = await resp.json().catch(() => null);
+    const reserveId = json?.body?.reserveId || json?.reserveId;
+    if (!resp.ok || !reserveId) {
+      return res.status(400).json({ error: 'Payment Reserve Failed', message: json?.message || '네이버페이 결제 예약에 실패했습니다', timestamp: new Date().toISOString() });
+    }
+    await supabase.from('order_payments').insert([{ order_id: order.id, provider_key: 'naverpay', payment_key: reserveId, amount, status: 'requested', raw_response: json }]);
+    // 네이버페이는 결제창을 팝업/리다이렉트로 열 때 reserveId를 그대로 사용한다
+    res.json({ success: true, data: { reserve_id: reserveId, mode: config.mode }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error reserving naverpay payment:', err);
+    res.status(500).json({ error: 'Failed to reserve naverpay payment', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 네이버페이 결제 승인 콜백: 사용자가 네이버페이 결제창에서 결제를 완료하면 브라우저가 이 URL로 리다이렉트된다
+app.get('/api/payments/naverpay/approve', async (req, res) => {
+  const redirectFail = (orderNumber, reason) => res.redirect(`/payment-result.html?provider=naverpay&status=fail${orderNumber ? `&order=${encodeURIComponent(orderNumber)}` : ''}${reason ? `&reason=${encodeURIComponent(reason)}` : ''}`);
+  try {
+    const { order_id, paymentId, resultCode } = req.query;
+    if (!order_id) return redirectFail(null, 'missing_params');
+
+    const { data: order, error: orderErr } = await supabase.from('orders_with').select('*').eq('id', order_id).maybeSingle();
+    if (orderErr) throw orderErr;
+    if (!order) return redirectFail(null, 'order_not_found');
+
+    if (resultCode && resultCode !== 'Success') return redirectFail(order.order_number, 'user_cancelled');
+    if (!paymentId) return redirectFail(order.order_number, 'missing_payment_id');
+
+    const { data: payment, error: paymentErr } = await supabase.from('order_payments').select('*').eq('order_id', order.id).eq('provider_key', 'naverpay').eq('status', 'requested').order('created_at', { ascending: false }).limit(1).maybeSingle();
+    if (paymentErr) throw paymentErr;
+    if (!payment) return redirectFail(order.order_number, 'no_reserve_session');
+
+    const config = await getPgConfig('naverpay');
+    const partnerId = config && config.extra_config && config.extra_config.partner_id;
+    if (!config || !config.secret_key || !config.client_key || !partnerId) return redirectFail(order.order_number, 'config_missing');
+
+    const domain = config.mode === 'live' ? 'apis.naver.com' : 'dev.apis.naver.com';
+    const resp = await fetch(`https://${domain}/${partnerId}/naverpay/payments/v2.2/apply/payment`, {
+      method: 'POST',
+      headers: { 'X-Naver-Client-Id': config.client_key, 'X-Naver-Client-Secret': config.secret_key, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ paymentId }).toString(),
+      signal: AbortSignal.timeout(15000)
+    });
+    const json = await resp.json().catch(() => null);
+
+    if (resp.ok && json?.code === 'Success') {
+      await supabase.from('order_payments').update({ status: 'approved', raw_response: json }).eq('id', payment.id);
+      await supabase.from('orders_with').update({ status: 'paid', payment_method: 'naverpay' }).eq('id', order.id);
+      return res.redirect(`/payment-result.html?provider=naverpay&status=success&order=${encodeURIComponent(order.order_number)}`);
+    } else {
+      await supabase.from('order_payments').update({ status: 'failed', raw_response: json }).eq('id', payment.id);
+      return redirectFail(order.order_number, 'approve_rejected');
+    }
+  } catch (err) {
+    console.error('Error approving naverpay payment:', err);
+    return redirectFail(null, 'server_error');
+  }
+});
+
+// ============================================
+// 🔑 소셜 로그인(OAuth) - 구글/카카오/네이버
+// - 구글/카카오는 Supabase Auth가 기본 제공하는 OAuth Provider라 서버 코드가 필요 없다. 관리자가
+//   Supabase 대시보드(Authentication > Providers)에서 각 서비스의 클라이언트ID/시크릿을 등록해두면
+//   프론트엔드의 supabase.auth.signInWithOAuth({ provider: 'google' | 'kakao' }) 호출만으로 전체
+//   흐름(동의화면 → 콜백 → 세션발급)이 Supabase 쪽에서 자동으로 처리된다.
+// - 네이버는 Supabase가 기본 제공하지 않는 제공자라, 토스페이먼츠/카카오페이와 동일한 패턴(관리자가
+//   아래 관리자 화면에서 클라이언트ID/시크릿을 직접 등록)으로 서버가 OAuth 인가코드 흐름을 직접
+//   처리한다. 네이버 프로필 조회까지 마친 뒤에는 우리가 직접 비밀번호나 세션 토큰을 만들지 않고,
+//   Supabase의 매직링크 발급(admin.generateLink)을 재사용해 그 링크로 그대로 리다이렉트한다 -
+//   Supabase가 링크를 검증하고 세션을 만들어 프론트엔드로 돌려준다.
+// ============================================
+async function getOauthConfig(providerKey) {
+  const { data, error } = await supabase.from('oauth_configs').select('*').eq('provider_key', providerKey).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// state 파라미터: 별도의 서버 세션/쿠키 저장소 없이 JWT_SECRET으로 서명한 값을 그대로 왕복시켜
+// CSRF를 방지한다(발급 후 10분 이내에만 유효 - 위조 방지는 HMAC 서명, 재생공격 방지는 만료시간).
+function signNaverState() {
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const ts = Date.now().toString();
+  const payload = `${nonce}.${ts}`;
+  const sig = crypto.createHmac('sha256', process.env.JWT_SECRET || 'withplus-fallback-secret').update(payload).digest('hex');
+  return `${payload}.${sig}`;
+}
+function verifyNaverState(state) {
+  if (!state || typeof state !== 'string') return false;
+  const parts = state.split('.');
+  if (parts.length !== 3) return false;
+  const [nonce, ts, sig] = parts;
+  const payload = `${nonce}.${ts}`;
+  const expected = crypto.createHmac('sha256', process.env.JWT_SECRET || 'withplus-fallback-secret').update(payload).digest('hex');
+  if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return false;
+  const age = Date.now() - Number(ts);
+  if (!Number.isFinite(age) || age < 0 || age > 10 * 60 * 1000) return false; // 10분 초과 시 만료
+  return true;
+}
+
+// 관리자: 네이버 로그인 연동 상태 조회 (시크릿 원문은 절대 응답에 포함하지 않음)
+app.get('/api/admin/oauth-config/naver', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const config = await getOauthConfig('naver');
+    if (!config) return res.status(404).json({ error: 'Not Found', message: '네이버 로그인 연동 정보를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({
+      success: true,
+      data: {
+        provider_key: config.provider_key,
+        provider_name: config.provider_name,
+        client_id: config.client_id || null,
+        has_client_secret: !!config.client_secret,
+        enabled: config.enabled,
+        callback_url: `${getBaseUrl(req)}/api/auth/naver/callback`,
+        last_tested_at: config.last_tested_at,
+        last_test_status: config.last_test_status,
+        last_test_message: config.last_test_message
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching naver oauth config:', err);
+    res.status(500).json({ error: 'Failed to fetch oauth config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 네이버 로그인 클라이언트ID/시크릿 저장 (시크릿은 입력값이 있을 때만 갱신 - 빈 값이면 기존 값 유지)
+app.put('/api/admin/oauth-config/naver', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { client_id, client_secret, enabled } = req.body;
+    const updates = { updated_at: new Date().toISOString() };
+    if (client_id !== undefined) updates.client_id = client_id ? String(client_id).trim() : null;
+    if (client_secret !== undefined && client_secret !== '') updates.client_secret = String(client_secret).trim();
+    if (enabled !== undefined) updates.enabled = !!enabled;
+    const { data, error } = await supabase.from('oauth_configs').update(updates).eq('provider_key', 'naver').select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '네이버 로그인 연동 정보를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({
+      success: true,
+      data: { provider_key: data.provider_key, client_id: data.client_id, has_client_secret: !!data.client_secret, enabled: data.enabled },
+      message: '저장되었습니다',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error saving naver oauth config:', err);
+    res.status(500).json({ error: 'Failed to save oauth config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 네이버 로그인 시작: 로그인 화면의 "네이버로 로그인" 버튼이 location.href로 이 URL에 직접 진입한다
+app.get('/api/auth/naver/login', async (req, res) => {
+  try {
+    const config = await getOauthConfig('naver');
+    if (!config || !config.enabled || !config.client_id || !config.client_secret) {
+      return res.redirect('/login?social_error=' + encodeURIComponent('네이버 로그인이 아직 설정되지 않았습니다. 이메일로 로그인해주세요.'));
+    }
+    const state = signNaverState();
+    const redirectUri = `${getBaseUrl(req)}/api/auth/naver/callback`;
+    const authorizeUrl = 'https://nid.naver.com/oauth2.0/authorize?' + new URLSearchParams({
+      response_type: 'code',
+      client_id: config.client_id,
+      redirect_uri: redirectUri,
+      state
+    }).toString();
+    res.redirect(authorizeUrl);
+  } catch (err) {
+    console.error('Error starting naver oauth:', err);
+    res.redirect('/login?social_error=' + encodeURIComponent('네이버 로그인을 시작하지 못했습니다. 잠시 후 다시 시도해주세요.'));
+  }
+});
+
+// 네이버 로그인 콜백: 인가코드 → 토큰 교환 → 프로필 조회 → 이메일로 기존회원 매칭(없으면 신규가입,
+// 비밀번호 없는 소셜 전용 계정) → Supabase 매직링크 발급받아 그 링크로 그대로 리다이렉트
+app.get('/api/auth/naver/callback', async (req, res) => {
+  const { code, state, error: naverError } = req.query;
+  const failRedirect = (msg) => res.redirect('/login?social_error=' + encodeURIComponent(msg));
+  try {
+    if (naverError) return failRedirect('네이버 로그인이 취소되었거나 거부되었습니다.');
+    if (!verifyNaverState(state)) return failRedirect('로그인 요청이 만료되었거나 올바르지 않습니다. 다시 시도해주세요.');
+    if (!code) return failRedirect('네이버 로그인 인가코드를 받지 못했습니다.');
+
+    const config = await getOauthConfig('naver');
+    if (!config || !config.enabled || !config.client_id || !config.client_secret) {
+      return failRedirect('네이버 로그인이 아직 설정되지 않았습니다.');
+    }
+
+    const redirectUri = `${getBaseUrl(req)}/api/auth/naver/callback`;
+    const tokenResp = await fetch('https://nid.naver.com/oauth2.0/token?' + new URLSearchParams({
+      grant_type: 'authorization_code',
+      client_id: config.client_id,
+      client_secret: config.client_secret,
+      code: String(code),
+      state: String(state),
+      redirect_uri: redirectUri
+    }).toString(), { method: 'GET', signal: AbortSignal.timeout(15000) });
+    const tokenJson = await tokenResp.json().catch(() => null);
+    if (!tokenResp.ok || !tokenJson?.access_token) {
+      console.error('Naver token exchange failed:', tokenJson);
+      return failRedirect('네이버 인증 서버 응답에 실패했습니다. 잠시 후 다시 시도해주세요.');
+    }
+
+    const profileResp = await fetch('https://openapi.naver.com/v1/nid/me', {
+      headers: { Authorization: `Bearer ${tokenJson.access_token}` },
+      signal: AbortSignal.timeout(15000)
+    });
+    const profileJson = await profileResp.json().catch(() => null);
+    const naverProfile = profileJson?.response;
+    if (!profileResp.ok || !naverProfile?.id) {
+      console.error('Naver profile fetch failed:', profileJson);
+      return failRedirect('네이버 프로필 정보를 가져오지 못했습니다.');
+    }
+    const email = naverProfile.email;
+    if (!email) {
+      return failRedirect('네이버 계정에 이메일 제공 동의가 필요합니다. 네이버 개인정보 설정에서 이메일 제공에 동의한 뒤 다시 시도해주세요.');
+    }
+
+    // 이미 가입된 이메일이면 그 계정 그대로 로그인, 처음이면 신규가입(비밀번호 없이 - 소셜 전용 계정)
+    const { data: existingProfile } = await supabase.from('profiles').select('id').eq('email', email).maybeSingle();
+    let userId = existingProfile?.id;
+    if (!userId) {
+      const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+        email,
+        email_confirm: true,
+        user_metadata: { full_name: naverProfile.name || null, oauth_provider: 'naver', naver_id: naverProfile.id }
+      });
+      if (createErr) {
+        console.error('Error creating user from naver profile:', createErr);
+        return failRedirect('회원 생성 중 오류가 발생했습니다: ' + createErr.message);
+      }
+      userId = created.user.id;
+      // authenticate 미들웨어의 ensureProfileExists가 첫 API 호출 시에도 만들어주지만, 로그인 직후
+      // 화면에서 바로 프로필 정보를 쓰는 경우를 대비해 여기서 선제적으로 만들어둔다.
+      await supabase.from('profiles').upsert([{ id: userId, email, full_name: naverProfile.name || null, role: 'member', member_type: 'general' }], { onConflict: 'id', ignoreDuplicates: true });
+    }
+
+    const redirectTo = `${getBaseUrl(req)}/`;
+    const { data: linkData, error: linkErr } = await supabase.auth.admin.generateLink({ type: 'magiclink', email, options: { redirectTo } });
+    if (linkErr || !linkData?.properties?.action_link) {
+      console.error('Error generating magic link for naver login:', linkErr);
+      return failRedirect('로그인 세션 발급에 실패했습니다. 잠시 후 다시 시도해주세요.');
+    }
+    return res.redirect(linkData.properties.action_link);
+  } catch (err) {
+    console.error('Error in naver oauth callback:', err);
+    return failRedirect('네이버 로그인 처리 중 오류가 발생했습니다.');
+  }
+});
+
+// ============================================
+// 📧 이메일 알림 (주문접수/상태변경) - 토스페이먼츠/AI연동과 동일한 패턴으로 관리자가 SMTP 계정정보를
+// 직접 등록해야 실제로 발송된다(임의의 발신 계정을 코드에 넣어두지 않음 - 정직하게 미설정 시 발송 생략).
+// nodemailer는 어떤 SMTP 제공자(네이버메일/Gmail 앱비밀번호/AWS SES/SendGrid 등)와도 동작하는
+// 범용 라이브러리라 특정 벤더에 종속되지 않는다.
+// ============================================
+const nodemailer = require('nodemailer');
+
+async function getEmailConfig() {
+  const { data, error } = await supabase.from('email_configs_with').select('*').eq('provider_key', 'smtp').maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+function buildTransporter(config) {
+  return nodemailer.createTransport({
+    host: config.smtp_host,
+    port: Number(config.smtp_port) || 587,
+    secure: !!config.smtp_secure,
+    auth: { user: config.smtp_user, pass: config.smtp_pass },
+    // 발송 실패/무응답 SMTP 서버 때문에 주문 생성 같은 핵심 흐름이 오래 멈춰있지 않도록 타임아웃을 짧게 둔다
+    connectionTimeout: 8000,
+    greetingTimeout: 8000,
+    socketTimeout: 8000
+  });
+}
+
+// 실제 발송 + 결과를 email_logs_with에 정직하게 기록(성공/실패/미설정으로 건너뜀 모두 남긴다).
+// 이 함수는 절대 예외를 던지지 않는다 - 이메일 발송 실패가 주문 생성 같은 핵심 흐름을 절대 막으면 안 되기 때문.
+async function sendEmail({ to, subject, html, template, orderId }) {
+  if (!to) {
+    await supabase.from('email_logs_with').insert([{ to_email: '(없음)', template, subject, related_order_id: orderId || null, status: 'skipped', error_message: '수신자 이메일 주소가 없음' }]);
+    return { sent: false, reason: 'no_recipient' };
+  }
+  let config;
+  try {
+    config = await getEmailConfig();
+  } catch (err) {
+    console.error('Error fetching email config:', err);
+    config = null;
+  }
+  if (!config || !config.enabled || !config.smtp_host || !config.smtp_user || !config.smtp_pass) {
+    await supabase.from('email_logs_with').insert([{ to_email: to, template, subject, related_order_id: orderId || null, status: 'skipped', error_message: 'SMTP 미설정 또는 비활성화 상태' }]);
+    return { sent: false, reason: 'not_configured' };
+  }
+  try {
+    const transporter = buildTransporter(config);
+    await transporter.sendMail({
+      from: `"${config.from_name || 'WITH+'}" <${config.from_email || config.smtp_user}>`,
+      to, subject, html
+    });
+    await supabase.from('email_logs_with').insert([{ to_email: to, template, subject, related_order_id: orderId || null, status: 'sent' }]);
+    return { sent: true };
+  } catch (err) {
+    console.error('Error sending email:', err.message);
+    await supabase.from('email_logs_with').insert([{ to_email: to, template, subject, related_order_id: orderId || null, status: 'failed', error_message: err.message }]);
+    return { sent: false, reason: 'send_error', error: err.message };
+  }
+}
+
+const ORDER_STATUS_LABEL_KO = { pending: '주문 접수', paid: '결제 완료', processing: '상품 준비 중', shipped: '배송 중', delivered: '배송 완료', cancelled: '취소됨', refunded: '환불됨' };
+
+function orderEmailLayout(title, bodyHtml) {
+  return `<div style="font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif; max-width:520px; margin:0 auto; padding:24px; border:1px solid #eee; border-radius:12px;">
+    <h2 style="color:#E91E63; margin-top:0;">WITH+</h2>
+    <h3>${title}</h3>
+    ${bodyHtml}
+    <p style="margin-top:24px; font-size:0.82em; color:#999;">본 메일은 WITH+ 주문 알림 발송 전용 주소로 발송되었습니다.</p>
+  </div>`;
+}
+
+async function sendOrderConfirmationEmail(order, userEmail) {
+  const itemsHtml = (Array.isArray(order.items) ? order.items : []).map(it => `<li>${it.name} x${it.quantity}</li>`).join('');
+  const html = orderEmailLayout('주문이 접수되었습니다', `
+    <p>주문번호: <b>${order.order_number}</b></p>
+    <ul>${itemsHtml}</ul>
+    <p>결제 예정 금액: <b>${Number(order.final_price).toLocaleString('ko-KR')}원</b>${Number(order.shipping_fee) > 0 ? ` (배송비 ${Number(order.shipping_fee).toLocaleString('ko-KR')}원 포함)` : ''}</p>`);
+  return sendEmail({ to: userEmail, subject: `[WITH+] 주문이 접수되었습니다 (${order.order_number})`, html, template: 'order_confirmation', orderId: order.id });
+}
+
+async function sendOrderStatusEmail(order, userEmail, newStatus) {
+  const label = ORDER_STATUS_LABEL_KO[newStatus] || newStatus;
+  let extra = '';
+  if (newStatus === 'shipped' && order.tracking_number) {
+    extra = `<p>택배사: ${order.courier_name || '-'} / 운송장번호: ${order.tracking_number}</p>${order.tracking_url ? `<p><a href="${order.tracking_url}">배송조회 바로가기</a></p>` : ''}`;
+  }
+  const html = orderEmailLayout(`주문 상태가 변경되었습니다: ${label}`, `<p>주문번호: <b>${order.order_number}</b></p>${extra}`);
+  return sendEmail({ to: userEmail, subject: `[WITH+] 주문 상태 변경: ${label} (${order.order_number})`, html, template: 'order_status_' + newStatus, orderId: order.id });
+}
+
+// ============================================
+// 장바구니 이탈 리마인더 (cart_snapshots_with 기반)
+// 장바구니는 원래 브라우저 localStorage(withplus_cart)에만 저장되어 서버가 내용을 알 방법이 없었다.
+// 이를 위해 withplus-common.js의 saveCart()에서, 로그인된 사용자에 한해 장바구니를 서버에도
+// 동기화한다(cart_snapshots_with 1행 = 회원 1명의 현재 장바구니 스냅샷). node-cron으로 주기적으로
+// "일정 시간 이상 방치된 장바구니"를 스캔해 이메일 + 인앱 알림을 보낸다.
+// 실제 SMTP가 미설정이면 sendEmail()이 정직하게 스킵/로그만 남기고(발송 실패로 기능 전체를 막지 않음),
+// 삭제되었거나 판매중지된 상품만 남은 장바구니는 보낼 내용이 없으므로 리마인더 없이 스냅샷만 정리한다.
+// ============================================
+const DEFAULT_CART_REMINDER_SETTINGS = {
+  enabled: false,
+  delay_hours: 24,        // 마지막 장바구니 변경 후 이만큼 지나야 첫 리마인더 발송 대상이 됨
+  max_reminders: 2,       // 장바구니 1개당 최대 발송 횟수 (도달하면 더 이상 보내지 않음)
+  resend_after_hours: 48  // 재발송 최소 간격
+};
+let cartReminderSettingsCache = null;
+let cartReminderSettingsCacheAt = 0;
+const CART_REMINDER_SETTINGS_CACHE_TTL_MS = 30 * 1000;
+
+function normalizeCartReminderSettings(value) {
+  const v = value || {};
+  return {
+    enabled: !!v.enabled,
+    delay_hours: Number.isFinite(Number(v.delay_hours)) ? Math.max(1, Math.floor(Number(v.delay_hours))) : DEFAULT_CART_REMINDER_SETTINGS.delay_hours,
+    max_reminders: Number.isFinite(Number(v.max_reminders)) ? Math.max(0, Math.floor(Number(v.max_reminders))) : DEFAULT_CART_REMINDER_SETTINGS.max_reminders,
+    resend_after_hours: Number.isFinite(Number(v.resend_after_hours)) ? Math.max(1, Math.floor(Number(v.resend_after_hours))) : DEFAULT_CART_REMINDER_SETTINGS.resend_after_hours
+  };
+}
+
+async function getCartReminderSettings() {
+  const now = Date.now();
+  if (cartReminderSettingsCache && (now - cartReminderSettingsCacheAt) < CART_REMINDER_SETTINGS_CACHE_TTL_MS) {
+    return cartReminderSettingsCache;
+  }
+  try {
+    const { data, error } = await supabase.from('platform_settings').select('value').eq('key', 'cart_reminder_settings').single();
+    const settings = normalizeCartReminderSettings(error || !data ? null : data.value);
+    cartReminderSettingsCache = settings;
+    cartReminderSettingsCacheAt = now;
+    return settings;
+  } catch (err) {
+    console.error('Error fetching cart reminder settings:', err);
+    return cartReminderSettingsCache || DEFAULT_CART_REMINDER_SETTINGS;
+  }
+}
+
+// 조건에 맞는 "방치된 장바구니"를 찾아 조회용 커트라인만 계산해준다 (스캔/대기건수 조회에서 공통으로 사용)
+function cartReminderCutoffs(settings) {
+  const now = Date.now();
+  return {
+    delayCutoff: new Date(now - settings.delay_hours * 3600 * 1000).toISOString(),
+    resendCutoff: new Date(now - settings.resend_after_hours * 3600 * 1000).toISOString()
+  };
+}
+
+// 방치된 장바구니를 찾아 리마인더를 발송한다. 관리자 수동 실행(run-now, opts.force=true로 enabled 여부 무시)과
+// node-cron 정기 스캔 양쪽에서 호출된다.
+async function runCartReminderScan(opts = {}) {
+  const result = { scanned: 0, sent: 0, skipped: 0, cleaned: 0 };
+  const settings = await getCartReminderSettings();
+  if (!settings.enabled && !opts.force) return result;
+
+  const { delayCutoff, resendCutoff } = cartReminderCutoffs(settings);
+
+  const { data: candidates, error } = await supabase
+    .from('cart_snapshots_with')
+    .select('id, user_id, items, updated_at, reminder_sent_at, reminder_count')
+    .lte('updated_at', delayCutoff)
+    .lt('reminder_count', settings.max_reminders)
+    .or(`reminder_sent_at.is.null,reminder_sent_at.lte.${resendCutoff}`);
+  if (error) { console.error('Error scanning cart snapshots:', error); return result; }
+
+  for (const snap of candidates || []) {
+    const items = Array.isArray(snap.items) ? snap.items : [];
+    if (items.length === 0) continue; // 빈 장바구니는 애초에 리마인더 대상이 아님
+
+    const productIds = [...new Set(items.map(i => i.product_id).filter(Boolean))];
+    let validItems = items;
+    if (productIds.length > 0) {
+      const { data: products } = await supabase.from('products_with').select('id, name, status').in('id', productIds);
+      const activeMap = {};
+      (products || []).forEach(p => { if (p.status === 'active') activeMap[p.id] = p; });
+      validItems = items.filter(i => !i.product_id || activeMap[i.product_id]);
+    }
+
+    if (validItems.length === 0) {
+      // 남아있는 상품이 전부 삭제/판매중지되어 보낼 내용이 없음 - 정직하게 스냅샷만 정리하고 다음으로
+      await supabase.from('cart_snapshots_with').delete().eq('id', snap.id);
+      result.cleaned++;
+      continue;
+    }
+
+    result.scanned++;
+
+    const { data: profile } = await supabase.from('profiles').select('email, full_name').eq('id', snap.user_id).maybeSingle();
+    if (!profile || !profile.email) { result.skipped++; continue; }
+
+    const itemsHtml = validItems.map(i => `<li>${i.name || '상품'} x${i.quantity || 1}</li>`).join('');
+    const html = orderEmailLayout('장바구니에 담아두신 상품이 기다리고 있어요', `
+      <p>${profile.full_name || '고객'}님, 담아두신 상품이 아직 장바구니에 남아있습니다.</p>
+      <ul>${itemsHtml}</ul>
+      <p><a href="${process.env.SITE_URL || ''}/cart.html">장바구니 확인하러 가기</a></p>`);
+    const emailResult = await sendEmail({ to: profile.email, subject: '[WITH+] 장바구니에 담아두신 상품을 잊으셨나요?', html, template: 'cart_reminder' });
+
+    await supabase.from('notifications_with').insert([{
+      user_id: snap.user_id,
+      type: 'cart_reminder',
+      title: '장바구니 알림',
+      message: `담아두신 상품 ${validItems.length}건이 장바구니에서 기다리고 있어요`,
+      link: '/cart.html'
+    }]);
+
+    await supabase.from('cart_snapshots_with').update({
+      reminder_sent_at: new Date().toISOString(),
+      reminder_count: (snap.reminder_count || 0) + 1
+    }).eq('id', snap.id);
+
+    if (emailResult && emailResult.sent) result.sent++; else result.skipped++;
+  }
+
+  return result;
+}
+
+// 30분마다 자동 스캔 (설정에서 꺼져있으면 runCartReminderScan 내부에서 즉시 빈 결과로 반환)
+cron.schedule('*/30 * * * *', () => {
+  runCartReminderScan().catch(err => console.error('Cart reminder cron error:', err));
+});
+
+// 로그인 사용자: 서버 측 장바구니 스냅샷 동기화 (localStorage 장바구니를 서버에도 미러링 - 리마인더 발송의 유일한 데이터 소스)
+app.put('/api/me/cart', authenticate, async (req, res) => {
+  try {
+    const items = Array.isArray(req.body && req.body.items) ? req.body.items : [];
+    if (items.length === 0) {
+      const { error } = await supabase.from('cart_snapshots_with').delete().eq('user_id', req.user.id);
+      if (error) throw error;
+      return res.json({ success: true, timestamp: new Date().toISOString() });
+    }
+    const { error } = await supabase.from('cart_snapshots_with').upsert({
+      user_id: req.user.id,
+      items,
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'user_id' });
+    if (error) throw error;
+    res.json({ success: true, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error syncing cart snapshot:', err);
+    res.status(500).json({ error: 'Failed to sync cart', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/me/cart', authenticate, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('cart_snapshots_with').select('items, updated_at').eq('user_id', req.user.id).maybeSingle();
+    if (error) throw error;
+    res.json({ success: true, data: data || { items: [], updated_at: null }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch cart', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공개: 카트 리마인더 기능 활성화 여부만 (다른 공개 설정 엔드포인트와 동일하게 최소 정보만 노출)
+app.get('/api/settings/cart-reminder', async (req, res) => {
+  try {
+    const settings = await getCartReminderSettings();
+    res.json({ success: true, data: { enabled: settings.enabled }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch cart reminder settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 리마인더 설정 + 현재 대기 중인(리마인더 발송 대상) 이탈 장바구니 개수 조회
+app.get('/api/admin/settings/cart-reminder', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const settings = await getCartReminderSettings();
+    const { delayCutoff } = cartReminderCutoffs(settings);
+    const { count, error: countErr } = await supabase
+      .from('cart_snapshots_with')
+      .select('id', { count: 'exact', head: true })
+      .lte('updated_at', delayCutoff)
+      .lt('reminder_count', settings.max_reminders);
+    if (countErr) throw countErr;
+    res.json({ success: true, data: settings, pending_count: count || 0, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching cart reminder settings:', err);
+    res.status(500).json({ error: 'Failed to fetch cart reminder settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 리마인더 설정 저장
+app.patch('/api/admin/settings/cart-reminder', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const settings = normalizeCartReminderSettings(req.body);
+    const { error } = await supabase.from('platform_settings').upsert({
+      key: 'cart_reminder_settings',
+      value: settings,
+      updated_at: new Date().toISOString(),
+      updated_by: req.user.id
+    }, { onConflict: 'key' });
+    if (error) throw error;
+
+    cartReminderSettingsCache = settings;
+    cartReminderSettingsCacheAt = Date.now();
+
+    res.json({ success: true, data: settings, message: '저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating cart reminder settings:', err);
+    res.status(500).json({ error: 'Failed to update cart reminder settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 지금 즉시 스캔 실행 (설정이 꺼져있어도 강제 실행 - 테스트/수동 발송 목적, opts.force)
+app.post('/api/admin/cart-reminder/run-now', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const result = await runCartReminderScan({ force: true });
+    res.json({ success: true, data: result, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error running cart reminder scan:', err);
+    res.status(500).json({ error: 'Failed to run cart reminder scan', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: SMTP 연동 현황 조회 (비밀번호 원문은 절대 응답에 포함하지 않음)
+app.get('/api/admin/email-config', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const config = await getEmailConfig();
+    res.json({
+      success: true,
+      data: {
+        smtp_host: config?.smtp_host || null,
+        smtp_port: config?.smtp_port || null,
+        smtp_secure: config?.smtp_secure ?? true,
+        smtp_user: config?.smtp_user || null,
+        has_smtp_pass: !!config?.smtp_pass,
+        from_name: config?.from_name || 'WITH+',
+        from_email: config?.from_email || null,
+        enabled: !!config?.enabled,
+        last_tested_at: config?.last_tested_at || null,
+        last_test_status: config?.last_test_status || null,
+        last_test_message: config?.last_test_message || null
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching email config:', err);
+    res.status(500).json({ error: 'Failed to fetch email config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: SMTP 설정 저장
+app.patch('/api/admin/email-config', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const update = { updated_at: new Date().toISOString() };
+    if (typeof req.body.smtp_host === 'string') update.smtp_host = req.body.smtp_host.trim() || null;
+    if (req.body.smtp_port !== undefined) update.smtp_port = Number(req.body.smtp_port) || null;
+    if (typeof req.body.smtp_secure === 'boolean') update.smtp_secure = req.body.smtp_secure;
+    if (typeof req.body.smtp_user === 'string') update.smtp_user = req.body.smtp_user.trim() || null;
+    if (typeof req.body.smtp_pass === 'string' && req.body.smtp_pass.trim()) update.smtp_pass = req.body.smtp_pass.trim();
+    if (typeof req.body.from_name === 'string') update.from_name = req.body.from_name.trim() || 'WITH+';
+    if (typeof req.body.from_email === 'string') update.from_email = req.body.from_email.trim() || null;
+    if (typeof req.body.enabled === 'boolean') update.enabled = req.body.enabled;
+
+    const { data, error } = await supabase.from('email_configs_with').update(update).eq('provider_key', 'smtp').select().single();
+    if (error) throw error;
+    res.json({ success: true, data: { enabled: data.enabled, has_smtp_pass: !!data.smtp_pass }, message: '저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating email config:', err);
+    res.status(500).json({ error: 'Failed to update email config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 연결 테스트 - 실제로 지정한 주소로 짧은 테스트 메일을 보내본다
+app.post('/api/admin/email-config/test', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const testTo = ((req.body && req.body.to) || req.user.email || '').trim();
+    if (!testTo) {
+      return res.status(400).json({ error: 'Bad Request', message: '테스트 메일을 받을 주소가 필요합니다', timestamp: new Date().toISOString() });
+    }
+    const config = await getEmailConfig();
+    if (!config || !config.smtp_host || !config.smtp_user || !config.smtp_pass) {
+      return res.status(400).json({ error: 'Bad Request', message: 'SMTP 정보가 등록되어 있지 않습니다. 먼저 저장해주세요.', timestamp: new Date().toISOString() });
+    }
+    let status, message;
+    try {
+      const transporter = buildTransporter(config);
+      await transporter.verify();
+      await transporter.sendMail({
+        from: `"${config.from_name || 'WITH+'}" <${config.from_email || config.smtp_user}>`,
+        to: testTo, subject: '[WITH+] 이메일 연동 테스트', html: orderEmailLayout('연동 테스트 메일입니다', '<p>이 메일이 보인다면 SMTP 연동이 정상 동작하는 것입니다.</p>')
+      });
+      status = 'success';
+      message = `${testTo}로 테스트 메일을 정상적으로 발송했습니다.`;
+    } catch (callErr) {
+      status = 'failed';
+      message = 'SMTP 서버 연결/발송에 실패했습니다: ' + callErr.message;
+    }
+    await supabase.from('email_configs_with').update({ last_tested_at: new Date().toISOString(), last_test_status: status, last_test_message: message }).eq('provider_key', 'smtp');
+    res.json({ success: true, data: { status, message }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error testing email config:', err);
+    res.status(500).json({ error: 'Failed to test email config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 최근 이메일 발송 이력 (성공/실패/생략 모두 정직하게 확인 가능)
+app.get('/api/admin/email-logs', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('email_logs_with').select('*').order('created_at', { ascending: false }).limit(100);
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching email logs:', err);
+    res.status(500).json({ error: 'Failed to fetch email logs', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 상품 상세페이지에 들어가는 "이미지+설명" 블록들을 정리 (여러 장의 사진/설명이 있는 상품 지원)
+function sanitizeDetailSections(input) {
+  if (!Array.isArray(input)) return [];
+  return input
+    .filter(s => s && typeof s === 'object')
+    .map(s => ({
+      image_url: typeof s.image_url === 'string' ? s.image_url.trim() : '',
+      text: typeof s.text === 'string' ? s.text.trim() : ''
+    }))
+    .filter(s => s.image_url || s.text)
+    .slice(0, 30);
+}
+
+// ============================================
+// 카테고리 API (관리자가 언제든 추가/수정/삭제 가능 - 코드에 고정하지 않음)
+// ============================================
+
+// 공개: 사용 중(is_active=true)인 카테고리 목록 (사이트 상단 메뉴/카테고리 페이지용)
+// 분양 조직(커뮤니티)을 통해 들어온 경우(?community=슬러그)는 /api/products의 커뮤니티별 상품노출과
+// 완전히 같은 방식으로, 그 조직이 "선택한 카테고리만 노출"로 설정해두었으면 결과를 좁힌다.
+app.get('/api/categories', async (req, res) => {
+  try {
+    let query = supabasePublic
+      .from('categories')
+      .select('*')
+      .eq('is_active', true)
+      .order('display_order', { ascending: true });
+
+    if (req.query.community) {
+      const { data: community } = await supabase
+        .from('communities')
+        .select('id, category_visibility')
+        .eq('slug', req.query.community)
+        .eq('status', 'active')
+        .single();
+      if (community && community.category_visibility === 'curated') {
+        const { data: picks } = await supabase
+          .from('community_categories_with')
+          .select('category_id')
+          .eq('community_id', community.id);
+        const allowedIds = (picks || []).map(p => p.category_id);
+        // 지정된 카테고리가 하나도 없으면 빈 결과를 정직하게 반환한다(전체 목록으로 조용히 되돌아가지 않음)
+        query = query.in('id', allowedIds.length > 0 ? allowedIds : ['00000000-0000-0000-0000-000000000000']);
+      }
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ success: true, data: data || [], count: data?.length || 0, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching categories:', err);
+    res.status(500).json({ error: 'Failed to fetch categories', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 비활성 카테고리를 포함한 전체 목록
+app.get('/api/admin/categories', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('categories')
+      .select('*')
+      .order('display_order', { ascending: true });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], count: data?.length || 0, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching admin categories:', err);
+    res.status(500).json({ error: 'Failed to fetch categories', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🤖 AI 카테고리 추천 - 카테고리를 하나씩 직접 만들기 번거로운 관리자를 위해, 원하는 방향을
+// 자유 텍스트로 입력하면 Anthropic(Claude) API로 어울리는 카테고리 후보를 만들어 보여주고,
+// 관리자가 고른 것만 한 번에 추가한다. 키 저장 방식은 토스페이먼츠 연동(pg_configs)과 동일한 패턴.
+// ============================================
+async function getAiConfig(providerKey) {
+  const { data, error } = await supabase.from('ai_configs_with').select('*').eq('provider_key', providerKey).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// Anthropic API가 돌려주는 원문 에러(대개 영문)를 그대로 보여주면 관리자가 원인을 바로 파악하기 어려우므로,
+// 자주 발생하는 패턴(크레딧 부족/키 인증실패/레이트리밋/서버과부하/모델없음)은 실행 가능한 한국어 안내를 앞에 붙이고,
+// 그 뒤에 Anthropic이 실제로 보낸 원문 메시지를 [Anthropic 응답] 형태로 그대로 이어붙인다.
+// -> 안내문만 보고 조치하거나, 원문을 그대로 복사해 검색/문의할 수도 있게 둘 다 보존한다(둘 중 하나만 보여주지 않음).
+function describeAnthropicError(httpStatus, errJson) {
+  const type = errJson?.error?.type || '';
+  const raw = (errJson?.error?.message || '').trim();
+  const withRaw = (friendly) => raw ? `${friendly} [Anthropic 응답] ${raw}` : `${friendly} (HTTP ${httpStatus})`;
+
+  if (httpStatus === 401 || type === 'authentication_error') {
+    return withRaw('API 키 인증에 실패했습니다. 키를 다시 확인하거나 재발급해주세요.');
+  }
+  if (/credit balance is too low/i.test(raw) || type === 'insufficient_quota') {
+    return withRaw('Anthropic 계정에 남은 크레딧이 없습니다. console.anthropic.com → Plans & Billing에서 크레딧을 충전한 뒤 다시 시도해주세요 (Claude Pro/Max 등 채팅 구독과는 별개의 결제입니다).');
+  }
+  if (httpStatus === 429 || type === 'rate_limit_error') {
+    return withRaw('요청이 너무 많아 일시적으로 제한되었습니다(레이트리밋). 잠시 후 다시 시도해주세요.');
+  }
+  if (httpStatus === 529 || type === 'overloaded_error') {
+    return withRaw('Anthropic 서버가 일시적으로 과부하 상태입니다. 잠시 후 다시 시도해주세요.');
+  }
+  if (type === 'not_found_error') {
+    return withRaw('요청한 모델을 찾을 수 없습니다. 개발 담당자에게 문의해주세요.');
+  }
+  if (type === 'permission_error') {
+    return withRaw('이 API 키에는 해당 요청을 처리할 권한이 없습니다. Anthropic 콘솔에서 키 권한을 확인해주세요.');
+  }
+  return withRaw(`Anthropic 서버 응답이 예상과 다릅니다(HTTP ${httpStatus}).`);
+}
+
+// 관리자: AI 카테고리 추천 연동 현황 조회 (api_key 원문은 절대 응답에 포함하지 않음)
+app.get('/api/admin/ai-category-recommender', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    let config = await getAiConfig('anthropic');
+    if (!config) {
+      const { data, error } = await supabase.from('ai_configs_with').insert([{ provider_key: 'anthropic', enabled: false }]).select().single();
+      if (error) throw error;
+      config = data;
+    }
+    res.json({
+      success: true,
+      data: {
+        has_api_key: !!config.api_key,
+        enabled: config.enabled,
+        last_tested_at: config.last_tested_at,
+        last_test_status: config.last_test_status,
+        last_test_message: config.last_test_message
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching AI category recommender config:', err);
+    res.status(500).json({ error: 'Failed to fetch AI config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: API 키 저장 / 활성화 여부 변경
+app.patch('/api/admin/ai-category-recommender', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const update = { updated_at: new Date().toISOString() };
+    if (typeof req.body.api_key === 'string' && req.body.api_key.trim()) update.api_key = req.body.api_key.trim();
+    if (typeof req.body.enabled === 'boolean') update.enabled = req.body.enabled;
+
+    const { data, error } = await supabase.from('ai_configs_with').update(update).eq('provider_key', 'anthropic').select().single();
+    if (error) throw error;
+    res.json({
+      success: true,
+      data: { has_api_key: !!data.api_key, enabled: data.enabled },
+      message: '저장되었습니다',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error updating AI category recommender config:', err);
+    res.status(500).json({ error: 'Failed to update AI config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: API 키 연결 테스트 (실제로 Anthropic API에 아주 짧은 요청을 보내 키가 유효한지 확인)
+app.post('/api/admin/ai-category-recommender/test', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const config = await getAiConfig('anthropic');
+    if (!config || !config.api_key) {
+      return res.status(400).json({ error: 'Bad Request', message: 'API 키가 등록되어 있지 않습니다. 먼저 API 키를 저장해주세요.', timestamp: new Date().toISOString() });
+    }
+    let status, message;
+    try {
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': config.api_key, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 8, messages: [{ role: 'user', content: 'ping' }] }),
+        signal: AbortSignal.timeout(15000)
+      });
+      const json = await resp.json().catch(() => null);
+      if (resp.ok) {
+        status = 'success';
+        message = 'Anthropic API에 정상적으로 연결되었습니다.';
+      } else {
+        status = 'failed';
+        message = describeAnthropicError(resp.status, json);
+      }
+    } catch (callErr) {
+      status = 'failed';
+      message = 'Anthropic API 호출에 실패했습니다: ' + callErr.message;
+    }
+    await supabase.from('ai_configs_with').update({ last_tested_at: new Date().toISOString(), last_test_status: status, last_test_message: message }).eq('provider_key', 'anthropic');
+    res.json({ success: true, data: { status, message }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error testing AI category recommender:', err);
+    res.status(500).json({ error: 'Failed to test AI config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 원하는 방향(자유 텍스트)을 입력하면 어울리는 카테고리 후보를 AI가 만들어 반환한다 (아직 저장하지 않음 - 미리보기)
+app.post('/api/admin/categories/suggest', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const direction = (req.body.direction || '').trim();
+    if (!direction) {
+      return res.status(400).json({ error: 'Bad Request', message: '원하시는 방향(예: 건강기능식품 전문몰, 반려동물 용품)을 입력해주세요', timestamp: new Date().toISOString() });
+    }
+    const config = await getAiConfig('anthropic');
+    if (!config || !config.enabled || !config.api_key) {
+      return res.status(400).json({ error: 'Bad Request', message: 'AI 카테고리 추천을 사용하려면 먼저 "⚙️ 설정"에서 Anthropic API 키를 등록하고 활성화해주세요', timestamp: new Date().toISOString() });
+    }
+
+    const { data: existingCategories, error: existErr } = await supabase.from('categories').select('slug, label');
+    if (existErr) throw existErr;
+    const existingSummary = (existingCategories || []).map(c => c.label).join(', ') || '없음';
+
+    const prompt = `당신은 이커머스 쇼핑몰의 카테고리 설계를 돕는 어시스턴트입니다.
+쇼핑몰 운영자가 원하는 방향: "${direction}"
+현재 이미 등록된 카테고리: ${existingSummary}
+
+위 방향에 맞는 새로운 상품 카테고리를 5~8개 제안해주세요. 이미 등록된 카테고리와 겹치지 않게 해주세요.
+반드시 아래 JSON 배열 형식으로만 응답하세요. 코드블록이나 설명 문구는 절대 포함하지 마세요.
+[{"label": "한글 카테고리명", "emoji": "어울리는 이모지 1개", "slug": "영문-소문자-하이픈-슬러그"}]`;
+
+    let aiResp;
+    try {
+      aiResp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': config.api_key, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1024, messages: [{ role: 'user', content: prompt }] }),
+        signal: AbortSignal.timeout(30000)
+      });
+    } catch (callErr) {
+      return res.status(502).json({ error: 'AI Request Failed', message: 'AI 서버 호출에 실패했습니다: ' + callErr.message, timestamp: new Date().toISOString() });
+    }
+    const aiJson = await aiResp.json().catch(() => null);
+    if (!aiResp.ok || !aiJson) {
+      return res.status(502).json({ error: 'AI Request Failed', message: aiJson ? describeAnthropicError(aiResp.status, aiJson) : `AI 응답을 받아오지 못했습니다(HTTP ${aiResp.status})`, timestamp: new Date().toISOString() });
+    }
+
+    const rawText = (aiJson.content || []).map(b => b.text || '').join('').trim();
+    let suggestions;
+    try {
+      const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+      suggestions = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
+    } catch (parseErr) {
+      return res.status(502).json({ error: 'AI Response Parse Failed', message: 'AI 응답을 해석하지 못했습니다. 다시 시도해주세요', timestamp: new Date().toISOString() });
+    }
+    if (!Array.isArray(suggestions)) {
+      return res.status(502).json({ error: 'AI Response Invalid', message: 'AI 응답 형식이 올바르지 않습니다. 다시 시도해주세요', timestamp: new Date().toISOString() });
+    }
+
+    const existingSlugs = new Set((existingCategories || []).map(c => c.slug));
+    const cleaned = suggestions
+      .filter(s => s && s.label && s.slug)
+      .map(s => {
+        const cleanSlug = String(s.slug).trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+        return { label: String(s.label).trim(), emoji: (s.emoji && String(s.emoji).trim()) || '🛍️', slug: cleanSlug, db_category: cleanSlug };
+      })
+      .filter(s => s.slug && !existingSlugs.has(s.slug))
+      .slice(0, 8);
+
+    res.json({ success: true, data: cleaned, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error suggesting categories:', err);
+    res.status(500).json({ error: 'Failed to suggest categories', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공급자/관리자: 상품 등록 시 상품명·카테고리·특징만 입력하면 AI가 상세페이지 문구 초안(간단설명/상세설명/상세섹션)을 만들어준다.
+// 도매꾹 공급사센터의 "상세페이지 자동제작"과 같은 방향 - 저장은 하지 않고 초안만 돌려주며, 등록자가 검토·수정 후 직접 저장한다.
+app.post('/api/admin/ai-product-description', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const name = (req.body.name || '').trim();
+    const category = (req.body.category || '').trim();
+    const features = (req.body.features || '').trim();
+    if (!name || !features) {
+      return res.status(400).json({ error: 'Bad Request', message: '상품명과 상품 특징(키워드나 문장)을 입력해주세요', timestamp: new Date().toISOString() });
+    }
+    const config = await getAiConfig('anthropic');
+    if (!config || !config.enabled || !config.api_key) {
+      return res.status(400).json({ error: 'Bad Request', message: 'AI 상세페이지 자동작성을 사용하려면 관리자가 먼저 "⚙️ 설정"에서 Anthropic API 키를 등록하고 활성화해야 합니다', timestamp: new Date().toISOString() });
+    }
+
+    const prompt = `당신은 이커머스 쇼핑몰의 상품 상세페이지 문구를 작성하는 카피라이터입니다.
+상품명: "${name}"
+카테고리: "${category || '미지정'}"
+판매자가 입력한 상품 특징: "${features}"
+
+위 정보를 바탕으로 실제 상품 상세페이지에 쓸 문구 초안을 작성해주세요. 과장되거나 근거 없는 효능·효과 표현(예: 질병 치료, 의학적 효과 보장)은 절대 쓰지 마세요.
+반드시 아래 JSON 형식으로만 응답하세요. 코드블록이나 설명 문구는 절대 포함하지 마세요.
+{
+  "description": "상품 목록/카드에 짧게 보여줄 1~2문장 요약 설명",
+  "long_description": "상세페이지 본문에 들어갈 3~5문단 분량의 상세 설명",
+  "detail_sections": [{"text": "상세 이미지 아래 들어갈 짧은 설명 문구"}]
+}
+detail_sections는 2~4개 정도로 만들어주세요.`;
+
+    let aiResp;
+    try {
+      aiResp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': config.api_key, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 1536, messages: [{ role: 'user', content: prompt }] }),
+        signal: AbortSignal.timeout(30000)
+      });
+    } catch (callErr) {
+      return res.status(502).json({ error: 'AI Request Failed', message: 'AI 서버 호출에 실패했습니다: ' + callErr.message, timestamp: new Date().toISOString() });
+    }
+    const aiJson = await aiResp.json().catch(() => null);
+    if (!aiResp.ok || !aiJson) {
+      return res.status(502).json({ error: 'AI Request Failed', message: aiJson ? describeAnthropicError(aiResp.status, aiJson) : `AI 응답을 받아오지 못했습니다(HTTP ${aiResp.status})`, timestamp: new Date().toISOString() });
+    }
+
+    const rawText = (aiJson.content || []).map(b => b.text || '').join('').trim();
+    let draft;
+    try {
+      const jsonMatch = rawText.match(/\{[\s\S]*\}/);
+      draft = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
+    } catch (parseErr) {
+      return res.status(502).json({ error: 'AI Response Parse Failed', message: 'AI 응답을 해석하지 못했습니다. 다시 시도해주세요', timestamp: new Date().toISOString() });
+    }
+    if (!draft || typeof draft !== 'object') {
+      return res.status(502).json({ error: 'AI Response Invalid', message: 'AI 응답 형식이 올바르지 않습니다. 다시 시도해주세요', timestamp: new Date().toISOString() });
+    }
+
+    const cleaned = {
+      description: (draft.description || '').toString().trim().slice(0, 300),
+      long_description: (draft.long_description || '').toString().trim().slice(0, 3000),
+      detail_sections: Array.isArray(draft.detail_sections)
+        ? draft.detail_sections.filter(s => s && s.text).map(s => ({ text: String(s.text).trim().slice(0, 1000) })).slice(0, 4)
+        : []
+    };
+
+    res.json({ success: true, data: cleaned, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error generating AI product description:', err);
+    res.status(500).json({ error: 'Failed to generate AI product description', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: AI가 제안한 후보 중 선택한 것들을 한 번에 카테고리로 추가 (이미 존재하는 슬러그는 조용히 건너뜀)
+app.post('/api/admin/categories/bulk-create', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { categories, parent_id } = req.body;
+    if (!Array.isArray(categories) || categories.length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'categories 배열이 필요합니다', timestamp: new Date().toISOString() });
+    }
+    // 선택적으로 특정 대분류 밑에 중분류들을 한 번에 생성할 수 있다 (지정하지 않으면 기존과 동일하게 대분류로 생성)
+    const parentCheck = await validateParentId(parent_id || null, null);
+    if (!parentCheck.ok) {
+      return res.status(400).json({ error: 'Bad Request', message: parentCheck.message, timestamp: new Date().toISOString() });
+    }
+    const { data: existing, error: exErr } = await supabase.from('categories').select('slug, display_order');
+    if (exErr) throw exErr;
+    const existingSlugs = new Set((existing || []).map(c => c.slug));
+    let nextOrder = (existing || []).reduce((max, c) => Math.max(max, Number(c.display_order) || 0), 0) + 1;
+
+    const rows = [];
+    const skipped = [];
+    const seenInBatch = new Set();
+    for (const c of categories) {
+      if (!c || !c.label || !c.slug) continue;
+      const cleanSlug = String(c.slug).trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+      if (!cleanSlug || existingSlugs.has(cleanSlug) || seenInBatch.has(cleanSlug)) {
+        skipped.push(c.label || cleanSlug);
+        continue;
+      }
+      seenInBatch.add(cleanSlug);
+      rows.push({
+        slug: cleanSlug,
+        label: String(c.label).trim(),
+        emoji: (c.emoji && String(c.emoji).trim()) || '🛍️',
+        db_category: (c.db_category && String(c.db_category).trim()) || cleanSlug,
+        display_order: nextOrder++,
+        parent_id: parentCheck.parentId,
+        is_active: true
+      });
+    }
+    if (rows.length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '추가할 수 있는 새 카테고리가 없습니다 (모두 이미 존재하는 슬러그입니다)', timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase.from('categories').insert(rows).select();
+    if (error) throw error;
+    res.status(201).json({
+      success: true,
+      data,
+      skipped,
+      message: `${data.length}개의 카테고리가 추가되었습니다${skipped.length > 0 ? ` (중복 ${skipped.length}개는 건너뜀)` : ''}`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error bulk-creating categories:', err);
+    res.status(500).json({ error: 'Failed to bulk-create categories', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 카테고리 순서 일괄 변경 (드래그 앤 드롭으로 바꾼 순서를 한 번에 저장)
+// ⚠️ PUT /api/admin/categories/:id 라우트보다 반드시 먼저 등록해야 한다 - 안 그러면 "reorder"가 :id로 매칭되어버린다.
+app.put('/api/admin/categories/reorder', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'ids 배열이 필요합니다', timestamp: new Date().toISOString() });
+    }
+    const { data: existing, error: findErr } = await supabase.from('categories').select('id');
+    if (findErr) throw findErr;
+    const existingIds = new Set((existing || []).map(c => c.id));
+    if (ids.length !== existingIds.size || !ids.every(id => existingIds.has(id))) {
+      return res.status(400).json({ error: 'Bad Request', message: '전체 카테고리 id 목록과 정확히 일치해야 합니다', timestamp: new Date().toISOString() });
+    }
+    await Promise.all(ids.map((id, index) =>
+      supabase.from('categories').update({ display_order: index + 1, updated_at: new Date().toISOString() }).eq('id', id)
+    ));
+    const { data, error } = await supabase.from('categories').select('*').order('display_order', { ascending: true });
+    if (error) throw error;
+    res.json({ success: true, data, message: '카테고리 순서가 저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error reordering categories:', err);
+    res.status(500).json({ error: 'Failed to reorder categories', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 카테고리 계층은 2단(대분류/중분류)까지만 허용한다. parent_id로 지정하려는 카테고리 자체가
+// 이미 다른 카테고리의 하위(중분류)라면 3단이 되어버리므로 거부한다. (대분류만 상위로 지정 가능)
+async function validateParentId(parentId, selfId) {
+  if (!parentId) return { ok: true, parentId: null };
+  if (selfId && String(parentId) === String(selfId)) {
+    return { ok: false, message: '자기 자신을 상위 카테고리로 지정할 수 없습니다' };
+  }
+  const { data: parent, error } = await supabase.from('categories').select('id, parent_id').eq('id', parentId).maybeSingle();
+  if (error) throw error;
+  if (!parent) return { ok: false, message: '존재하지 않는 상위 카테고리입니다' };
+  if (parent.parent_id) return { ok: false, message: '카테고리는 2단(대분류/중분류)까지만 지원합니다. 이미 하위 카테고리인 항목은 상위로 지정할 수 없습니다' };
+  return { ok: true, parentId };
+}
+
+// 관리자: 카테고리 추가
+app.post('/api/admin/categories', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { slug, label, emoji, db_category, display_order, parent_id } = req.body;
+    if (!slug || !label || !db_category) {
+      return res.status(400).json({ error: 'Bad Request', message: 'Required fields: slug, label, db_category', timestamp: new Date().toISOString() });
+    }
+    const cleanSlug = String(slug).trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    if (!cleanSlug) {
+      return res.status(400).json({ error: 'Bad Request', message: 'slug는 영문/숫자/하이픈만 가능합니다', timestamp: new Date().toISOString() });
+    }
+    const parentCheck = await validateParentId(parent_id || null, null);
+    if (!parentCheck.ok) {
+      return res.status(400).json({ error: 'Bad Request', message: parentCheck.message, timestamp: new Date().toISOString() });
+    }
+
+    const { data, error } = await supabase
+      .from('categories')
+      .insert([{
+        slug: cleanSlug,
+        label,
+        emoji: emoji || '🛍️',
+        db_category: String(db_category).trim(),
+        display_order: Number.isFinite(Number(display_order)) ? Number(display_order) : 0,
+        parent_id: parentCheck.parentId,
+        is_active: true
+      }])
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'Conflict', message: '이미 존재하는 슬러그입니다', timestamp: new Date().toISOString() });
+      }
+      throw error;
+    }
+    res.status(201).json({ success: true, data, message: '카테고리가 추가되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating category:', err);
+    res.status(500).json({ error: 'Failed to create category', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 카테고리 수정
+app.put('/api/admin/categories/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { slug, label, emoji, db_category, display_order, is_active, parent_id } = req.body;
+    const updates = { updated_at: new Date().toISOString() };
+    if (slug !== undefined) {
+      const cleanSlug = String(slug).trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+      if (!cleanSlug) {
+        return res.status(400).json({ error: 'Bad Request', message: 'slug는 영문/숫자/하이픈만 가능합니다', timestamp: new Date().toISOString() });
+      }
+      updates.slug = cleanSlug;
+    }
+    if (label !== undefined) updates.label = label;
+    if (emoji !== undefined) updates.emoji = emoji;
+    if (db_category !== undefined) updates.db_category = String(db_category).trim();
+    if (display_order !== undefined) updates.display_order = Number(display_order) || 0;
+    if (is_active !== undefined) updates.is_active = !!is_active;
+    if (parent_id !== undefined) {
+      const parentCheck = await validateParentId(parent_id || null, req.params.id);
+      if (!parentCheck.ok) {
+        return res.status(400).json({ error: 'Bad Request', message: parentCheck.message, timestamp: new Date().toISOString() });
+      }
+      updates.parent_id = parentCheck.parentId;
+      // 이 카테고리를 누군가의 하위(중분류)로 만드는 경우, 이 카테고리 자신에게 이미 하위 카테고리가
+      // 딸려 있으면 3단 계층이 되어버리므로 막는다.
+      if (parentCheck.parentId) {
+        const { data: children } = await supabase.from('categories').select('id').eq('parent_id', req.params.id).limit(1);
+        if (children && children.length > 0) {
+          return res.status(400).json({ error: 'Bad Request', message: '이미 하위 카테고리를 가진 카테고리는 다른 카테고리의 하위로 지정할 수 없습니다(2단까지만 지원)', timestamp: new Date().toISOString() });
+        }
+      }
+    }
+
+    const { data, error } = await supabase
+      .from('categories')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'Conflict', message: '이미 존재하는 슬러그입니다', timestamp: new Date().toISOString() });
+      }
+      throw error;
+    }
+    if (!data) {
+      return res.status(404).json({ error: 'Not Found', message: 'Category not found', timestamp: new Date().toISOString() });
+    }
+    res.json({ success: true, data, message: '카테고리가 수정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating category:', err);
+    res.status(500).json({ error: 'Failed to update category', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 카테고리 삭제 (해당 카테고리로 등록된 상품 자체는 삭제되지 않음 - 상품은 db_category 텍스트 값만 가지고 있어 메뉴에서만 사라짐)
+app.delete('/api/admin/categories/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { error } = await supabase.from('categories').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true, message: '카테고리가 삭제되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting category:', err);
+    res.status(500).json({ error: 'Failed to delete category', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 사업자등록번호 검증
+// 1) 체크섬(국세청 공식 검증 알고리즘) - 외부 네트워크 없이 즉시, 항상 수행
+// 2) 국세청 공공데이터포털(data.go.kr) "사업자등록 상태조회" API - 실제 등록/휴폐업 여부까지 확인
+//    NTS_API_KEY 환경변수(data.go.kr에서 발급받는 서비스키)가 설정된 경우에만 동작한다.
+//    키가 없으면 정직하게 "형식 검증만 수행됨"으로 안내하고, 있으면 실시간으로 국세청에 조회한다.
+// ============================================
+function isValidBusinessNumberFormat(bizNo) {
+  const digits = String(bizNo || '').replace(/-/g, '');
+  if (!/^\d{10}$/.test(digits)) return false;
+  const weights = [1, 3, 7, 1, 3, 7, 1, 3, 5];
+  let sum = 0;
+  for (let i = 0; i < 9; i++) sum += Number(digits[i]) * weights[i];
+  sum += Math.floor((Number(digits[8]) * 5) / 10);
+  const checkDigit = (10 - (sum % 10)) % 10;
+  return checkDigit === Number(digits[9]);
+}
+
+async function verifyBusinessNumberWithNTS(bizNo) {
+  const digits = String(bizNo || '').replace(/-/g, '');
+  if (!process.env.NTS_API_KEY) {
+    return { checked: false, reason: 'NTS_API_KEY가 설정되지 않아 국세청 실시간 조회는 건너뛰고 형식 검증만 수행했습니다' };
+  }
+  try {
+    const url = `https://api.odcloud.kr/api/nts-businessman/v1/status?serviceKey=${encodeURIComponent(process.env.NTS_API_KEY)}`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ b_no: [digits] })
+    });
+    const json = await resp.json();
+    const result = json && json.data && json.data[0];
+    if (!result || result.tax_type === '국세청에 등록되지 않은 사업자등록번호입니다.') {
+      return { checked: true, exists: false, reason: '국세청에 등록되지 않은 사업자등록번호입니다' };
+    }
+    const isActive = result.b_stt_cd === '01'; // 01=계속사업자, 02=휴업자, 03=폐업자
+    return {
+      checked: true,
+      exists: true,
+      active: isActive,
+      status: result.b_stt || '알 수 없음',
+      taxType: result.tax_type || null
+    };
+  } catch (err) {
+    console.error('NTS business number API error:', err.message);
+    return { checked: false, reason: '국세청 조회 중 오류가 발생했습니다(' + err.message + '). 형식 검증 결과로 대체합니다' };
+  }
+}
+
+// ============================================
+// 공급자(거래처) 관리 API - 관리자 전용
+// 여기서 말하는 "공급자"는 플랫폼에 로그인해 상품을 등록하는 판매자 계정(provider role, products_with.supplier_id)과는
+// 다른 개념으로, 실제 매입/거래처(제조사·유통사 등) 회사 정보를 관리자가 기록해두는 마스터 데이터다.
+// 상품과 연결하고 싶을 때는 products_with.vendor_id를 사용한다.
+// ============================================
+
+app.get('/api/admin/suppliers', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('suppliers')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], count: data?.length || 0, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching suppliers:', err);
+    res.status(500).json({ error: 'Failed to fetch suppliers', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/suppliers', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { name, business_number, contact_person, phone, email, address, bank_info, notes } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: 'Required field: name', timestamp: new Date().toISOString() });
+    }
+
+    let bizVerified = { verified: false, status: null, verifiedAt: null };
+    let warning = null;
+
+    if (business_number) {
+      if (!isValidBusinessNumberFormat(business_number)) {
+        return res.status(400).json({ error: 'Bad Request', message: '유효하지 않은 사업자등록번호입니다 (형식 오류)', timestamp: new Date().toISOString() });
+      }
+      const ntsResult = await verifyBusinessNumberWithNTS(business_number);
+      if (ntsResult.checked) {
+        if (!ntsResult.exists) {
+          return res.status(400).json({ error: 'Bad Request', message: '국세청에 등록되지 않은 사업자등록번호입니다', timestamp: new Date().toISOString() });
+        }
+        if (ntsResult.status === '폐업자') {
+          return res.status(400).json({ error: 'Bad Request', message: `국세청 조회 결과 폐업 상태인 사업자등록번호입니다 (상태: ${ntsResult.status})`, timestamp: new Date().toISOString() });
+        }
+        bizVerified = { verified: ntsResult.active, status: ntsResult.status, verifiedAt: new Date().toISOString() };
+      } else {
+        warning = ntsResult.reason;
+      }
+    }
+
+    const { data, error } = await supabase
+      .from('suppliers')
+      .insert([{
+        name: String(name).trim(),
+        business_number: business_number || null,
+        business_number_verified: bizVerified.verified,
+        business_number_verified_at: bizVerified.verifiedAt,
+        business_number_status: bizVerified.status,
+        contact_person: contact_person || null,
+        phone: phone || null,
+        email: email || null,
+        address: address || null,
+        bank_info: bank_info || null,
+        notes: notes || null,
+        is_active: true,
+        created_by: req.user.id
+      }])
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.status(201).json({ success: true, data, warning, message: '공급자가 추가되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating supplier:', err);
+    res.status(500).json({ error: 'Failed to create supplier', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/suppliers/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { name, business_number, contact_person, phone, email, address, bank_info, notes, is_active } = req.body;
+    const updates = { updated_at: new Date().toISOString() };
+    let warning = null;
+    if (name !== undefined) {
+      if (!String(name).trim()) {
+        return res.status(400).json({ error: 'Bad Request', message: 'name은 비워둘 수 없습니다', timestamp: new Date().toISOString() });
+      }
+      updates.name = String(name).trim();
+    }
+    if (business_number !== undefined) {
+      updates.business_number = business_number || null;
+      // 사업자등록번호 값이 실제로 바뀔 때만 재검증한다 (기존 값을 그대로 저장하는 요청까지 매번 국세청에 재조회하지 않도록)
+      const { data: existingSupplier } = await supabase.from('suppliers').select('business_number').eq('id', req.params.id).maybeSingle();
+      const numberChanged = !existingSupplier || existingSupplier.business_number !== (business_number || null);
+
+      if (business_number && numberChanged) {
+        if (!isValidBusinessNumberFormat(business_number)) {
+          return res.status(400).json({ error: 'Bad Request', message: '유효하지 않은 사업자등록번호입니다 (형식 오류)', timestamp: new Date().toISOString() });
+        }
+        const ntsResult = await verifyBusinessNumberWithNTS(business_number);
+        if (ntsResult.checked) {
+          if (!ntsResult.exists) {
+            return res.status(400).json({ error: 'Bad Request', message: '국세청에 등록되지 않은 사업자등록번호입니다', timestamp: new Date().toISOString() });
+          }
+          if (ntsResult.status === '폐업자') {
+            return res.status(400).json({ error: 'Bad Request', message: `국세청 조회 결과 폐업 상태인 사업자등록번호입니다 (상태: ${ntsResult.status})`, timestamp: new Date().toISOString() });
+          }
+          updates.business_number_verified = ntsResult.active;
+          updates.business_number_status = ntsResult.status;
+          updates.business_number_verified_at = new Date().toISOString();
+        } else {
+          warning = ntsResult.reason;
+          updates.business_number_verified = false;
+          updates.business_number_status = null;
+          updates.business_number_verified_at = null;
+        }
+      } else if (!business_number) {
+        updates.business_number_verified = false;
+        updates.business_number_status = null;
+        updates.business_number_verified_at = null;
+      }
+    }
+    if (contact_person !== undefined) updates.contact_person = contact_person || null;
+    if (phone !== undefined) updates.phone = phone || null;
+    if (email !== undefined) updates.email = email || null;
+    if (address !== undefined) updates.address = address || null;
+    if (bank_info !== undefined) updates.bank_info = bank_info || null;
+    if (notes !== undefined) updates.notes = notes || null;
+    if (is_active !== undefined) updates.is_active = !!is_active;
+
+    const { data, error } = await supabase
+      .from('suppliers')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ error: 'Not Found', message: 'Supplier not found', timestamp: new Date().toISOString() });
+    }
+    res.json({ success: true, data, warning, message: '공급자 정보가 수정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating supplier:', err);
+    res.status(500).json({ error: 'Failed to update supplier', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공급자 삭제 (연결된 상품의 vendor_id는 FK ON DELETE SET NULL로 자동 해제됨)
+app.delete('/api/admin/suppliers/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { error } = await supabase.from('suppliers').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true, message: '공급자가 삭제되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting supplier:', err);
+    res.status(500).json({ error: 'Failed to delete supplier', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 상품 API
+// ============================================
+
+// 모든 상품 조회 (인증 필요 없음 - ANON_KEY 사용)
+// ?category=xxx 쿼리로 카테고리 필터링 가능
+app.get('/api/products', async (req, res) => {
+  try {
+    const searchQuery = (req.query.search || '').trim();
+
+    // 검색어가 있으면 오타허용(trigram 유사도)+부분일치 검색 함수(search_products_with)로 결과를 가져오고,
+    // 없으면 지금까지처럼 일반 목록 조회를 그대로 사용한다 (기존 동작 100% 유지).
+    let data, error;
+    if (searchQuery) {
+      ({ data, error } = await supabasePublic.rpc('search_products_with', { search_query: searchQuery, limit_count: 100 }));
+    } else {
+      let query = supabasePublic
+        .from('products_with')
+        .select('*')
+        .eq('status', 'active');
+
+      if (req.query.category) {
+        query = query.eq('category', req.query.category);
+      }
+
+      // 분양 조직(커뮤니티)을 통해 들어온 경우(?community=슬러그) - 그 조직이 "선택한 상품만 노출"로
+      // 설정해두었으면 그 조직에서 지정한 상품으로만 결과를 좁힌다. "전체 노출"이거나 커뮤니티를
+      // 특정하지 않은 일반 홈/카테고리 접근이면 지금까지처럼 전체 카탈로그를 그대로 보여준다.
+      if (req.query.community) {
+        const { data: community } = await supabase
+          .from('communities')
+          .select('id, product_visibility')
+          .eq('slug', req.query.community)
+          .eq('status', 'active')
+          .single();
+        if (community && community.product_visibility === 'curated') {
+          const { data: picks } = await supabase
+            .from('community_products')
+            .select('product_id')
+            .eq('community_id', community.id);
+          const allowedIds = (picks || []).map(p => p.product_id);
+          // 지정된 상품이 하나도 없으면 빈 결과를 정직하게 반환한다(전체 카탈로그로 조용히 되돌아가지 않음)
+          query = query.in('id', allowedIds.length > 0 ? allowedIds : ['00000000-0000-0000-0000-000000000000']);
+        }
+      }
+
+      ({ data, error } = await query);
+    }
+
+    if (error) throw error;
+
+    // 검색 기록은 인기 검색어 집계용으로 남긴다 - 실패해도 검색 결과 응답 자체를 막지 않는다(정직하게 최선을 다해 기록만 시도).
+    // supabase-js의 쿼리빌더 반환값에 .catch를 직접 체이닝하면 이 라이브러리 버전에서 문제가 생길 수 있어(과거에 실제로 발견된 버그),
+    // await + try/catch로 안전하게 처리한다.
+    if (searchQuery) {
+      try {
+        await supabase.from('search_logs_with').insert([{ query: searchQuery, result_count: data?.length || 0, user_id: null }]);
+      } catch (logErr) { /* 검색 로그 기록 실패는 검색 자체를 막지 않는다 */ }
+    }
+
+    res.json({
+      success: true,
+      data: data || [],
+      count: data?.length || 0,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching products:', err);
+    res.status(500).json({
+      error: 'Failed to fetch products',
+      message: err.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// 검색창 자동완성 - 상품명 기준 오타허용 유사도로 상위 몇 개만 가볍게 추천
+app.get('/api/search/autocomplete', async (req, res) => {
+  try {
+    const q = (req.query.q || '').trim();
+    if (!q || q.length < 1) {
+      return res.json({ success: true, data: [], timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabasePublic.rpc('search_products_with', { search_query: q, limit_count: 8 });
+    if (error) throw error;
+    const suggestions = (data || []).map(p => ({ id: p.id, name: p.name, image_url: (p.images_urls && p.images_urls[0]) || null, price: p.price }));
+    res.json({ success: true, data: suggestions, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching autocomplete suggestions:', err);
+    res.status(500).json({ error: 'Failed to fetch autocomplete suggestions', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 인기 검색어 - 최근 30일 검색 기록을 검색어(대소문자 무시) 기준으로 집계해 상위 10개를 보여준다.
+// 검색 기록이 아직 없으면(신규 오픈 초기) 빈 배열을 정직하게 반환한다(가짜 인기 검색어를 채우지 않음).
+app.get('/api/search/popular', async (req, res) => {
+  try {
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const { data, error } = await supabase
+      .from('search_logs_with')
+      .select('query')
+      .gte('created_at', since)
+      .not('query', 'is', null);
+    if (error) throw error;
+
+    const counts = {};
+    (data || []).forEach(row => {
+      const normalized = row.query.trim().toLowerCase();
+      if (!normalized) return;
+      counts[normalized] = (counts[normalized] || 0) + 1;
+    });
+    const popular = Object.entries(counts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([query, count]) => ({ query, count }));
+
+    res.json({ success: true, data: popular, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching popular search terms:', err);
+    res.status(500).json({ error: 'Failed to fetch popular search terms', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 여러 상품의 옵션(변형) 목록을 한 번에 조회 (장바구니처럼 여러 상품의 옵션명/재고를 한꺼번에 확인할 때 사용, 로그인 불필요, 판매중 옵션만)
+app.get('/api/product-variants', async (req, res) => {
+  try {
+    const ids = String(req.query.product_ids || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (ids.length === 0) {
+      return res.json({ success: true, data: [], timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabasePublic
+      .from('product_variants_with')
+      .select('id, product_id, name, option_values, price_adjustment, stock, is_active')
+      .in('product_id', ids)
+      .eq('is_active', true);
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching product variants:', err);
+    res.status(500).json({ error: 'Failed to fetch product variants', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 상품 상세 조회 (인증 필요 없음 - ANON_KEY 사용)
+app.get('/api/products/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data, error } = await supabasePublic
+      .from('products_with')
+      .select(`
+        *,
+        reviews:product_reviews(id, rating, title, comment, user_id, created_at, verified_purchase, status)
+      `)
+      .eq('id', id)
+      .single();
+
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'Product not found',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 옵션(사이즈/색상 등)이 등록된 상품이면 함께 내려준다 (판매중인 옵션만)
+    const { data: variants } = await supabasePublic
+      .from('product_variants_with')
+      .select('id, name, option_values, price_adjustment, stock, is_active')
+      .eq('product_id', id)
+      .eq('is_active', true)
+      .order('created_at', { ascending: true });
+
+    // 관리자가 숨김 처리한(status='hidden') 리뷰는 일반 방문자 화면에 절대 노출되지 않도록 여기서 걸러낸다
+    // (nested select에서는 임베드된 리소스를 직접 필터링할 수 없어 응답 직전에 한 번 더 걸러낸다)
+    const visibleReviews = (data.reviews || []).filter(r => r.status === 'published').map(r => {
+      const { status, ...rest } = r;
+      return rest;
+    });
+
+    res.json({
+      success: true,
+      data: { ...data, reviews: visibleReviews, variants: variants || [] },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching product:', err);
+    res.status(500).json({
+      error: 'Failed to fetch product',
+      message: err.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// 상품 생성 (공급자 전용)
+app.post('/api/products', authenticate, async (req, res) => {
+  try {
+    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, vendor_id, subscription_available, barcode } = req.body;
+
+    if (!name || !price || !category) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Required fields: name, price, category',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const initialStock = stock ? parseInt(stock, 10) : 0;
+    const { data, error } = await supabase
+      .from('products_with')
+      .insert([{
+        name,
+        slug: slugify(name),
+        description: description || '',
+        long_description: long_description || '',
+        price: parseFloat(price),
+        discount_price: discount_price ? parseFloat(discount_price) : null,
+        category,
+        stock: 0,
+        barcode: barcode ? String(barcode).trim() : null,
+        images_urls: images_urls || [],
+        detail_sections: sanitizeDetailSections(detail_sections),
+        supplier_id: req.user.id,
+        vendor_id: vendor_id || null,
+        subscription_available: !!subscription_available,
+        status: 'active'
+      }])
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === '23503') {
+        return res.status(400).json({ error: 'Bad Request', message: '존재하지 않는 공급자입니다', timestamp: new Date().toISOString() });
+      }
+      throw error;
+    }
+
+    // 초기 재고는 0으로 만든 뒤 재고원장(ledger)에 "신규 상품 등록" 이벤트로 기록하며 반영한다 (모든 증감이 이력에 남도록)
+    if (Number.isFinite(initialStock) && initialStock > 0) {
+      try {
+        await supabase.rpc('adjust_stock_with', {
+          p_product_id: data.id, p_variant_id: null, p_delta: initialStock, p_reason: '신규 상품 등록', p_order_id: null, p_created_by: req.user.id, p_scan_source: 'admin_manual'
+        });
+        data.stock = initialStock;
+      } catch (stockErr) { console.error('Error recording initial stock:', stockErr); }
+    }
+
+    res.status(201).json({
+      success: true,
+      data: data,
+      message: 'Product created successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error creating product:', err);
+    res.status(500).json({
+      error: 'Failed to create product',
+      message: err.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// 상품 수정 (공급자 본인 상품 또는 관리자)
+app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, status, vendor_id, subscription_available, barcode } = req.body;
+
+    const { data: existing, error: findErr } = await supabase
+      .from('products_with')
+      .select('id, supplier_id, stock')
+      .eq('id', id)
+      .single();
+
+    if (findErr || !existing) {
+      return res.status(404).json({ error: 'Not Found', message: 'Product not found', timestamp: new Date().toISOString() });
+    }
+
+    if (!isAdminRole(req.userRole) && existing.supplier_id !== req.user.id) {
+      return res.status(403).json({ error: 'Forbidden', message: '본인 상품만 수정할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+
+    const updates = {};
+    if (name !== undefined) updates.name = name;
+    if (description !== undefined) updates.description = description;
+    if (long_description !== undefined) updates.long_description = long_description;
+    if (price !== undefined) updates.price = parseFloat(price);
+    if (discount_price !== undefined) updates.discount_price = discount_price === null || discount_price === '' ? null : parseFloat(discount_price);
+    if (category !== undefined) updates.category = category;
+    if (images_urls !== undefined) updates.images_urls = images_urls;
+    if (detail_sections !== undefined) updates.detail_sections = sanitizeDetailSections(detail_sections);
+    if (status !== undefined) updates.status = status;
+    if (vendor_id !== undefined) updates.vendor_id = vendor_id || null;
+    if (subscription_available !== undefined) updates.subscription_available = !!subscription_available;
+    if (barcode !== undefined) updates.barcode = barcode ? String(barcode).trim() : null;
+
+    // 옵션(사이즈/색상 등)이 등록된 상품은 재고가 "옵션별 재고의 합"으로 자동 관리되므로,
+    // 여기로 직접 들어온 재고값은 무시한다 (옵션 재고는 /api/admin/product-variants/:id 로 조정).
+    // 옵션이 없는 상품은 재고원장(adjust_stock_with)을 통해 차액만큼만 원자적으로 반영하고 이력을 남긴다 (직접 덮어쓰지 않음).
+    let stockChanged = false;
+    if (stock !== undefined) {
+      const { data: activeVariants } = await supabase.from('product_variants_with').select('id').eq('product_id', id).eq('is_active', true).limit(1);
+      if (!activeVariants || activeVariants.length === 0) {
+        const targetStock = parseInt(stock, 10);
+        if (Number.isFinite(targetStock) && targetStock >= 0) {
+          const delta = targetStock - Number(existing.stock || 0);
+          if (delta !== 0) {
+            try {
+              await supabase.rpc('adjust_stock_with', {
+                p_product_id: id, p_variant_id: null, p_delta: delta, p_reason: '관리자 상품정보 수정 중 재고 변경', p_order_id: null, p_created_by: req.user.id, p_scan_source: 'admin_manual'
+              });
+              stockChanged = true;
+            } catch (stockErr) {
+              if (stockErr.message && stockErr.message.includes('INSUFFICIENT_STOCK')) {
+                return res.status(400).json({ error: 'Bad Request', message: '재고보다 많이 차감할 수 없습니다', timestamp: new Date().toISOString() });
+              }
+              throw stockErr;
+            }
+          }
+        }
+      }
+    }
+
+    // stock만 변경되고 다른 필드는 그대로인 경우 updates가 비어있을 수 있으므로(빈 객체로 update 호출하면 오류) 그럴 땐 업데이트를 건너뛰고 최신 행만 다시 읽어온다
+    let data;
+    if (Object.keys(updates).length > 0) {
+      const { data: updated, error } = await supabase
+        .from('products_with')
+        .update(updates)
+        .eq('id', id)
+        .select()
+        .single();
+      if (error) {
+        if (error.code === '23503') {
+          return res.status(400).json({ error: 'Bad Request', message: '존재하지 않는 공급자입니다', timestamp: new Date().toISOString() });
+        }
+        throw error;
+      }
+      data = updated;
+    } else {
+      const { data: current, error } = await supabase.from('products_with').select('*').eq('id', id).single();
+      if (error) throw error;
+      data = current;
+    }
+
+    // 재고가 0 이하 -> 양수로 바뀌었으면(= 재입고) 이 상품에 재입고 알림을 신청해둔 회원들에게 알린다
+    if (stockChanged && Number(existing.stock) <= 0 && Number(data.stock) > 0) {
+      triggerRestockNotifications(id).catch(() => {});
+    }
+
+    res.json({ success: true, data, message: 'Product updated successfully', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating product:', err);
+    res.status(500).json({ error: 'Failed to update product', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 상품 삭제 (실제로는 소프트 삭제 - status를 discontinued로 변경, 주문 이력 보존)
+app.delete('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data: existing, error: findErr } = await supabase
+      .from('products_with')
+      .select('id, supplier_id')
+      .eq('id', id)
+      .single();
+
+    if (findErr || !existing) {
+      return res.status(404).json({ error: 'Not Found', message: 'Product not found', timestamp: new Date().toISOString() });
+    }
+
+    if (!isAdminRole(req.userRole) && existing.supplier_id !== req.user.id) {
+      return res.status(403).json({ error: 'Forbidden', message: '본인 상품만 삭제할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { error } = await supabase
+      .from('products_with')
+      .update({ status: 'discontinued' })
+      .eq('id', id);
+
+    if (error) throw error;
+
+    res.json({ success: true, message: 'Product discontinued successfully', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting product:', err);
+    res.status(500).json({ error: 'Failed to delete product', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자/공급자용 상품 목록 (상태 무관 전체 조회 - 관리자는 전체, 공급자는 본인 상품만)
+app.get('/api/admin/products', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    let query = supabase.from('products_with').select('*').order('created_at', { ascending: false });
+
+    if (!isAdminRole(req.userRole)) {
+      query = query.eq('supplier_id', req.user.id);
+    }
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    res.json({ success: true, data: data || [], count: data?.length || 0, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching admin products:', err);
+    res.status(500).json({ error: 'Failed to fetch products', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 상품 옵션(사이즈/색상 등) + 재고관리 고도화
+// - 상품에 옵션(변형)을 등록하면, 옵션별로 재고/가격조정을 따로 관리할 수 있다
+// - 옵션이 있는 상품은 products_with.stock이 "판매 가능한 옵션들의 재고 합"으로 자동 동기화된다(목록/카드에서 보이는 재고)
+// - 재고 증감은 adjust_stock_with() DB 함수로 원자적으로 처리해 동시 주문 시 재고가 음수로 내려가지 않도록 한다
+// - 모든 증감은 stock_adjustments_with에 이력으로 남는다 (주문 차감/관리자 수동 조정 등)
+// ============================================
+
+async function assertProductAccess(productId, req) {
+  const { data: product, error } = await supabase
+    .from('products_with')
+    .select('id, name, supplier_id, stock')
+    .eq('id', productId)
+    .maybeSingle();
+  if (error || !product) return { error: { status: 404, message: '상품을 찾을 수 없습니다' } };
+  if (!isAdminRole(req.userRole) && product.supplier_id !== req.user.id) {
+    return { error: { status: 403, message: '본인 상품만 관리할 수 있습니다' } };
+  }
+  return { product };
+}
+
+async function syncProductStockFromVariants(productId) {
+  const { data: variants } = await supabase
+    .from('product_variants_with')
+    .select('stock')
+    .eq('product_id', productId)
+    .eq('is_active', true);
+  if (!variants) return;
+  const total = variants.reduce((sum, v) => sum + Number(v.stock || 0), 0);
+  await supabase.from('products_with').update({ stock: total }).eq('id', productId);
+}
+
+// 옵션 목록 조회 (관리자/공급자용 - 비활성 옵션 포함)
+app.get('/api/admin/products/:productId/variants', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const access = await assertProductAccess(req.params.productId, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase
+      .from('product_variants_with')
+      .select('*')
+      .eq('product_id', req.params.productId)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching variants:', err);
+    res.status(500).json({ error: 'Failed to fetch variants', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 옵션 등록
+app.post('/api/admin/products/:productId/variants', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const access = await assertProductAccess(req.params.productId, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+    const { name, option_values, price_adjustment, stock, sku, barcode } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: '옵션명을 입력해주세요 (예: 블랙 / L)', timestamp: new Date().toISOString() });
+    }
+    const initialStock = parseInt(stock, 10);
+    if (!Number.isFinite(initialStock) || initialStock < 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '옵션 재고는 0 이상의 숫자여야 합니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data, error } = await supabase
+      .from('product_variants_with')
+      .insert([{
+        product_id: req.params.productId,
+        name: String(name).trim(),
+        option_values: (option_values && typeof option_values === 'object') ? option_values : {},
+        price_adjustment: price_adjustment ? Number(price_adjustment) : 0,
+        stock: initialStock,
+        sku: sku ? String(sku).trim() : null,
+        barcode: barcode ? String(barcode).trim() : null,
+        is_active: true
+      }])
+      .select()
+      .single();
+    if (error) throw error;
+
+    if (initialStock > 0) {
+      await supabase.from('stock_adjustments_with').insert([{
+        product_id: req.params.productId, variant_id: data.id, delta: initialStock, reason: '옵션 신규 등록', created_by: req.user.id
+      }]);
+    }
+    await syncProductStockFromVariants(req.params.productId);
+
+    res.status(201).json({ success: true, data, message: '옵션이 등록되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating variant:', err);
+    res.status(500).json({ error: 'Failed to create variant', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 옵션 수정 (이름/가격조정/활성여부/재고 - 재고를 바꾸면 차액만큼 adjust_stock_with로 이력이 남는다)
+app.put('/api/admin/product-variants/:variantId', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: variant, error: findErr } = await supabase
+      .from('product_variants_with')
+      .select('*')
+      .eq('id', req.params.variantId)
+      .maybeSingle();
+    if (findErr || !variant) {
+      return res.status(404).json({ error: 'Not Found', message: '옵션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    const access = await assertProductAccess(variant.product_id, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+
+    const { name, option_values, price_adjustment, is_active, stock, sku, barcode } = req.body;
+    const updates = { updated_at: new Date().toISOString() };
+    if (name !== undefined) {
+      if (!String(name).trim()) return res.status(400).json({ error: 'Bad Request', message: '옵션명을 입력해주세요', timestamp: new Date().toISOString() });
+      updates.name = String(name).trim();
+    }
+    if (option_values !== undefined) updates.option_values = (option_values && typeof option_values === 'object') ? option_values : {};
+    if (price_adjustment !== undefined) updates.price_adjustment = Number(price_adjustment) || 0;
+    if (is_active !== undefined) updates.is_active = !!is_active;
+    if (sku !== undefined) updates.sku = sku ? String(sku).trim() : null;
+    if (barcode !== undefined) updates.barcode = barcode ? String(barcode).trim() : null;
+
+    if (Object.keys(updates).length > 1) {
+      const { error: updateErr } = await supabase.from('product_variants_with').update(updates).eq('id', req.params.variantId);
+      if (updateErr) throw updateErr;
+    }
+
+    // 재고는 "몇 개로 맞출지"를 입력받아 현재값과의 차이만큼 원자적으로 반영한다 (직접 stock 컬럼을 덮어쓰지 않음)
+    if (stock !== undefined) {
+      const targetStock = parseInt(stock, 10);
+      if (!Number.isFinite(targetStock) || targetStock < 0) {
+        return res.status(400).json({ error: 'Bad Request', message: '재고는 0 이상의 숫자여야 합니다', timestamp: new Date().toISOString() });
+      }
+      const delta = targetStock - Number(variant.stock || 0);
+      if (delta !== 0) {
+        const { error: rpcErr } = await supabase.rpc('adjust_stock_with', {
+          p_product_id: variant.product_id, p_variant_id: variant.id, p_delta: delta, p_reason: '관리자 재고 수정', p_order_id: null, p_created_by: req.user.id, p_scan_source: 'admin_manual'
+        });
+        if (rpcErr) throw rpcErr;
+      }
+    }
+
+    await syncProductStockFromVariants(variant.product_id);
+
+    const { data: updated } = await supabase.from('product_variants_with').select('*').eq('id', req.params.variantId).single();
+    res.json({ success: true, data: updated, message: '옵션이 수정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating variant:', err);
+    res.status(500).json({ error: 'Failed to update variant', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 옵션 삭제
+app.delete('/api/admin/product-variants/:variantId', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: variant, error: findErr } = await supabase
+      .from('product_variants_with')
+      .select('id, product_id')
+      .eq('id', req.params.variantId)
+      .maybeSingle();
+    if (findErr || !variant) {
+      return res.status(404).json({ error: 'Not Found', message: '옵션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    const access = await assertProductAccess(variant.product_id, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+
+    const { error } = await supabase.from('product_variants_with').delete().eq('id', req.params.variantId);
+    if (error) throw error;
+    await syncProductStockFromVariants(variant.product_id);
+
+    res.json({ success: true, message: '옵션이 삭제되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting variant:', err);
+    res.status(500).json({ error: 'Failed to delete variant', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 재고 입출고 이력 조회 (특정 상품 기준)
+app.get('/api/admin/products/:productId/stock-adjustments', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const access = await assertProductAccess(req.params.productId, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase
+      .from('stock_adjustments_with')
+      .select('*')
+      .eq('product_id', req.params.productId)
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching stock adjustments:', err);
+    res.status(500).json({ error: 'Failed to fetch stock adjustments', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 옵션이 없는 상품의 재고를 관리자가 직접 가감(+/-)할 때 사용 (입고/파손/실사 보정 등) - 이력이 남는다
+app.post('/api/admin/stock-adjustments', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { product_id, delta, reason } = req.body;
+    if (!product_id || delta === undefined || delta === null) {
+      return res.status(400).json({ error: 'Bad Request', message: 'product_id와 delta는 필수입니다', timestamp: new Date().toISOString() });
+    }
+    const deltaNum = parseInt(delta, 10);
+    if (!Number.isFinite(deltaNum) || deltaNum === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'delta는 0이 아닌 정수여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const access = await assertProductAccess(product_id, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+
+    const { data: newStock, error } = await supabase.rpc('adjust_stock_with', {
+      p_product_id: product_id, p_variant_id: null, p_delta: deltaNum, p_reason: (reason && String(reason).trim()) || '관리자 수동 조정', p_order_id: null, p_created_by: req.user.id, p_scan_source: 'admin_manual'
+    });
+    if (error) {
+      if (error.message && error.message.includes('INSUFFICIENT_STOCK')) {
+        return res.status(400).json({ error: 'Bad Request', message: '재고보다 많이 차감할 수 없습니다', timestamp: new Date().toISOString() });
+      }
+      throw error;
+    }
+
+    // 재고가 0 이하 -> 양수로 바뀌었으면(= 재입고) 알림 신청자들에게 알린다 (delta를 알고 있으므로 별도 조회 없이 조정 전 재고를 역산)
+    const stockBeforeAdjustment = Number(newStock) - deltaNum;
+    if (stockBeforeAdjustment <= 0 && Number(newStock) > 0) {
+      triggerRestockNotifications(product_id).catch(() => {});
+    }
+
+    res.json({ success: true, data: { stock: newStock }, message: '재고가 조정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error adjusting stock:', err);
+    res.status(500).json({ error: 'Failed to adjust stock', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 재고 임박 상품 목록 (기본 5개 이하, ?threshold=로 조정 가능) - 옵션이 있는 상품은 옵션별로도 함께 확인
+app.get('/api/admin/low-stock', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const threshold = Number.isFinite(Number(req.query.threshold)) ? Number(req.query.threshold) : 5;
+
+    let productQuery = supabase.from('products_with').select('id, name, stock, supplier_id').eq('status', 'active').lte('stock', threshold);
+    if (!isAdminRole(req.userRole)) productQuery = productQuery.eq('supplier_id', req.user.id);
+    const { data: lowProducts, error: pErr } = await productQuery;
+    if (pErr) throw pErr;
+
+    let variantQuery = supabase
+      .from('product_variants_with')
+      .select('id, name, stock, product_id, products_with!inner(id, name, supplier_id, status)')
+      .eq('is_active', true)
+      .lte('stock', threshold)
+      .eq('products_with.status', 'active');
+    if (!isAdminRole(req.userRole)) variantQuery = variantQuery.eq('products_with.supplier_id', req.user.id);
+    const { data: lowVariants, error: vErr } = await variantQuery;
+    if (vErr) throw vErr;
+
+    res.json({
+      success: true,
+      data: {
+        products: lowProducts || [],
+        variants: (lowVariants || []).map(v => ({ id: v.id, name: v.name, stock: v.stock, product_id: v.product_id, product_name: v.products_with ? v.products_with.name : null }))
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching low stock:', err);
+    res.status(500).json({ error: 'Failed to fetch low stock', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+
+// ============================================
+// 창고관리(WMS) API — 재고원장/바코드스캔/로케이션/디지털트윈/AGV(시뮬레이션)
+// ------------------------------------------------------------------
+// 기반: stock_adjustments_with(불변 재고 원장) + adjust_stock_with() 원자적 RPC는
+// 이미 상품/옵션 관리 섹션에서 구축되어 있음(초과판매 방지 포함). 여기서는 그 위에
+// 1) lot/serial/로케이션 단위 조회, 2) 바코드 스캔 터미널, 3) 창고 로케이션(2D 좌표) 관리,
+// 4) 2D 디지털트윈 뷰어용 데이터, 5) AGV 작업큐(주의: 실제 로봇 하드웨어 연동이 아니라
+// 관리자 화면에서 확인 가능한 "시뮬레이션"입니다 — equipment_with.is_simulated=true)를 추가한다.
+// ============================================
+
+// 재고 원장(전체) 조회 — 상품별이 아니라 사이트 전체 이력을 필터링하며 볼 수 있음
+app.get('/api/admin/inventory/ledger', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 30));
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    let query = supabase
+      .from('stock_adjustments_with')
+      .select('*, products_with(name, supplier_id)', { count: 'exact' })
+      .order('created_at', { ascending: false });
+
+    if (!isAdminRole(req.userRole)) {
+      // 공급사는 본인 상품 이력만 볼 수 있다
+      const { data: myProducts } = await supabase.from('products_with').select('id').eq('supplier_id', req.user.id);
+      const ids = (myProducts || []).map(p => p.id);
+      if (ids.length === 0) {
+        return res.json({ success: true, data: [], pagination: { page, pageSize, total: 0, totalPages: 0 }, timestamp: new Date().toISOString() });
+      }
+      query = query.in('product_id', ids);
+    }
+    if (req.query.productId) query = query.eq('product_id', req.query.productId);
+    if (req.query.lotNumber) query = query.eq('lot_number', req.query.lotNumber);
+    if (req.query.serialNumber) query = query.eq('serial_number', req.query.serialNumber);
+    if (req.query.locationId) query = query.eq('location_id', req.query.locationId);
+    if (req.query.scanSource) query = query.eq('scan_source', req.query.scanSource);
+    if (req.query.dateFrom) query = query.gte('created_at', req.query.dateFrom);
+    if (req.query.dateTo) query = query.lte('created_at', req.query.dateTo);
+
+    const { data, error, count } = await query.range(from, to);
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      data: (data || []).map(row => ({ ...row, product_name: row.products_with ? row.products_with.name : null, products_with: undefined })),
+      pagination: { page, pageSize, total: count || 0, totalPages: Math.ceil((count || 0) / pageSize) },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching inventory ledger:', err);
+    res.status(500).json({ error: 'Failed to fetch inventory ledger', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 바코드/SKU로 상품(또는 옵션) 조회 — 스캔 터미널에서 입력 즉시 무엇을 스캔했는지 확인할 때 사용
+app.get('/api/admin/inventory/lookup', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const code = (req.query.code || '').trim();
+    if (!code) return res.status(400).json({ error: 'Bad Request', message: 'code 파라미터가 필요합니다', timestamp: new Date().toISOString() });
+
+    const { data: variant } = await supabase
+      .from('product_variants_with')
+      .select('id, name, stock, sku, barcode, product_id, products_with(id, name, supplier_id, stock)')
+      .or(`barcode.eq.${code},sku.eq.${code}`)
+      .maybeSingle();
+    if (variant) {
+      if (!isAdminRole(req.userRole) && variant.products_with && variant.products_with.supplier_id !== req.user.id) {
+        return res.status(403).json({ error: 'Forbidden', message: '본인 상품만 조회할 수 있습니다', timestamp: new Date().toISOString() });
+      }
+      return res.json({
+        success: true,
+        data: { type: 'variant', id: variant.id, name: `${variant.products_with ? variant.products_with.name : ''} - ${variant.name}`, stock: variant.stock, product_id: variant.product_id, variant_id: variant.id },
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const { data: product } = await supabase
+      .from('products_with')
+      .select('id, name, stock, barcode, supplier_id')
+      .or(`barcode.eq.${code},id.eq.${/^[0-9a-f-]{36}$/i.test(code) ? code : '00000000-0000-0000-0000-000000000000'}`)
+      .maybeSingle();
+    if (product) {
+      if (!isAdminRole(req.userRole) && product.supplier_id !== req.user.id) {
+        return res.status(403).json({ error: 'Forbidden', message: '본인 상품만 조회할 수 있습니다', timestamp: new Date().toISOString() });
+      }
+      return res.json({
+        success: true,
+        data: { type: 'product', id: product.id, name: product.name, stock: product.stock, product_id: product.id, variant_id: null },
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    res.status(404).json({ error: 'Not Found', message: `바코드/SKU "${code}"에 해당하는 상품을 찾을 수 없습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error looking up barcode:', err);
+    res.status(500).json({ error: 'Failed to lookup barcode', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 바코드 스캔 터미널 — 키보드 웨지 방식 스캐너로 연속 입출고 처리 (Lot/시리얼/로케이션 단위 기록)
+app.post('/api/admin/inventory/scan', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { product_id, variant_id, delta, lot_number, serial_number, location_id, reason } = req.body;
+    if (!product_id || delta === undefined || delta === null) {
+      return res.status(400).json({ error: 'Bad Request', message: 'product_id와 delta는 필수입니다', timestamp: new Date().toISOString() });
+    }
+    const deltaNum = parseInt(delta, 10);
+    if (!Number.isFinite(deltaNum) || deltaNum === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'delta는 0이 아닌 정수여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const access = await assertProductAccess(product_id, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+
+    const { data: newStock, error } = await supabase.rpc('adjust_stock_with', {
+      p_product_id: product_id,
+      p_variant_id: variant_id || null,
+      p_delta: deltaNum,
+      p_reason: (reason && String(reason).trim()) || (deltaNum > 0 ? 'PDA 스캔 입고' : 'PDA 스캔 출고'),
+      p_order_id: null,
+      p_created_by: req.user.id,
+      p_lot_number: lot_number ? String(lot_number).trim() : null,
+      p_serial_number: serial_number ? String(serial_number).trim() : null,
+      p_location_id: location_id || null,
+      p_scan_source: 'pda_scan'
+    });
+    if (error) {
+      if (error.message && error.message.includes('INSUFFICIENT_STOCK')) {
+        return res.status(400).json({ error: 'Bad Request', message: '재고보다 많이 출고할 수 없습니다', timestamp: new Date().toISOString() });
+      }
+      throw error;
+    }
+    if (variant_id) await syncProductStockFromVariants(product_id);
+
+    res.json({ success: true, data: { stock: newStock }, message: '스캔 처리 완료', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error processing scan:', err);
+    res.status(500).json({ error: 'Failed to process scan', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ---- 창고 로케이션(Zone-Rack-Bin, 2D 좌표) ----
+app.get('/api/admin/inventory/locations', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('warehouse_locations_with').select('*').order('code', { ascending: true });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching locations:', err);
+    res.status(500).json({ error: 'Failed to fetch locations', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/inventory/locations', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { code, zone, rack, bin, label, grid_x, grid_y, width, height, is_obstacle, floor, shape } = req.body;
+    if (!code || !String(code).trim() || !zone || !String(zone).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: 'code와 zone은 필수입니다', timestamp: new Date().toISOString() });
+    }
+    const VALID_SHAPES = ['rect', 'vertical', 'square', 'conveyor'];
+    if (shape !== undefined && !VALID_SHAPES.includes(shape)) {
+      return res.status(400).json({ error: 'Bad Request', message: `shape는 ${VALID_SHAPES.join('/')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase
+      .from('warehouse_locations_with')
+      .insert([{
+        code: String(code).trim(), zone: String(zone).trim(), rack: rack ? String(rack).trim() : null, bin: bin ? String(bin).trim() : null,
+        label: label ? String(label).trim() : null,
+        grid_x: Number.isFinite(Number(grid_x)) ? Number(grid_x) : 0,
+        grid_y: Number.isFinite(Number(grid_y)) ? Number(grid_y) : 0,
+        width: Number.isFinite(Number(width)) && Number(width) > 0 ? Number(width) : 1,
+        height: Number.isFinite(Number(height)) && Number(height) > 0 ? Number(height) : 1,
+        is_obstacle: !!is_obstacle,
+        floor: Number.isFinite(Number(floor)) && Number(floor) > 0 ? Number(floor) : 1,
+        shape: shape || 'rect'
+      }])
+      .select()
+      .single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Conflict', message: '이미 존재하는 로케이션 코드입니다', timestamp: new Date().toISOString() });
+      throw error;
+    }
+    res.status(201).json({ success: true, data, message: '로케이션이 등록되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating location:', err);
+    res.status(500).json({ error: 'Failed to create location', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/inventory/locations/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { code, zone, rack, bin, label, grid_x, grid_y, width, height, is_obstacle, is_active, floor, shape } = req.body;
+    const VALID_SHAPES = ['rect', 'vertical', 'square', 'conveyor'];
+    if (shape !== undefined && !VALID_SHAPES.includes(shape)) {
+      return res.status(400).json({ error: 'Bad Request', message: `shape는 ${VALID_SHAPES.join('/')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+    }
+    const updates = { updated_at: new Date().toISOString() };
+    if (code !== undefined) updates.code = String(code).trim();
+    if (zone !== undefined) updates.zone = String(zone).trim();
+    if (rack !== undefined) updates.rack = rack ? String(rack).trim() : null;
+    if (bin !== undefined) updates.bin = bin ? String(bin).trim() : null;
+    if (label !== undefined) updates.label = label ? String(label).trim() : null;
+    if (grid_x !== undefined) updates.grid_x = Number(grid_x) || 0;
+    if (grid_y !== undefined) updates.grid_y = Number(grid_y) || 0;
+    if (width !== undefined) updates.width = Number(width) || 1;
+    if (height !== undefined) updates.height = Number(height) || 1;
+    if (is_obstacle !== undefined) updates.is_obstacle = !!is_obstacle;
+    if (is_active !== undefined) updates.is_active = !!is_active;
+    if (floor !== undefined) updates.floor = Number.isFinite(Number(floor)) && Number(floor) > 0 ? Number(floor) : 1;
+    if (shape !== undefined) updates.shape = shape;
+
+    const { data, error } = await supabase.from('warehouse_locations_with').update(updates).eq('id', req.params.id).select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '로케이션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, message: '로케이션이 수정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating location:', err);
+    res.status(500).json({ error: 'Failed to update location', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.delete('/api/admin/inventory/locations/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { error } = await supabase.from('warehouse_locations_with').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true, message: '로케이션이 삭제되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting location:', err);
+    res.status(500).json({ error: 'Failed to delete location', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 상품(옵션)-로케이션 매핑
+app.post('/api/admin/inventory/product-locations', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { product_id, variant_id, location_id, is_primary } = req.body;
+    if (!product_id || !location_id) {
+      return res.status(400).json({ error: 'Bad Request', message: 'product_id와 location_id는 필수입니다', timestamp: new Date().toISOString() });
+    }
+    const access = await assertProductAccess(product_id, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase
+      .from('product_location_assignments_with')
+      .upsert([{ product_id, variant_id: variant_id || null, location_id, is_primary: !!is_primary }], { onConflict: 'product_id,variant_id,location_id' })
+      .select()
+      .single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data, message: '로케이션이 배정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error assigning product location:', err);
+    res.status(500).json({ error: 'Failed to assign product location', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/inventory/product-locations/:productId', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const access = await assertProductAccess(req.params.productId, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase
+      .from('product_location_assignments_with')
+      .select('*, warehouse_locations_with(code, zone, rack, bin, label, grid_x, grid_y)')
+      .eq('product_id', req.params.productId);
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching product locations:', err);
+    res.status(500).json({ error: 'Failed to fetch product locations', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ---- 2D 디지털트윈: 평면도(로케이션 좌표+장애물) 전체 스냅샷 ----
+app.get('/api/admin/inventory/floorplan', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    let query = supabase.from('warehouse_locations_with').select('*').eq('is_active', true).order('code');
+    const floorParam = req.query.floor;
+    if (floorParam !== undefined && floorParam !== '' && Number.isFinite(Number(floorParam))) {
+      query = query.eq('floor', Number(floorParam));
+    }
+    const { data: locations, error } = await query;
+    if (error) throw error;
+    const { data: allFloorsRaw } = await supabase.from('warehouse_locations_with').select('floor').eq('is_active', true);
+    const floors = Array.from(new Set((allFloorsRaw || []).map(r => r.floor))).sort((a, b) => a - b);
+    const { data: equipment } = await supabase.from('equipment_with').select('*');
+    res.json({
+      success: true,
+      data: { locations: locations || [], equipment: equipment || [], floors: floors.length ? floors : [1] },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching floorplan:', err);
+    res.status(500).json({ error: 'Failed to fetch floorplan', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ---- 장비(PDA/AGV) — is_simulated=true: 실제 하드웨어와 연동되지 않는 데모/시뮬레이션 데이터입니다 ----
+app.get('/api/admin/wms/equipment', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('equipment_with').select('*, warehouse_locations_with(code, grid_x, grid_y)').order('name');
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching equipment:', err);
+    res.status(500).json({ error: 'Failed to fetch equipment', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/wms/equipment', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { equipment_type, name, current_location_id } = req.body;
+    if (!equipment_type || !['pda', 'agv'].includes(equipment_type) || !name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: 'equipment_type(pda/agv)과 name은 필수입니다', timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase
+      .from('equipment_with')
+      .insert([{ equipment_type, name: String(name).trim(), current_location_id: current_location_id || null, is_simulated: true }])
+      .select()
+      .single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data, message: '장비가 등록되었습니다 (시뮬레이션)', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating equipment:', err);
+    res.status(500).json({ error: 'Failed to create equipment', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// A* 최단경로 탐색 — 그리드 기반, is_obstacle 로케이션은 통과 불가로 처리 (디지털트윈 시각화 + AGV 작업 경로용)
+function computeAStarPath(locations, fromLoc, toLoc) {
+  const GRID_SIZE = 1;
+  const obstacles = new Set(
+    locations.filter(l => l.is_obstacle).map(l => `${Math.round(l.grid_x)},${Math.round(l.grid_y)}`)
+  );
+  const start = { x: Math.round(fromLoc.grid_x), y: Math.round(fromLoc.grid_y) };
+  const goal = { x: Math.round(toLoc.grid_x), y: Math.round(toLoc.grid_y) };
+  const key = (p) => `${p.x},${p.y}`;
+  const heuristic = (a, b) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+
+  const openSet = [start];
+  const cameFrom = {};
+  const gScore = { [key(start)]: 0 };
+  const fScore = { [key(start)]: heuristic(start, goal) };
+  let iterations = 0;
+
+  while (openSet.length > 0 && iterations < 2000) {
+    iterations++;
+    openSet.sort((a, b) => (fScore[key(a)] ?? Infinity) - (fScore[key(b)] ?? Infinity));
+    const current = openSet.shift();
+    if (current.x === goal.x && current.y === goal.y) {
+      const path = [current];
+      let k = key(current);
+      while (cameFrom[k]) {
+        path.unshift(cameFrom[k]);
+        k = key(cameFrom[k]);
+      }
+      return path;
+    }
+    const neighbors = [
+      { x: current.x + GRID_SIZE, y: current.y }, { x: current.x - GRID_SIZE, y: current.y },
+      { x: current.x, y: current.y + GRID_SIZE }, { x: current.x, y: current.y - GRID_SIZE }
+    ];
+    for (const n of neighbors) {
+      if (obstacles.has(key(n))) continue;
+      const tentativeG = (gScore[key(current)] ?? Infinity) + 1;
+      if (tentativeG < (gScore[key(n)] ?? Infinity)) {
+        cameFrom[key(n)] = current;
+        gScore[key(n)] = tentativeG;
+        fScore[key(n)] = tentativeG + heuristic(n, goal);
+        if (!openSet.some(o => o.x === n.x && o.y === n.y)) openSet.push(n);
+      }
+    }
+  }
+  // 경로를 찾지 못하면(장애물로 완전히 막힘) 직선 이동으로 폴백 표시
+  return [start, goal];
+}
+
+// AGV 작업 생성 — 실제 로봇에 명령을 보내는 것이 아니라, 관리자 화면에서 진행 상황을 시뮬레이션으로 보여주기 위한 작업 큐입니다.
+app.post('/api/admin/wms/agv-tasks', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { equipment_id, task_type, from_location_id, to_location_id, product_id } = req.body;
+    if (!from_location_id || !to_location_id) {
+      return res.status(400).json({ error: 'Bad Request', message: 'from_location_id와 to_location_id는 필수입니다', timestamp: new Date().toISOString() });
+    }
+    const { data: locations, error: locErr } = await supabase.from('warehouse_locations_with').select('*');
+    if (locErr) throw locErr;
+    const fromLoc = locations.find(l => l.id === from_location_id);
+    const toLoc = locations.find(l => l.id === to_location_id);
+    if (!fromLoc || !toLoc) return res.status(404).json({ error: 'Not Found', message: '출발지 또는 도착지 로케이션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const path = computeAStarPath(locations, fromLoc, toLoc);
+
+    const { data, error } = await supabase
+      .from('agv_tasks_with')
+      .insert([{
+        equipment_id: equipment_id || null,
+        task_type: task_type || 'pick_drop',
+        from_location_id, to_location_id,
+        product_id: product_id || null,
+        status: 'queued',
+        path_points: path,
+        created_by: req.user.id
+      }])
+      .select()
+      .single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data, message: 'AGV 작업이 큐에 등록되었습니다 (시뮬레이션)', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating AGV task:', err);
+    res.status(500).json({ error: 'Failed to create AGV task', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/wms/agv-tasks', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    let query = supabase.from('agv_tasks_with').select('*, equipment_with(name, battery_pct, status)').order('created_at', { ascending: false }).limit(50);
+    if (req.query.status) query = query.eq('status', req.query.status);
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching AGV tasks:', err);
+    res.status(500).json({ error: 'Failed to fetch AGV tasks', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// AGV 작업 상태 진행 (시뮬레이션 — 관리자가 "다음 단계로" 버튼을 눌러 진행시킴: queued→in_progress→completed)
+app.patch('/api/admin/wms/agv-tasks/:id/advance', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: task, error: findErr } = await supabase.from('agv_tasks_with').select('*').eq('id', req.params.id).maybeSingle();
+    if (findErr || !task) return res.status(404).json({ error: 'Not Found', message: '작업을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const nextStatus = task.status === 'queued' ? 'in_progress' : (task.status === 'in_progress' ? 'completed' : task.status);
+    const updates = { status: nextStatus };
+    if (nextStatus === 'completed') updates.completed_at = new Date().toISOString();
+
+    const { data, error } = await supabase.from('agv_tasks_with').update(updates).eq('id', req.params.id).select().single();
+    if (error) throw error;
+
+    if (task.equipment_id) {
+      const eqUpdates = { status: nextStatus === 'completed' ? 'idle' : 'active', updated_at: new Date().toISOString() };
+      if (nextStatus === 'completed' && task.to_location_id) eqUpdates.current_location_id = task.to_location_id;
+      await supabase.from('equipment_with').update(eqUpdates).eq('id', task.equipment_id);
+    }
+
+    res.json({ success: true, data, message: '작업 상태가 갱신되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error advancing AGV task:', err);
+    res.status(500).json({ error: 'Failed to advance AGV task', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 쿠폰/할인 API (관리자가 언제든 발급/수정 가능)
+// ============================================
+
+// 쿠폰 코드는 목록으로 노출하지 않음(누구나 긁어갈 수 있으므로) - 검증 결과만 반환
+// (이미 가져온 coupon row 하나에 대해 이 사용자/이 주문금액 기준으로 사용 가능한지 판정하는 공통 로직.
+//  validateCouponForUser(코드로 조회)와 findBestCouponForUser(활성 쿠폰 전체 중 최적 1건 탐색) 양쪽에서 재사용한다)
+async function evaluateCouponEligibility(coupon, userId, orderAmount) {
+  if (!coupon.is_active) return { valid: false, reason: '더 이상 사용할 수 없는 쿠폰입니다' };
+
+  // 마케팅자동화(세그먼트 캠페인/등급유지/구매마일스톤)로 특정 회원에게만 발급된 쿠폰인 경우,
+  // target_user_ids에 포함되지 않은 회원은 코드를 알아도 사용할 수 없다(target_user_ids가 없거나
+  // 빈 배열이면 기존 쿠폰처럼 조건만 맞으면 누구나 사용 가능 - 완전히 하위호환).
+  if (Array.isArray(coupon.target_user_ids) && coupon.target_user_ids.length > 0 && !coupon.target_user_ids.includes(userId)) {
+    return { valid: false, reason: '본인에게 발급된 쿠폰이 아닙니다' };
+  }
+
+  const now = new Date();
+  if (coupon.valid_from && new Date(coupon.valid_from) > now) return { valid: false, reason: '아직 사용 기간이 시작되지 않은 쿠폰입니다' };
+  if (coupon.valid_until && new Date(coupon.valid_until) < now) return { valid: false, reason: '유효기간이 지난 쿠폰입니다' };
+
+  if (Number(orderAmount) < Number(coupon.min_order_amount || 0)) {
+    return { valid: false, reason: `최소 주문 금액 ${Number(coupon.min_order_amount).toLocaleString('ko-KR')}원 이상부터 사용 가능합니다` };
+  }
+
+  if (coupon.usage_limit !== null && coupon.used_count >= coupon.usage_limit) {
+    return { valid: false, reason: '쿠폰 사용 가능 횟수를 모두 소진했습니다' };
+  }
+
+  const { count: userUsedCount, error: countErr } = await supabase
+    .from('coupon_redemptions')
+    .select('id', { count: 'exact', head: true })
+    .eq('coupon_id', coupon.id)
+    .eq('user_id', userId);
+  if (countErr) throw countErr;
+  if ((userUsedCount || 0) >= coupon.per_user_limit) {
+    return { valid: false, reason: '이미 이 쿠폰을 사용하셨습니다 (1인당 사용 횟수 초과)' };
+  }
+
+  let discountAmount = coupon.discount_type === 'percent'
+    ? Math.floor(Number(orderAmount) * (Number(coupon.discount_value) / 100))
+    : Math.floor(Number(coupon.discount_value));
+  if (coupon.max_discount_amount !== null && discountAmount > Number(coupon.max_discount_amount)) {
+    discountAmount = Number(coupon.max_discount_amount);
+  }
+  discountAmount = Math.min(discountAmount, Number(orderAmount));
+
+  return { valid: true, coupon, discountAmount };
+}
+
+async function validateCouponForUser(code, userId, orderAmount) {
+  if (!code) return { valid: false, reason: '쿠폰 코드를 입력해주세요' };
+
+  const { data: coupon, error } = await supabase
+    .from('coupons')
+    .select('*')
+    .eq('code', String(code).trim().toUpperCase())
+    .single();
+
+  if (error || !coupon) return { valid: false, reason: '존재하지 않는 쿠폰 코드입니다' };
+  return evaluateCouponEligibility(coupon, userId, orderAmount);
+}
+
+// 이 사용자가 지금 이 주문 금액으로 실제 사용 가능한 쿠폰 중 할인액이 가장 큰 1건을 찾는다.
+// (코드를 모르는 사용자도 자동으로 혜택을 받을 수 있게 하기 위함 - 단, 코드 자체를 목록으로 응답하지 않고
+//  "지금 이 사람에게 적용 가능한 것"만 서버가 판단해서 딱 1건만 돌려주므로 전체 쿠폰 목록 유출과는 다르다)
+async function findBestCouponForUser(userId, orderAmount) {
+  const { data: activeCoupons, error } = await supabase
+    .from('coupons')
+    .select('*')
+    .eq('is_active', true);
+  if (error || !activeCoupons || activeCoupons.length === 0) return null;
+
+  let best = null;
+  for (const coupon of activeCoupons) {
+    const result = await evaluateCouponEligibility(coupon, userId, orderAmount);
+    if (result.valid && (!best || result.discountAmount > best.discountAmount)) {
+      best = result;
+    }
+  }
+  return best;
+}
+
+// 회원: 쿠폰 코드 검증 (실제 적용 전 미리보기)
+app.post('/api/coupons/validate', authenticate, async (req, res) => {
+  try {
+    const { code, order_amount } = req.body;
+    if (order_amount === undefined || isNaN(Number(order_amount))) {
+      return res.status(400).json({ error: 'Bad Request', message: 'order_amount가 필요합니다', timestamp: new Date().toISOString() });
+    }
+    const result = await validateCouponForUser(code, req.user.id, Number(order_amount));
+    if (!result.valid) {
+      return res.status(400).json({ success: false, message: result.reason, timestamp: new Date().toISOString() });
+    }
+    res.json({
+      success: true,
+      data: {
+        code: result.coupon.code,
+        label: result.coupon.label,
+        discountAmount: result.discountAmount,
+        finalAmount: Number(order_amount) - result.discountAmount
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error validating coupon:', err);
+    res.status(500).json({ error: 'Failed to validate coupon', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 회원: 지금 이 주문 금액으로 사용 가능한 쿠폰이 있는지 자동으로 찾아준다 (장바구니에서 코드를 몰라도 자동 적용 안내에 사용)
+// 전체 쿠폰 목록을 노출하는 것이 아니라, 이 사용자에게 지금 적용 가능한 것 중 가장 할인액이 큰 1건만 돌려준다
+app.get('/api/coupons/best-available', authenticate, async (req, res) => {
+  try {
+    const orderAmount = Number(req.query.amount);
+    if (!Number.isFinite(orderAmount) || orderAmount <= 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'amount가 필요합니다', timestamp: new Date().toISOString() });
+    }
+    const best = await findBestCouponForUser(req.user.id, orderAmount);
+    if (!best) {
+      return res.json({ success: true, data: null, timestamp: new Date().toISOString() });
+    }
+    res.json({
+      success: true,
+      data: {
+        code: best.coupon.code,
+        label: best.coupon.label,
+        discountAmount: best.discountAmount,
+        finalAmount: orderAmount - best.discountAmount
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error finding best available coupon:', err);
+    res.status(500).json({ error: 'Failed to find best coupon', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 쿠폰 목록
+app.get('/api/admin/coupons', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('coupons').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], count: data?.length || 0, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching coupons:', err);
+    res.status(500).json({ error: 'Failed to fetch coupons', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 쿠폰 생성
+app.post('/api/admin/coupons', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { code, label, discount_type, discount_value, max_discount_amount, min_order_amount, usage_limit, per_user_limit, valid_from, valid_until } = req.body;
+    if (!code || !label || !discount_type || !discount_value) {
+      return res.status(400).json({ error: 'Bad Request', message: 'Required fields: code, label, discount_type, discount_value', timestamp: new Date().toISOString() });
+    }
+    if (!['percent', 'fixed'].includes(discount_type)) {
+      return res.status(400).json({ error: 'Bad Request', message: "discount_type은 'percent' 또는 'fixed'여야 합니다", timestamp: new Date().toISOString() });
+    }
+
+    const { data, error } = await supabase
+      .from('coupons')
+      .insert([{
+        code: String(code).trim().toUpperCase(),
+        label,
+        discount_type,
+        discount_value: Number(discount_value),
+        max_discount_amount: max_discount_amount ? Number(max_discount_amount) : null,
+        min_order_amount: min_order_amount ? Number(min_order_amount) : 0,
+        usage_limit: usage_limit ? Number(usage_limit) : null,
+        per_user_limit: per_user_limit ? Number(per_user_limit) : 1,
+        valid_from: valid_from || new Date().toISOString(),
+        valid_until: valid_until || null,
+        is_active: true,
+        created_by: req.user.id
+      }])
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'Conflict', message: '이미 존재하는 쿠폰 코드입니다', timestamp: new Date().toISOString() });
+      }
+      throw error;
+    }
+    res.status(201).json({ success: true, data, message: '쿠폰이 생성되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating coupon:', err);
+    res.status(500).json({ error: 'Failed to create coupon', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 쿠폰 수정
+app.put('/api/admin/coupons/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { label, discount_type, discount_value, max_discount_amount, min_order_amount, usage_limit, per_user_limit, valid_from, valid_until, is_active } = req.body;
+    const updates = { updated_at: new Date().toISOString() };
+    if (label !== undefined) updates.label = label;
+    if (discount_type !== undefined) {
+      if (!['percent', 'fixed'].includes(discount_type)) {
+        return res.status(400).json({ error: 'Bad Request', message: "discount_type은 'percent' 또는 'fixed'여야 합니다", timestamp: new Date().toISOString() });
+      }
+      updates.discount_type = discount_type;
+    }
+    if (discount_value !== undefined) updates.discount_value = Number(discount_value);
+    if (max_discount_amount !== undefined) updates.max_discount_amount = max_discount_amount === null || max_discount_amount === '' ? null : Number(max_discount_amount);
+    if (min_order_amount !== undefined) updates.min_order_amount = Number(min_order_amount) || 0;
+    if (usage_limit !== undefined) updates.usage_limit = usage_limit === null || usage_limit === '' ? null : Number(usage_limit);
+    if (per_user_limit !== undefined) updates.per_user_limit = Number(per_user_limit) || 1;
+    if (valid_from !== undefined) updates.valid_from = valid_from;
+    if (valid_until !== undefined) updates.valid_until = valid_until || null;
+    if (is_active !== undefined) updates.is_active = !!is_active;
+
+    const { data, error } = await supabase.from('coupons').update(updates).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: 'Coupon not found', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, message: '쿠폰이 수정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating coupon:', err);
+    res.status(500).json({ error: 'Failed to update coupon', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 쿠폰 삭제
+app.delete('/api/admin/coupons/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { error } = await supabase.from('coupons').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true, message: '쿠폰이 삭제되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting coupon:', err);
+    res.status(500).json({ error: 'Failed to delete coupon', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 📢 마케팅자동화 - 세그먼트 캠페인 + 등급유지/구매마일스톤 자동 쿠폰
+// - 기존 coupons 테이블에 target_user_ids(특정 회원에게만 발급)를 추가해 그대로 재사용한다(위의
+//   evaluateCouponEligibility에서 이미 검증 로직을 추가해뒀다) - 새로운 "쿠폰함" 시스템을 따로 만들지
+//   않고, 회원이 체크아웃에서 코드를 입력(또는 findBestCouponForUser로 자동 적용)하는 기존 흐름을 그대로 탄다.
+// - 등급은 profiles에 저장되는 값이 아니라 누적 구매액으로 매번 계산되는 값(resolveMemberGrade)이라
+//   "등급이 바뀌는 순간"을 이벤트로 잡을 수 없다. 그래서 "지금 이 등급을 유지하고 있는 회원 중 이번
+//   달에 아직 못 받은 사람"을 매일 스캔하는 방식으로 구현했다(이벤트 기반보다 놓치는 경우가 없고,
+//   coupon_automation_issuances_with의 유니크 제약(rule_id, user_id, period_key)이 중복 발급을
+//   DB 레벨에서 원천 차단한다).
+// ============================================
+
+// 회원 세그먼트(등급/누적구매액/주문건수/미구매기간/가입일)를 조건에 맞춰 찾아준다.
+// 세그먼트 캠페인 미리보기/발송과 자동 쿠폰 규칙(등급유지/구매마일스톤) 스캔이 모두 이 함수를 재사용한다.
+async function computeSegmentMatches(filter = {}) {
+  const grades = await getMemberGrades();
+  const { data: profiles, error: profErr } = await supabase
+    .from('profiles')
+    .select('id, email, full_name, is_active, created_at')
+    .or('is_active.is.null,is_active.eq.true'); // is_active를 아직 안 쓰는 기존 회원(null)은 활성으로 취급 - 기존 관행과 동일
+  if (profErr) throw profErr;
+
+  const userIds = (profiles || []).map(p => p.id);
+  const ordersByUser = {};
+  if (userIds.length > 0) {
+    const { data: orders, error: ordErr } = await supabase
+      .from('orders_with')
+      .select('user_id, final_price, status, created_at')
+      .in('user_id', userIds)
+      .not('status', 'in', '(cancelled,refunded)'); // 취소/환불은 등급과 마찬가지로 실적에서 제외 (getUserCumulativeSpent와 동일한 기준)
+    if (ordErr) throw ordErr;
+    (orders || []).forEach(o => {
+      if (!ordersByUser[o.user_id]) ordersByUser[o.user_id] = { orderCount: 0, totalSpent: 0, lastOrderAt: null };
+      const s = ordersByUser[o.user_id];
+      s.orderCount += 1;
+      s.totalSpent += Number(o.final_price || 0);
+      if (!s.lastOrderAt || new Date(o.created_at) > new Date(s.lastOrderAt)) s.lastOrderAt = o.created_at;
+    });
+  }
+
+  const nowMs = Date.now();
+  const matched = [];
+  for (const p of profiles || []) {
+    const stats = ordersByUser[p.id] || { orderCount: 0, totalSpent: 0, lastOrderAt: null };
+    const { current } = resolveMemberGrade(stats.totalSpent, grades);
+
+    if (Array.isArray(filter.grades) && filter.grades.length > 0 && !filter.grades.includes(current.key)) continue;
+    if (filter.minTotalSpent != null && filter.minTotalSpent !== '' && stats.totalSpent < Number(filter.minTotalSpent)) continue;
+    if (filter.maxTotalSpent != null && filter.maxTotalSpent !== '' && stats.totalSpent > Number(filter.maxTotalSpent)) continue;
+    if (filter.minOrderCount != null && filter.minOrderCount !== '' && stats.orderCount < Number(filter.minOrderCount)) continue;
+    if (filter.maxOrderCount != null && filter.maxOrderCount !== '' && stats.orderCount > Number(filter.maxOrderCount)) continue;
+    if (filter.noPurchaseSinceDays != null && filter.noPurchaseSinceDays !== '') {
+      // "N일 이상 미구매(재구매 유도)"는 구매 이력이 있는데 오래 뜸한 회원이 대상이다 - 한 번도
+      // 구매한 적 없는 회원은 "미구매 회원"이라는 별개의 세그먼트이므로 여기서는 제외한다.
+      const cutoff = nowMs - Number(filter.noPurchaseSinceDays) * 24 * 60 * 60 * 1000;
+      if (!stats.lastOrderAt || new Date(stats.lastOrderAt).getTime() > cutoff) continue;
+    }
+    if (filter.joinedAfter && new Date(p.created_at) < new Date(filter.joinedAfter)) continue;
+    if (filter.joinedBefore && new Date(p.created_at) > new Date(filter.joinedBefore)) continue;
+
+    matched.push({
+      id: p.id, email: p.email, full_name: p.full_name, grade: current.key,
+      totalSpent: stats.totalSpent, orderCount: stats.orderCount, lastOrderAt: stats.lastOrderAt, createdAt: p.created_at
+    });
+  }
+  return matched;
+}
+
+function generateAutoCouponCode(prefix) {
+  return `${prefix}-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+}
+
+const COUPON_TEMPLATE_FIELDS_REQUIRED = ['label', 'discount_type', 'discount_value'];
+function validateCouponTemplate(t) {
+  if (!t || typeof t !== 'object') return '쿠폰 내용(coupon_template)이 필요합니다';
+  for (const f of COUPON_TEMPLATE_FIELDS_REQUIRED) if (!t[f]) return `쿠폰 내용에 ${f}가 필요합니다`;
+  if (!['percent', 'fixed'].includes(t.discount_type)) return "discount_type은 'percent' 또는 'fixed'여야 합니다";
+  if (!(Number(t.discount_value) > 0)) return 'discount_value는 0보다 커야 합니다';
+  return null;
+}
+
+// 대상 회원 목록에게 쿠폰 1건을 발급(target_user_ids로 그 사람들만 사용 가능하게 제한)하고 알림까지 보낸다.
+async function issueCouponForBatch(userIds, template, source, { codePrefix = 'AUTO', notifyTitle, notifyMessage } = {}) {
+  if (!userIds || userIds.length === 0) return null;
+  const validDays = Number(template.valid_days) > 0 ? Number(template.valid_days) : 30;
+  const { data: coupon, error } = await supabase.from('coupons').insert([{
+    code: generateAutoCouponCode(codePrefix),
+    label: template.label || '자동 발급 쿠폰',
+    discount_type: template.discount_type === 'percent' ? 'percent' : 'fixed',
+    discount_value: Number(template.discount_value) || 0,
+    max_discount_amount: template.max_discount_amount ? Number(template.max_discount_amount) : null,
+    min_order_amount: Number(template.min_order_amount) || 0,
+    per_user_limit: Number(template.per_user_limit) > 0 ? Number(template.per_user_limit) : 1,
+    valid_from: new Date().toISOString(),
+    valid_until: new Date(Date.now() + validDays * 24 * 60 * 60 * 1000).toISOString(),
+    is_active: true,
+    target_user_ids: userIds,
+    source
+  }]).select().single();
+  if (error) throw error;
+
+  const notifRows = userIds.map(uid => ({
+    user_id: uid,
+    type: 'marketing_coupon',
+    title: notifyTitle || `${coupon.label} 지급 안내`,
+    message: notifyMessage || `쿠폰(${coupon.code})이 발급되었습니다. 마이페이지에서 확인해보세요.`,
+    link: '/mypage.html'
+  }));
+  const { error: notifErr } = await supabase.from('notifications_with').insert(notifRows);
+  if (notifErr) console.error('Error sending marketing coupon notifications:', notifErr); // 알림 실패는 쿠폰 발급 자체를 막지 않음
+
+  return coupon;
+}
+
+// 관리자: 세그먼트 미리보기 (실제 쿠폰을 발급하지 않고, 조건에 맞는 회원 수/샘플만 확인)
+app.post('/api/admin/marketing/segment-preview', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const matches = await computeSegmentMatches(req.body || {});
+    res.json({
+      success: true,
+      data: {
+        matchedCount: matches.length,
+        sample: matches.slice(0, 20).map(m => ({ email: m.email, full_name: m.full_name, grade: m.grade, totalSpent: m.totalSpent, orderCount: m.orderCount }))
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error previewing segment:', err);
+    res.status(500).json({ error: 'Failed to preview segment', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 세그먼트 캠페인 발송 (조건에 맞는 회원 전체에게 타겟 쿠폰 1건 발급 + 알림 발송)
+app.post('/api/admin/marketing/campaigns', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { name, segment_filter, coupon } = req.body;
+    if (!name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: '캠페인 이름이 필요합니다', timestamp: new Date().toISOString() });
+    }
+    const templateErr = validateCouponTemplate(coupon);
+    if (templateErr) return res.status(400).json({ error: 'Bad Request', message: templateErr, timestamp: new Date().toISOString() });
+
+    const matches = await computeSegmentMatches(segment_filter || {});
+    if (matches.length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '조건에 맞는 회원이 없습니다. 조건을 조정해주세요.', timestamp: new Date().toISOString() });
+    }
+
+    const issuedCoupon = await issueCouponForBatch(matches.map(m => m.id), coupon, 'segment_campaign', {
+      codePrefix: 'CAMP',
+      notifyTitle: `[${name}] 쿠폰이 도착했어요`,
+      notifyMessage: `"${name}" 캠페인으로 쿠폰(${coupon.label})이 발급되었습니다. 마이페이지에서 확인해보세요.`
+    });
+
+    const { data: campaign, error: campErr } = await supabase.from('marketing_campaigns_with').insert([{
+      name: String(name).trim(),
+      segment_filter: segment_filter || {},
+      matched_user_count: matches.length,
+      coupon_id: issuedCoupon.id,
+      created_by: req.user.id
+    }]).select().single();
+    if (campErr) throw campErr;
+
+    await supabase.from('coupons').update({ campaign_id: campaign.id }).eq('id', issuedCoupon.id);
+
+    res.status(201).json({
+      success: true,
+      data: { campaign, coupon: issuedCoupon, matchedCount: matches.length },
+      message: `${matches.length}명에게 쿠폰이 발급되었습니다`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error creating marketing campaign:', err);
+    res.status(500).json({ error: 'Failed to create campaign', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 캠페인 이력 (발급 쿠폰의 사용 현황 포함)
+app.get('/api/admin/marketing/campaigns', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    // coupons 테이블과는 두 개의 FK 관계가 있어(campaigns.coupon_id -> coupons.id, coupons.campaign_id ->
+    // campaigns.id) PostgREST가 임베딩을 자동으로 고르지 못한다. 캠페인이 실제로 발급한 쿠폰 1건을 가리키는
+    // coupon_id 관계(marketing_campaigns_with_coupon_id_fkey)를 명시해 모호함을 해소한다.
+    const { data: campaigns, error } = await supabase
+      .from('marketing_campaigns_with')
+      .select('*, coupons!marketing_campaigns_with_coupon_id_fkey(code, label, used_count, is_active, valid_until)')
+      .order('created_at', { ascending: false })
+      .limit(100);
+    if (error) throw error;
+    res.json({ success: true, data: campaigns || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching marketing campaigns:', err);
+    res.status(500).json({ error: 'Failed to fetch campaigns', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 자동 쿠폰 규칙 CRUD (등급유지 grade / 구매마일스톤 purchase_milestone)
+app.get('/api/admin/marketing/automation-rules', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('coupon_automation_rules_with').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching automation rules:', err);
+    res.status(500).json({ error: 'Failed to fetch automation rules', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/marketing/automation-rules', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { rule_type, rule_config, coupon_template, enabled } = req.body;
+    if (!['grade', 'purchase_milestone'].includes(rule_type)) {
+      return res.status(400).json({ error: 'Bad Request', message: "rule_type은 'grade' 또는 'purchase_milestone'이어야 합니다", timestamp: new Date().toISOString() });
+    }
+    if (rule_type === 'grade' && !rule_config?.grade_key) {
+      return res.status(400).json({ error: 'Bad Request', message: 'grade 규칙은 rule_config.grade_key가 필요합니다', timestamp: new Date().toISOString() });
+    }
+    if (rule_type === 'purchase_milestone' && !(Number(rule_config?.order_count) > 0)) {
+      return res.status(400).json({ error: 'Bad Request', message: 'purchase_milestone 규칙은 rule_config.order_count(양의 정수)가 필요합니다', timestamp: new Date().toISOString() });
+    }
+    const templateErr = validateCouponTemplate(coupon_template);
+    if (templateErr) return res.status(400).json({ error: 'Bad Request', message: templateErr, timestamp: new Date().toISOString() });
+
+    const { data, error } = await supabase.from('coupon_automation_rules_with').insert([{
+      rule_type, rule_config: rule_config || {}, coupon_template, enabled: enabled === undefined ? true : !!enabled, created_by: req.user.id
+    }]).select().single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data, message: '자동 쿠폰 규칙이 생성되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating automation rule:', err);
+    res.status(500).json({ error: 'Failed to create automation rule', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/marketing/automation-rules/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { rule_config, coupon_template, enabled } = req.body;
+    const updates = { updated_at: new Date().toISOString() };
+    if (rule_config !== undefined) updates.rule_config = rule_config;
+    if (coupon_template !== undefined) {
+      const templateErr = validateCouponTemplate(coupon_template);
+      if (templateErr) return res.status(400).json({ error: 'Bad Request', message: templateErr, timestamp: new Date().toISOString() });
+      updates.coupon_template = coupon_template;
+    }
+    if (enabled !== undefined) updates.enabled = !!enabled;
+    const { data, error } = await supabase.from('coupon_automation_rules_with').update(updates).eq('id', req.params.id).select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '규칙을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, message: '규칙이 수정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating automation rule:', err);
+    res.status(500).json({ error: 'Failed to update automation rule', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.delete('/api/admin/marketing/automation-rules/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { error } = await supabase.from('coupon_automation_rules_with').delete().eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true, message: '규칙이 삭제되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting automation rule:', err);
+    res.status(500).json({ error: 'Failed to delete automation rule', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+function currentGradePeriodKey() {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+// 이번 달에 아직 이 규칙으로 쿠폰을 못 받은, "지금 이 등급을 유지 중인" 회원들을 찾아 한 번에 발급한다.
+// 매일 스캔하지만 이미 이번 달에 받은 회원은 유니크 제약(rule_id, user_id, period_key)으로 걸러지므로
+// 하루에 몇 번을 돌려도(수동 재실행 포함) 같은 회원에게 중복 발급되지 않는다.
+async function runGradeCouponScan() {
+  const result = { rulesProcessed: 0, couponsIssued: 0, usersNotified: 0 };
+  const { data: rules, error } = await supabase.from('coupon_automation_rules_with').select('*').eq('rule_type', 'grade').eq('enabled', true);
+  if (error) { console.error('Error fetching grade coupon rules:', error); return result; }
+  const periodKey = currentGradePeriodKey();
+
+  for (const rule of rules || []) {
+    result.rulesProcessed++;
+    try {
+      const targetGrade = rule.rule_config?.grade_key;
+      if (!targetGrade) continue;
+
+      const { data: already } = await supabase.from('coupon_automation_issuances_with').select('user_id').eq('rule_id', rule.id).eq('period_key', periodKey);
+      const alreadyIds = new Set((already || []).map(r => r.user_id));
+
+      const matches = await computeSegmentMatches({ grades: [targetGrade] });
+      const newUsers = matches.filter(m => !alreadyIds.has(m.id));
+      if (newUsers.length === 0) continue;
+
+      const coupon = await issueCouponForBatch(newUsers.map(u => u.id), rule.coupon_template, 'auto_grade', {
+        codePrefix: 'GRADE',
+        notifyTitle: `${rule.coupon_template.label || '등급 혜택'} 쿠폰 지급`,
+        notifyMessage: `등급 유지 혜택으로 쿠폰이 발급되었습니다. 마이페이지에서 확인해보세요.`
+      });
+      const issuanceRows = newUsers.map(u => ({ rule_id: rule.id, user_id: u.id, period_key: periodKey, coupon_id: coupon.id }));
+      const { error: insErr } = await supabase.from('coupon_automation_issuances_with').insert(issuanceRows);
+      if (insErr) { console.error('Error logging grade coupon issuance:', insErr); continue; }
+
+      result.couponsIssued++;
+      result.usersNotified += newUsers.length;
+    } catch (ruleErr) {
+      console.error(`Error processing grade coupon rule ${rule.id}:`, ruleErr);
+    }
+  }
+  return result;
+}
+
+// N번째 구매를 정확히 달성한(그 이상은 대상 아님 - 1회성 마일스톤) 회원 중 아직 못 받은 사람을 찾아 발급한다.
+async function runPurchaseMilestoneScan() {
+  const result = { rulesProcessed: 0, couponsIssued: 0, usersNotified: 0 };
+  const { data: rules, error } = await supabase.from('coupon_automation_rules_with').select('*').eq('rule_type', 'purchase_milestone').eq('enabled', true);
+  if (error) { console.error('Error fetching milestone coupon rules:', error); return result; }
+
+  for (const rule of rules || []) {
+    result.rulesProcessed++;
+    try {
+      const milestone = Number(rule.rule_config?.order_count);
+      if (!Number.isFinite(milestone) || milestone <= 0) continue;
+      const periodKey = String(milestone); // 마일스톤은 평생 1번만 - "몇 번째 구매"가 곧 기간 키
+
+      const matches = await computeSegmentMatches({ minOrderCount: milestone, maxOrderCount: milestone });
+      if (matches.length === 0) continue;
+
+      const { data: already } = await supabase.from('coupon_automation_issuances_with').select('user_id').eq('rule_id', rule.id).eq('period_key', periodKey);
+      const alreadyIds = new Set((already || []).map(r => r.user_id));
+      const newUsers = matches.filter(m => !alreadyIds.has(m.id));
+      if (newUsers.length === 0) continue;
+
+      const coupon = await issueCouponForBatch(newUsers.map(u => u.id), rule.coupon_template, 'auto_milestone', {
+        codePrefix: 'MILE',
+        notifyTitle: `${milestone}번째 구매 축하 쿠폰`,
+        notifyMessage: `${milestone}번째 구매를 축하하는 쿠폰이 발급되었습니다. 마이페이지에서 확인해보세요.`
+      });
+      const issuanceRows = newUsers.map(u => ({ rule_id: rule.id, user_id: u.id, period_key: periodKey, coupon_id: coupon.id }));
+      const { error: insErr } = await supabase.from('coupon_automation_issuances_with').insert(issuanceRows);
+      if (insErr) { console.error('Error logging milestone coupon issuance:', insErr); continue; }
+
+      result.couponsIssued++;
+      result.usersNotified += newUsers.length;
+    } catch (ruleErr) {
+      console.error(`Error processing milestone coupon rule ${rule.id}:`, ruleErr);
+    }
+  }
+  return result;
+}
+
+// 매일 새벽 3시 자동 스캔 (규칙이 없거나 모두 비활성화면 각 함수 내부에서 즉시 빈 결과로 반환)
+cron.schedule('0 3 * * *', () => {
+  runGradeCouponScan().catch(err => console.error('Grade coupon cron error:', err));
+  runPurchaseMilestoneScan().catch(err => console.error('Milestone coupon cron error:', err));
+});
+
+// 관리자: 지금 즉시 1회 실행 (다음 새벽까지 기다리지 않고 바로 확인하고 싶을 때). 이 규칙과 같은 종류
+// (등급유지 또는 구매마일스톤)의 활성화된 규칙 전체를 한 번에 스캔한다 - 어차피 이미 발급받은 회원은
+// 유니크 제약으로 걸러지므로 다른 규칙까지 함께 스캔돼도 결과에는 영향이 없고, 매일 새벽 자동 스캔과
+// 완전히 동일한 로직을 재사용해 두 경로의 동작이 어긋나지 않는다.
+app.post('/api/admin/marketing/automation-rules/:id/run-now', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: rule, error } = await supabase.from('coupon_automation_rules_with').select('*').eq('id', req.params.id).maybeSingle();
+    if (error) throw error;
+    if (!rule) return res.status(404).json({ error: 'Not Found', message: '규칙을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    let result;
+    if (rule.rule_type === 'grade') {
+      result = await runGradeCouponScan();
+    } else {
+      result = await runPurchaseMilestoneScan();
+    }
+    res.json({ success: true, data: result, message: '실행되었습니다 (같은 종류의 활성화된 규칙 전체를 함께 스캔했습니다)', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error running automation rule now:', err);
+    res.status(500).json({ error: 'Failed to run automation rule', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 주문 API
+// ============================================
+
+// 사용자의 주문 조회
+app.get('/api/orders', authenticate, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('orders_with')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      data: data || [],
+      count: data?.length || 0,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching orders:', err);
+    res.status(500).json({
+      error: 'Failed to fetch orders',
+      message: err.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// 주문 생성
+app.post('/api/orders', authenticate, async (req, res) => {
+  try {
+    const { items, community_id, shipping_address, payment_method, coupon_code, use_mileage } = req.body;
+
+    if (!items || !Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Items array is required and must not be empty',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 커뮤니티 적립을 받으려면 실제로 그 커뮤니티에 가입되어 있어야 한다 - 클라이언트가 임의의 community_id를
+    // 직접 API에 보내는 것을 막기 위해 서버에서도 다시 한번 검증한다 (화면에는 가입한 커뮤니티만 표시되지만,
+    // API를 직접 호출할 가능성까지 고려한 방어)
+    if (community_id) {
+      const { data: membership } = await supabase
+        .from('community_members')
+        .select('id')
+        .eq('community_id', community_id)
+        .eq('user_id', req.user.id)
+        .eq('status', 'active')
+        .maybeSingle();
+      if (!membership) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: '가입되지 않은 커뮤니티입니다. 먼저 해당 커뮤니티에 가입해주세요.',
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+
+    // 재고 검증 - 상품별로 옵션(사이즈/색상 등)이 있으면 반드시 옵션을 선택해야 하고, 그 옵션의 재고를 확인한다.
+    // (여기서는 "충분히 있어 보이는지" 사전 확인만 하고, 실제 차감은 주문 생성 성공 뒤 원자적으로 처리한다 - 동시 주문 대비)
+    // product_id가 UUID 형식이 아니면(예: 잘못된 클라이언트 요청) DB 조회 자체가 500 에러로 죽으므로,
+    // UUID 형식이 아닌 값은 애초에 "존재하지 않는 상품"으로 취급해 조용히 400으로 처리한다.
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const requestedProductIds = [...new Set(items.map(i => i.product_id).filter(Boolean))];
+    const productIds = requestedProductIds.filter(id => UUID_RE.test(id));
+    const productMap = {};
+    const variantsByProduct = {};
+    if (productIds.length > 0) {
+      const { data: orderProducts, error: prodErr } = await supabase
+        .from('products_with')
+        .select('id, name, price, stock, status')
+        .in('id', productIds);
+      if (prodErr) throw prodErr;
+      (orderProducts || []).forEach(p => { productMap[p.id] = p; });
+
+      const { data: allVariants, error: varErr } = await supabase
+        .from('product_variants_with')
+        .select('id, product_id, name, price_adjustment, stock, is_active')
+        .in('product_id', productIds)
+        .eq('is_active', true);
+      if (varErr) throw varErr;
+      (allVariants || []).forEach(v => {
+        if (!variantsByProduct[v.product_id]) variantsByProduct[v.product_id] = [];
+        variantsByProduct[v.product_id].push(v);
+      });
+    }
+
+    // 🔒 보안: 상품 가격은 절대 클라이언트(브라우저)가 보낸 값을 신뢰하지 않는다. 여기서 검증하면서
+    // 동시에 DB의 실제 판매가(옵션이 있으면 옵션 가격조정 포함)로 다시 계산한 "검증된 주문항목"을
+    // 새로 만들어, 이후 총액 계산·주문 저장에는 이 값만 사용한다. (이전에는 item.price를 그대로 믿어서
+    // 브라우저 요청을 조작하면 임의의 가격으로 결제가 성립하는 취약점이 있었다 - 형님이 요청하신 격차분석에서 발견)
+    const verifiedItems = [];
+    for (const item of items) {
+      if (!item.product_id) continue;
+      const product = productMap[item.product_id];
+      if (!product || product.status !== 'active') {
+        return res.status(400).json({ error: 'Bad Request', message: `판매 중이 아닌 상품이 포함되어 있습니다: ${item.name || item.product_id}`, timestamp: new Date().toISOString() });
+      }
+      const variants = variantsByProduct[item.product_id] || [];
+      const qty = Number(item.quantity) || 1;
+      let unitPrice = Number(product.price) || 0;
+      let variantLabel = '';
+
+      if (variants.length > 0) {
+        if (!item.variant_id) {
+          return res.status(400).json({ error: 'Bad Request', message: `옵션을 선택해주세요: ${product.name}`, timestamp: new Date().toISOString() });
+        }
+        const variant = variants.find(v => v.id === item.variant_id);
+        if (!variant) {
+          return res.status(400).json({ error: 'Bad Request', message: `선택한 옵션을 찾을 수 없습니다: ${product.name}`, timestamp: new Date().toISOString() });
+        }
+        if (Number(variant.stock) < qty) {
+          return res.status(400).json({ error: 'Bad Request', message: `재고가 부족합니다: ${product.name} (${variant.name})`, timestamp: new Date().toISOString() });
+        }
+        unitPrice += Number(variant.price_adjustment) || 0;
+        variantLabel = ` (${variant.name})`;
+      } else if (Number(product.stock) < qty) {
+        return res.status(400).json({ error: 'Bad Request', message: `재고가 부족합니다: ${product.name}`, timestamp: new Date().toISOString() });
+      }
+
+      verifiedItems.push({
+        product_id: item.product_id,
+        variant_id: item.variant_id || null,
+        name: product.name + variantLabel,
+        price: unitPrice,
+        quantity: qty
+      });
+    }
+
+    // 총액 계산 - verifiedItems(서버가 재검증한 가격)만 사용
+    let totalPrice = 0;
+    for (const item of verifiedItems) {
+      totalPrice += item.price * item.quantity;
+    }
+
+    // 쿠폰 적용 (있는 경우) - 주문 생성 시점에 서버에서 다시 한번 검증(레이스 컨디션/중복사용 방지)
+    let discountAmount = 0;
+    let appliedCoupon = null;
+    if (coupon_code) {
+      const couponResult = await validateCouponForUser(coupon_code, req.user.id, totalPrice);
+      if (!couponResult.valid) {
+        return res.status(400).json({ error: 'Bad Request', message: couponResult.reason, timestamp: new Date().toISOString() });
+      }
+      discountAmount = couponResult.discountAmount;
+      appliedCoupon = couponResult.coupon;
+    }
+    const amountAfterCoupon = totalPrice - discountAmount;
+
+    // 마일리지 사용 (있는 경우) - 클라이언트가 보낸 값을 그대로 믿지 않고, 실제 보유 잔액과 주문 금액 범위 내에서만 사용을 허용한다
+    // (배송비에는 마일리지를 사용할 수 없다 - 다른 쇼핑몰들의 일반적인 관행과 동일하게 상품 금액까지만 적용)
+    let usedMileage = 0;
+    if (use_mileage !== undefined && use_mileage !== null && Number(use_mileage) > 0) {
+      usedMileage = Math.floor(Number(use_mileage));
+      if (!Number.isFinite(usedMileage) || usedMileage < 0) {
+        return res.status(400).json({ error: 'Bad Request', message: '사용할 마일리지 값이 올바르지 않습니다', timestamp: new Date().toISOString() });
+      }
+      const availableMileage = await getUserMileageBalance(req.user.id);
+      if (usedMileage > availableMileage) {
+        return res.status(400).json({ error: 'Bad Request', message: `보유 마일리지(${availableMileage.toLocaleString('ko-KR')}원)보다 많이 사용할 수 없습니다`, timestamp: new Date().toISOString() });
+      }
+      if (usedMileage > amountAfterCoupon) {
+        usedMileage = amountAfterCoupon; // 결제 금액을 초과해 사용할 수 없으므로 자동으로 결제 금액만큼만 사용 처리
+      }
+    }
+    const productPaymentAmount = amountAfterCoupon - usedMileage; // 마일리지 적립 기준 금액 (배송비 제외 - 배송비에는 적립도 되지 않음)
+
+    // 배송비 계산 - 클라이언트가 보낸 값은 절대 신뢰하지 않고, 서버가 상품 합계금액과 배송지 우편번호로 직접 계산한다
+    const shippingPolicy = await getShippingPolicy();
+    const shippingPostal = shipping_address && shipping_address.postal_code ? shipping_address.postal_code : null;
+    const shippingCalc = calcShippingFee(shippingPolicy, totalPrice, shippingPostal);
+    const finalPrice = productPaymentAmount + shippingCalc.fee;
+
+    // WITH+ 마일리지 적립 계산: 할인+마일리지 사용까지 반영한 실제 상품 결제 금액 기준(마일리지로 낸 금액과 배송비에는 적립되지 않도록),
+    // 개인 적립율(항상) + 커뮤니티 참여 시 추가 적립율
+    // (분양 조직이 자체 적립율을 지정해두었으면 그 값 우선, 아니면 플랫폼 기본값 - getEffectiveMileageRates 참고)
+    // + 회원 등급 혜택: 이 주문 이전까지의 누적 구매액으로 등급을 산정해 개인 적립율에 등급 보너스(%p)를 더해준다
+    const mileageRates = await getEffectiveMileageRates(community_id || null);
+    const [memberGrades, totalSpentSoFar] = await Promise.all([getMemberGrades(), getUserCumulativeSpent(req.user.id)]);
+    const { current: memberGrade } = resolveMemberGrade(totalSpentSoFar, memberGrades);
+    const personalRateWithGrade = mileageRates.personal + Number(memberGrade.bonus_personal_rate || 0);
+    const personalEarnedPoints = Math.floor(productPaymentAmount * personalRateWithGrade);
+    const communityEarnedPoints = community_id ? Math.floor(productPaymentAmount * mileageRates.community) : 0;
+
+    // 주문번호 생성
+    const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+
+    const { data, error } = await supabase
+      .from('orders_with')
+      .insert([{
+        order_number: orderNumber,
+        user_id: req.user.id,
+        community_id: community_id || null,
+        items: verifiedItems,
+        total_price: totalPrice,
+        final_price: finalPrice,
+        coupon_code: appliedCoupon ? appliedCoupon.code : null,
+        discount_amount: discountAmount,
+        used_mileage: usedMileage,
+        personal_earned_points: personalEarnedPoints,
+        community_earned_points: communityEarnedPoints,
+        member_grade: memberGrade.key,
+        shipping_address: shipping_address ? JSON.stringify(shipping_address) : null,
+        shipping_fee: shippingCalc.fee,
+        shipping_surcharge_label: shippingCalc.surcharge_label,
+        payment_method: payment_method || 'pending',
+        status: 'pending'
+      }])
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    // 재고 원자적 차감 - 사전 검증을 통과했더라도 그 사이 다른 주문이 먼저 재고를 가져갔을 수 있으므로
+    // DB 함수(adjust_stock_with)로 다시 한번 원자적으로 확인하며 차감한다. 도중에 하나라도 부족하면
+    // 이미 차감된 항목들은 원복(보상)하고 방금 만든 주문도 삭제해 재고 불일치가 남지 않도록 한다.
+    const decrementedItems = [];
+    let stockError = null;
+    for (const item of verifiedItems) {
+      if (!item.product_id) continue;
+      const qty = Number(item.quantity) || 1;
+      const { error: rpcErr } = await supabase.rpc('adjust_stock_with', {
+        p_product_id: item.product_id,
+        p_variant_id: item.variant_id || null,
+        p_delta: -qty,
+        p_reason: `주문 차감 - 주문번호 ${orderNumber}`,
+        p_order_id: data.id,
+        p_created_by: req.user.id,
+        p_scan_source: 'order'
+      });
+      if (rpcErr) {
+        stockError = { item, err: rpcErr };
+        break;
+      }
+      decrementedItems.push({ product_id: item.product_id, variant_id: item.variant_id || null, qty });
+    }
+
+    if (stockError) {
+      // 보상: 이미 차감된 항목들 원복
+      for (const d of decrementedItems) {
+        try {
+          await supabase.rpc('adjust_stock_with', {
+            p_product_id: d.product_id, p_variant_id: d.variant_id, p_delta: d.qty, p_reason: '재고 부족으로 인한 주문 실패 - 자동 원복', p_order_id: data.id, p_created_by: req.user.id
+          });
+        } catch (compensateErr) { /* 재고 원복은 최선을 다해 시도하되, 실패해도 요청 처리를 막지 않는다 */ }
+      }
+      await supabase.from('orders_with').delete().eq('id', data.id);
+      return res.status(409).json({
+        error: 'Conflict',
+        message: `재고가 방금 소진되었습니다: ${stockError.item.name || stockError.item.product_id}. 다시 시도해주세요.`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 옵션이 있는 상품은 products_with.stock(목록에 표시되는 재고)을 옵션 재고 합계로 다시 맞춰준다
+    const affectedProductIds = [...new Set(decrementedItems.filter(d => d.variant_id).map(d => d.product_id))];
+    for (const pid of affectedProductIds) {
+      await syncProductStockFromVariants(pid);
+    }
+
+    // 쿠폰 사용 기록 (주문 생성이 성공한 뒤에만 사용 처리 - 실패 시 쿠폰이 소모되지 않도록)
+    if (appliedCoupon) {
+      await supabase.from('coupon_redemptions').insert([{
+        coupon_id: appliedCoupon.id,
+        user_id: req.user.id,
+        order_id: data.id,
+        discount_amount: discountAmount
+      }]);
+      await supabase.from('coupons').update({ used_count: appliedCoupon.used_count + 1 }).eq('id', appliedCoupon.id);
+    }
+
+    // 주문 접수 이메일 발송 - SMTP 미설정이면 조용히 생략(정직하게 email_logs_with에 기록)되고,
+    // 발송 실패가 나더라도 절대 주문 생성 자체를 실패시키지 않는다(sendEmail은 예외를 던지지 않음).
+    // 응답 전에 기다리되(타임아웃 최대 8초로 제한해둠), 실패해도 주문 자체는 이미 완료된 상태이므로 안전하다.
+    await sendOrderConfirmationEmail(data, req.user.email).catch(() => {});
+
+    // 주문이 성공적으로 생성되었으므로 더 이상 "이탈된 장바구니"가 아니다 - 리마인더 대상에서 제외되도록 스냅샷 정리
+    // (클라이언트도 별도로 clearCart()를 호출하지만, 서버에서도 확실히 정리해 리마인더가 결제 완료 회원에게 나가는 것을 막는다)
+    await supabase.from('cart_snapshots_with').delete().eq('user_id', req.user.id).then(null, () => {});
+
+    // 추천인 프로그램: 이 주문이 회원의 첫 주문이고 대기 중인 추천 관계가 있으면 추천인·피추천인 양쪽에 마일리지 지급 (실패해도 주문 자체는 막지 않음)
+    await rewardReferralIfEligible(req.user.id, data.id);
+
+    res.status(201).json({
+      success: true,
+      data: data,
+      discount: { couponCode: appliedCoupon ? appliedCoupon.code : null, discountAmount },
+      mileage: {
+        personal: personalEarnedPoints,
+        community: communityEarnedPoints,
+        total: personalEarnedPoints + communityEarnedPoints
+      },
+      memberGrade: { key: memberGrade.key, label: memberGrade.label, bonusPersonalRate: memberGrade.bonus_personal_rate },
+      message: 'Order created successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error creating order:', err);
+    res.status(500).json({
+      error: 'Failed to create order',
+      message: err.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// 관리자용 전체 주문 조회 (상태 필터 가능, 주문자 이메일 포함)
+app.get('/api/admin/orders', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    let query = supabase.from('orders_with').select('*').order('created_at', { ascending: false });
+
+    if (req.query.status) {
+      query = query.eq('status', req.query.status);
+    }
+    // 대시보드의 "이번 주 신규 주문" 등 통계 카드에서 그대로 드릴다운할 수 있도록, 특정 시점 이후 주문만 조회하는 필터
+    if (req.query.since) {
+      const sinceDate = new Date(req.query.since);
+      if (!isNaN(sinceDate.getTime())) {
+        query = query.gte('created_at', sinceDate.toISOString());
+      }
+    }
+
+    const { data: orders, error } = await query;
+    if (error) throw error;
+
+    // profiles 는 orders_with 와 FK로 연결돼 있지 않아 PostgREST 중첩조회가 안 되므로
+    // 주문에 등장하는 user_id들만 모아서 별도로 조회 후 서버에서 합쳐줌
+    const userIds = [...new Set((orders || []).map(o => o.user_id))];
+    let profileMap = {};
+    if (userIds.length > 0) {
+      const { data: profiles } = await supabase
+        .from('profiles')
+        .select('id, email, full_name')
+        .in('id', userIds);
+      (profiles || []).forEach(p => { profileMap[p.id] = p; });
+    }
+
+    const result = (orders || []).map(o => ({
+      ...o,
+      buyer_email: profileMap[o.user_id]?.email || null,
+      buyer_name: profileMap[o.user_id]?.full_name || null
+    }));
+
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching admin orders:', err);
+    res.status(500).json({ error: 'Failed to fetch orders', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자용 주문 상태 변경 (배송중/완료/취소 처리 등)
+app.patch('/api/admin/orders/:id/status', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, shipping_status, tracking_number, courier_name } = req.body;
+
+    // DB의 orders_with_status_check 제약조건과 반드시 일치해야 함
+    const validStatuses = ['pending', 'paid', 'processing', 'shipped', 'delivered', 'cancelled', 'refunded'];
+    if (status !== undefined && !validStatuses.includes(status)) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: `status must be one of: ${validStatuses.join(', ')}`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const updates = {};
+    if (status !== undefined) updates.status = status;
+    if (shipping_status !== undefined) updates.shipping_status = shipping_status;
+    if (tracking_number !== undefined) updates.tracking_number = tracking_number;
+    if (courier_name !== undefined) updates.courier_name = courier_name;
+
+    // 택배사명 또는 운송장번호 중 하나라도 바뀌면, 조회 링크도 최신 값 기준으로 다시 계산한다
+    // (한쪽만 바뀐 경우를 위해 바뀌지 않은 나머지 값은 기존 저장값을 조회해서 함께 사용)
+    if (tracking_number !== undefined || courier_name !== undefined) {
+      const { data: existingOrder } = await supabase.from('orders_with').select('tracking_number, courier_name').eq('id', id).maybeSingle();
+      const finalCourier = courier_name !== undefined ? courier_name : (existingOrder ? existingOrder.courier_name : null);
+      const finalTracking = tracking_number !== undefined ? tracking_number : (existingOrder ? existingOrder.tracking_number : null);
+      updates.tracking_url = buildTrackingUrl(finalCourier, finalTracking);
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '변경할 값이 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data, error } = await supabase
+      .from('orders_with')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ error: 'Not Found', message: 'Order not found', timestamp: new Date().toISOString() });
+    }
+
+    // 주문 상태(status)가 실제로 바뀐 경우에만 알림 이메일을 보낸다 (운송장 정보만 저장한 경우는 발송하지 않음 - shipped로 바뀔 때 함께 안내됨)
+    if (status !== undefined) {
+      const { data: profile } = await supabase.from('profiles').select('email').eq('id', data.user_id).maybeSingle();
+      await sendOrderStatusEmail(data, profile?.email, status).catch(() => {});
+    }
+
+    res.json({ success: true, data, message: 'Order status updated successfully', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating order status:', err);
+    res.status(500).json({ error: 'Failed to update order status', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공급자(판매자)용 "내 상품이 포함된 주문" 확인 - 읽기 전용
+// orders_with.items 는 여러 판매자의 상품이 한 주문에 섞여 담길 수 있는 장바구니형 구조이므로,
+// 다른 공급자의 매출/구매자 정보가 노출되지 않도록 응답에는 본인 상품에 해당하는 라인아이템만 골라서 내려준다.
+// 주문 상태 변경은 관리자만 가능하며(주문 전체가 여러 공급자에 걸칠 수 있어 한 공급자가 임의로 바꿀 수 없음),
+// 이 엔드포인트는 조회 전용이다.
+app.get('/api/provider/orders', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    // 관리자가 이 엔드포인트를 호출하면(테스트 등) 전체 주문에서 필터링할 상품 후보가 없으므로
+    // 요청자 본인 명의로 등록된 상품만 기준으로 삼는다 (관리자용 전체 조회는 /api/admin/orders 사용)
+    const { data: myProducts, error: pErr } = await supabase
+      .from('products_with')
+      .select('id, name')
+      .eq('supplier_id', req.user.id);
+    if (pErr) throw pErr;
+
+    const myProductIds = new Set((myProducts || []).map(p => String(p.id)));
+    const myProductNames = {};
+    (myProducts || []).forEach(p => { myProductNames[String(p.id)] = p.name; });
+
+    if (myProductIds.size === 0) {
+      return res.json({ success: true, data: [], count: 0, message: '등록된 상품이 없어 확인할 주문이 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    // 최근 주문부터 조회 (과도한 전체 스캔을 피하기 위해 최근 500건으로 제한)
+    const { data: orders, error } = await supabase
+      .from('orders_with')
+      .select('id, order_number, user_id, community_id, items, status, shipping_status, tracking_number, courier_name, created_at')
+      .order('created_at', { ascending: false })
+      .limit(500);
+    if (error) throw error;
+
+    const matched = (orders || [])
+      .map(o => {
+        const myItems = (o.items || []).filter(it => myProductIds.has(String(it.product_id)));
+        if (myItems.length === 0) return null;
+        const mySubtotal = myItems.reduce((sum, it) => sum + Number(it.price || 0) * Number(it.quantity || 1), 0);
+        return {
+          id: o.id,
+          order_number: o.order_number,
+          created_at: o.created_at,
+          status: o.status,
+          shipping_status: o.shipping_status,
+          tracking_number: o.tracking_number,
+          courier_name: o.courier_name,
+          community_id: o.community_id,
+          user_id: o.user_id,
+          my_items: myItems,
+          my_subtotal: mySubtotal
+        };
+      })
+      .filter(Boolean);
+
+    // 주문자/커뮤니티 이름은 orders_with 와 FK 조인이 안 되므로 별도 조회 후 서버에서 합쳐준다
+    const userIds = [...new Set(matched.map(o => o.user_id).filter(Boolean))];
+    const communityIds = [...new Set(matched.map(o => o.community_id).filter(Boolean))];
+    const [{ data: profiles }, { data: communities }] = await Promise.all([
+      userIds.length ? supabase.from('profiles').select('id, email, full_name').in('id', userIds) : Promise.resolve({ data: [] }),
+      communityIds.length ? supabase.from('communities').select('id, name, slug').in('id', communityIds) : Promise.resolve({ data: [] })
+    ]);
+
+    const result = matched.map(o => {
+      const { user_id, ...rest } = o;
+      const profile = (profiles || []).find(p => p.id === user_id);
+      const community = (communities || []).find(c => c.id === o.community_id);
+      return {
+        ...rest,
+        buyer_name: profile?.full_name || null,
+        buyer_email: profile?.email || null,
+        community_name: community?.name || null,
+        community_slug: community?.slug || null
+      };
+    });
+
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching provider orders:', err);
+    res.status(500).json({ error: 'Failed to fetch provider orders', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 리뷰 API
+// ============================================
+
+// 최근 리뷰 조회 (홈페이지 실시간 활동 섹션용, 인증 불필요)
+app.get('/api/reviews/recent', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 5, 20);
+    const { data, error } = await supabasePublic
+      .from('product_reviews')
+      .select('id, rating, comment, created_at, verified_purchase, products_with(name)')
+      .eq('status', 'published')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error) throw error;
+
+    const reviews = (data || []).map(r => ({
+      id: r.id,
+      rating: r.rating,
+      comment: r.comment,
+      created_at: r.created_at,
+      verified_purchase: r.verified_purchase,
+      product_name: r.products_with ? r.products_with.name : '상품'
+    }));
+
+    res.json({ success: true, data: reviews, count: reviews.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching recent reviews:', err);
+    res.status(500).json({ error: 'Failed to fetch recent reviews', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 리뷰 생성 - order_id를 함께 보내면 "구매인증" 배지를 받으려면 서버가 실제로
+// (1) 그 주문이 본인 것인지 (2) 배송완료 상태인지 (3) 그 주문에 이 상품이 실제로 포함되어 있는지를
+// 검증한다. order_id 없이도 리뷰 작성 자체는 가능하지만(카페24 등 일반 쇼핑몰 관행과 동일), 이 경우
+// verified_purchase는 항상 false로 남아 화면에 "구매인증" 배지가 붙지 않는다 - 절대 가짜로 인증배지를
+// 붙이지 않는다. 같은 상품에는 회원 1명당 리뷰 1개만 허용해 도배를 막는다.
+app.post('/api/reviews', authenticate, async (req, res) => {
+  try {
+    const { product_id, order_id, rating, title, comment } = req.body;
+
+    if (!product_id || !rating || !comment) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Required fields: product_id, rating, comment',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    if (rating < 1 || rating > 5) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'Rating must be between 1 and 5',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 같은 회원이 같은 상품에 이미 리뷰를 남겼는지 확인 (도배 방지 - 상품당 회원 1리뷰)
+    const { data: existingReview } = await supabase
+      .from('product_reviews')
+      .select('id')
+      .eq('product_id', product_id)
+      .eq('user_id', req.user.id)
+      .maybeSingle();
+    if (existingReview) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: '이미 이 상품에 리뷰를 작성하셨습니다. 기존 리뷰를 수정해주세요.',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    let verifiedPurchase = false;
+    if (order_id) {
+      const { data: order } = await supabase
+        .from('orders_with')
+        .select('id, user_id, status, items')
+        .eq('id', order_id)
+        .maybeSingle();
+      if (!order || order.user_id !== req.user.id) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: '본인의 주문이 아니거나 존재하지 않는 주문입니다.',
+          timestamp: new Date().toISOString()
+        });
+      }
+      if (order.status !== 'delivered') {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: '배송완료된 주문만 구매인증 리뷰로 등록할 수 있습니다.',
+          timestamp: new Date().toISOString()
+        });
+      }
+      const itemsInOrder = Array.isArray(order.items) ? order.items : [];
+      const productInOrder = itemsInOrder.some(i => i.product_id === product_id);
+      if (!productInOrder) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: '해당 주문에 포함되지 않은 상품입니다.',
+          timestamp: new Date().toISOString()
+        });
+      }
+      verifiedPurchase = true;
+    }
+
+    const { data, error } = await supabase
+      .from('product_reviews')
+      .insert([{
+        product_id,
+        order_id: order_id || null,
+        user_id: req.user.id,
+        rating: parseInt(rating),
+        title: title || null,
+        comment,
+        status: 'published',
+        verified_purchase: verifiedPurchase
+      }])
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.status(201).json({
+      success: true,
+      data: data,
+      message: 'Review created successfully',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error creating review:', err);
+    res.status(500).json({
+      error: 'Failed to create review',
+      message: err.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// 관리자: 전체 리뷰 목록 조회 (모더레이션용, 상태 필터 가능)
+app.get('/api/admin/reviews', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    // product_reviews.user_id는 profiles에 대한 FK가 없어(PostgREST가 자동 조인할 관계를 못 찾음)
+    // 작성자 정보는 여기서 직접 한 번에 조회해 매칭한다.
+    let query = supabase
+      .from('product_reviews')
+      .select('*, products_with(name)')
+      .order('created_at', { ascending: false });
+    if (req.query.status) {
+      query = query.eq('status', req.query.status);
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const reviews = data || [];
+    const userIds = [...new Set(reviews.map(r => r.user_id).filter(Boolean))];
+    let profileMap = {};
+    if (userIds.length > 0) {
+      const { data: profiles } = await supabase.from('profiles').select('id, email, full_name').in('id', userIds);
+      (profiles || []).forEach(p => { profileMap[p.id] = p; });
+    }
+    const enriched = reviews.map(r => ({ ...r, profiles: profileMap[r.user_id] || null }));
+
+    res.json({ success: true, data: enriched, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching admin reviews:', err);
+    res.status(500).json({ error: 'Failed to fetch reviews', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 리뷰 숨김/공개 처리 (도배·조작·부적절한 리뷰 대응)
+app.patch('/api/admin/reviews/:id/status', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, hidden_reason } = req.body;
+    if (status !== 'published' && status !== 'hidden') {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: "status는 'published' 또는 'hidden'이어야 합니다",
+        timestamp: new Date().toISOString()
+      });
+    }
+    const { data, error } = await supabase
+      .from('product_reviews')
+      .update({
+        status,
+        hidden_reason: status === 'hidden' ? (hidden_reason || null) : null,
+        moderated_by: req.user.id,
+        moderated_at: new Date().toISOString()
+      })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ error: 'Not Found', message: '리뷰를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    res.json({ success: true, data, message: '리뷰 상태가 변경되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error moderating review:', err);
+    res.status(500).json({ error: 'Failed to moderate review', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 커뮤니티 API (인증 불필요, 공개 목록)
+// ============================================
+app.get('/api/communities', async (req, res) => {
+  try {
+    const [{ data: communities, error: cErr }, { data: members, error: mErr }] = await Promise.all([
+      supabase.from('communities').select('id, name, slug, description, image_url, logo_url, total_points_earned').eq('status', 'active').order('created_at', { ascending: false }),
+      supabase.from('community_members').select('community_id').eq('status', 'active')
+    ]);
+    if (cErr) throw cErr;
+    if (mErr) throw mErr;
+
+    const memberCounts = {};
+    (members || []).forEach(m => {
+      memberCounts[m.community_id] = (memberCounts[m.community_id] || 0) + 1;
+    });
+
+    const result = (communities || []).map(c => ({
+      ...c,
+      member_count: memberCounts[c.id] || 0
+    }));
+
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching communities:', err);
+    res.status(500).json({ error: 'Failed to fetch communities', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 커뮤니티(조직) 단건 조회 - 분양형 랜딩페이지(/c/:slug)용, 인증 불필요
+// "공동체 총 적립금"은 communities.total_points_earned(정적 컬럼, 실시간 반영 안 됨) 대신
+// 실제 주문 데이터(orders_with.community_earned_points)를 합산해 정직한 실시간 값으로 계산한다.
+app.get('/api/communities/:slug', async (req, res) => {
+  try {
+    const { data: community, error } = await supabase
+      .from('communities')
+      .select('*')
+      .eq('slug', req.params.slug)
+      .eq('status', 'active')
+      .single();
+    if (error || !community) {
+      return res.status(404).json({ error: 'Not Found', message: '커뮤니티를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const [{ count: memberCount }, { data: orders }] = await Promise.all([
+      supabase.from('community_members').select('id', { count: 'exact', head: true }).eq('community_id', community.id).eq('status', 'active'),
+      supabase.from('orders_with').select('community_earned_points, status').eq('community_id', community.id)
+    ]);
+
+    const totalPointsEarned = (orders || [])
+      .filter(o => !['cancelled', 'refunded'].includes(o.status))
+      .reduce((sum, o) => sum + Number(o.community_earned_points || 0), 0);
+
+    res.json({
+      success: true,
+      data: { ...community, member_count: memberCount || 0, total_points_earned: totalPointsEarned },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching community detail:', err);
+    res.status(500).json({ error: 'Failed to fetch community', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 커뮤니티 가입 (분양 조직 랜딩페이지를 통한 회원가입 시 자동 연결, 또는 언제든 직접 가입 가능)
+app.post('/api/communities/:slug/join', authenticate, async (req, res) => {
+  try {
+    const { data: community, error: cErr } = await supabase
+      .from('communities')
+      .select('id, status')
+      .eq('slug', req.params.slug)
+      .single();
+    if (cErr || !community || community.status !== 'active') {
+      return res.status(404).json({ error: 'Not Found', message: '커뮤니티를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: existing } = await supabase
+      .from('community_members')
+      .select('id, status')
+      .eq('community_id', community.id)
+      .eq('user_id', req.user.id)
+      .maybeSingle();
+
+    if (existing) {
+      if (existing.status !== 'active') {
+        await supabase.from('community_members').update({ status: 'active' }).eq('id', existing.id);
+      }
+      return res.json({ success: true, message: '이미 가입된 커뮤니티입니다', timestamp: new Date().toISOString() });
+    }
+
+    const { error } = await supabase.from('community_members').insert([{
+      community_id: community.id,
+      user_id: req.user.id,
+      role: 'member',
+      status: 'active'
+    }]);
+    if (error) throw error;
+
+    res.status(201).json({ success: true, message: '커뮤니티에 가입되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error joining community:', err);
+    res.status(500).json({ error: 'Failed to join community', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 로그인한 회원이 특정 커뮤니티에 기여한 적립금 - 인증 필요
+app.get('/api/communities/:slug/my-contribution', authenticate, async (req, res) => {
+  try {
+    const { data: community, error: cErr } = await supabase
+      .from('communities')
+      .select('id')
+      .eq('slug', req.params.slug)
+      .single();
+    if (cErr || !community) {
+      return res.status(404).json({ error: 'Not Found', message: '커뮤니티를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: orders, error } = await supabase
+      .from('orders_with')
+      .select('community_earned_points, status')
+      .eq('community_id', community.id)
+      .eq('user_id', req.user.id);
+    if (error) throw error;
+
+    const myContribution = (orders || [])
+      .filter(o => !['cancelled', 'refunded'].includes(o.status))
+      .reduce((sum, o) => sum + Number(o.community_earned_points || 0), 0);
+
+    res.json({ success: true, data: { myContribution }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching my community contribution:', err);
+    res.status(500).json({ error: 'Failed to fetch contribution', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 로그인한 회원이 실제로 가입되어 있는 커뮤니티 목록 (장바구니 커뮤니티 선택 등에서 사용)
+// 전체 커뮤니티 목록(/api/communities)과 달리, 이 회원이 community_members에 active로 연결된 조직만 반환한다
+app.get('/api/my/communities', authenticate, async (req, res) => {
+  try {
+    const { data: memberships, error } = await supabase
+      .from('community_members')
+      .select('community_id')
+      .eq('user_id', req.user.id)
+      .eq('status', 'active');
+    if (error) throw error;
+
+    const communityIds = [...new Set((memberships || []).map(m => m.community_id))];
+    if (communityIds.length === 0) {
+      return res.json({ success: true, data: [], count: 0, timestamp: new Date().toISOString() });
+    }
+
+    const { data: communities, error: cErr } = await supabase
+      .from('communities')
+      .select('id, name, slug, logo_url, status')
+      .in('id', communityIds)
+      .eq('status', 'active');
+    if (cErr) throw cErr;
+
+    res.json({ success: true, data: communities || [], count: (communities || []).length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching my communities:', err);
+    res.status(500).json({ error: 'Failed to fetch my communities', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 커뮤니티(분양 조직) 관리 API - 관리자 전용
+// ============================================
+app.get('/api/admin/communities', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('communities').select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+
+    // admin_user_id는 raw UUID라 관리자 화면에 표시하려면 이메일이 필요 - profiles와 FK 조인이 안 되므로 별도 조회 후 합쳐준다
+    const adminIds = [...new Set((data || []).map(c => c.admin_user_id).filter(Boolean))];
+    let adminEmailMap = {};
+    if (adminIds.length > 0) {
+      const { data: admins } = await supabase.from('profiles').select('id, email').in('id', adminIds);
+      (admins || []).forEach(a => { adminEmailMap[a.id] = a.email; });
+    }
+
+    // 조직별 실제 담당자(다중) 수 - 목록 화면에 "담당자 N명"으로 표시하기 위함
+    const { data: adminMappings } = await supabase.from('community_admins_with').select('community_id');
+    const adminCountMap = {};
+    (adminMappings || []).forEach(m => { adminCountMap[m.community_id] = (adminCountMap[m.community_id] || 0) + 1; });
+
+    const result = (data || []).map(c => ({
+      ...c,
+      admin_email: c.admin_user_id ? (adminEmailMap[c.admin_user_id] || null) : null,
+      admin_count: adminCountMap[c.id] || 0
+    }));
+
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching admin communities:', err);
+    res.status(500).json({ error: 'Failed to fetch communities', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 이메일로 가입된 회원의 user_id를 찾는다 (분양 조직 관리자 지정용) - 존재하지 않으면 null
+async function resolveUserIdByEmail(email) {
+  if (!email || !String(email).trim()) return null;
+  const { data } = await supabase.from('profiles').select('id').ilike('email', String(email).trim()).maybeSingle();
+  return data ? data.id : null;
+}
+
+// 분양 조직별 커스텀 적립율 입력값 검증
+// - undefined: 이 필드를 변경하지 않음 (updates에 아예 넣지 않음)
+// - null 또는 빈 문자열: 커스텀 적립율 해제 -> 플랫폼 기본값을 따르도록 null 저장
+// - 그 외: 0~0.5(0%~50%) 범위의 숫자여야 함
+function parsePointRateInput(value) {
+  if (value === undefined) return { present: false };
+  if (value === null || value === '') return { present: true, value: null };
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0 || n > 0.5) return { present: true, invalid: true };
+  return { present: true, value: n };
+}
+
+// 분양 랜딩페이지 디자인 템플릿 - DB CHECK 제약과 동일한 허용값 목록 (여기서 먼저 걸러야 깔끔한 400 메시지를 줄 수 있음)
+const LANDING_TEMPLATES = ['classic', 'modern', 'warm'];
+
+app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { name, slug, description, image_url, logo_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, admin_email, personal_point_rate, community_point_rate, landing_template } = req.body;
+    if (!name || !slug) {
+      return res.status(400).json({ error: 'Bad Request', message: 'Required fields: name, slug', timestamp: new Date().toISOString() });
+    }
+    const cleanSlug = String(slug).trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    if (!cleanSlug) {
+      return res.status(400).json({ error: 'Bad Request', message: 'slug는 영문/숫자/하이픈만 가능합니다', timestamp: new Date().toISOString() });
+    }
+    if (landing_template !== undefined && !LANDING_TEMPLATES.includes(landing_template)) {
+      return res.status(400).json({ error: 'Bad Request', message: `landing_template은 ${LANDING_TEMPLATES.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+    }
+
+    // 이 조직을 담당할 관리자를 이메일로 지정 (WITH+에 이미 가입된 회원이어야 함) - 이 사람만 /api/community-admin/* 로 이 조직 데이터를 볼 수 있다
+    let adminUserId = null;
+    if (admin_email) {
+      adminUserId = await resolveUserIdByEmail(admin_email);
+      if (!adminUserId) {
+        return res.status(400).json({ error: 'Bad Request', message: `해당 이메일(${admin_email})로 가입된 회원을 찾을 수 없습니다. 먼저 일반 회원으로 가입한 뒤 조직 관리자로 지정해주세요.`, timestamp: new Date().toISOString() });
+      }
+    }
+
+    // 이 조직 전용 적립율 (비워두면 플랫폼 기본값을 따름 - getEffectiveMileageRates 참고)
+    const personalRate = parsePointRateInput(personal_point_rate);
+    const communityRate = parsePointRateInput(community_point_rate);
+    if (personalRate.invalid || communityRate.invalid) {
+      return res.status(400).json({ error: 'Bad Request', message: '적립율은 0% ~ 50% 사이여야 합니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data, error } = await supabase
+      .from('communities')
+      .insert([{
+        name: String(name).trim(),
+        slug: cleanSlug,
+        description: description || '',
+        image_url: image_url || null,
+        logo_url: logo_url || null,
+        primary_color: primary_color || null,
+        hero_title: hero_title || null,
+        hero_subtitle: hero_subtitle || null,
+        intro_text: intro_text || null,
+        address: address || null,
+        phone: phone || null,
+        website_url: website_url || null,
+        contact_email: contact_email || null,
+        admin_user_id: adminUserId,
+        personal_point_rate: personalRate.present ? personalRate.value : null,
+        community_point_rate: communityRate.present ? communityRate.value : null,
+        landing_template: landing_template || 'classic',
+        status: 'active'
+      }])
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'Conflict', message: '이미 존재하는 슬러그입니다', timestamp: new Date().toISOString() });
+      }
+      throw error;
+    }
+
+    // 생성 시 지정한 담당자를 다중 담당자 테이블에도 첫 담당자로 등록한다 (이미 다른 조직 담당이면 조용히 건너뜀 - 생성 자체는 막지 않음)
+    let adminAssignWarning = null;
+    if (adminUserId) {
+      const { error: adminInsertErr } = await supabase.from('community_admins_with').insert([{ community_id: data.id, user_id: adminUserId }]);
+      if (adminInsertErr && adminInsertErr.code === '23505') {
+        adminAssignWarning = '지정한 담당자가 이미 다른 분양 조직의 담당자로 등록되어 있어, 이 조직의 담당자로는 추가되지 않았습니다. "담당자 관리"에서 다시 추가해주세요.';
+      }
+    }
+
+    res.status(201).json({ success: true, data, warning: adminAssignWarning, message: '분양 조직(커뮤니티)이 추가되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating community:', err);
+    res.status(500).json({ error: 'Failed to create community', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { name, slug, description, image_url, logo_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, status, admin_email, personal_point_rate, community_point_rate, landing_template } = req.body;
+    const updates = { updated_at: new Date().toISOString() };
+    if (name !== undefined) updates.name = String(name).trim();
+    if (slug !== undefined) {
+      const cleanSlug = String(slug).trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+      if (!cleanSlug) {
+        return res.status(400).json({ error: 'Bad Request', message: 'slug는 영문/숫자/하이픈만 가능합니다', timestamp: new Date().toISOString() });
+      }
+      updates.slug = cleanSlug;
+    }
+    if (landing_template !== undefined) {
+      if (!LANDING_TEMPLATES.includes(landing_template)) {
+        return res.status(400).json({ error: 'Bad Request', message: `landing_template은 ${LANDING_TEMPLATES.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+      }
+      updates.landing_template = landing_template;
+    }
+    if (description !== undefined) updates.description = description;
+    if (image_url !== undefined) updates.image_url = image_url || null;
+    if (logo_url !== undefined) updates.logo_url = logo_url || null;
+    if (primary_color !== undefined) updates.primary_color = primary_color || null;
+    if (hero_title !== undefined) updates.hero_title = hero_title || null;
+    if (hero_subtitle !== undefined) updates.hero_subtitle = hero_subtitle || null;
+    if (intro_text !== undefined) updates.intro_text = intro_text || null;
+    if (address !== undefined) updates.address = address || null;
+    if (phone !== undefined) updates.phone = phone || null;
+    if (website_url !== undefined) updates.website_url = website_url || null;
+    if (contact_email !== undefined) updates.contact_email = contact_email || null;
+    if (status !== undefined) updates.status = status;
+    // 대표 담당자 표시값 변경/해제 - 빈 문자열이면 해제(null), 값이 있으면 해당 이메일 회원으로 교체
+    // (실제 조직 데이터 접근 권한은 이 값이 아니라 담당자 목록(community_admins_with)으로 판정된다 - "담당자 관리"에서 추가/제거)
+    let putAdminAssignWarning = null;
+    if (admin_email !== undefined) {
+      if (!admin_email) {
+        updates.admin_user_id = null;
+      } else {
+        const adminUserId = await resolveUserIdByEmail(admin_email);
+        if (!adminUserId) {
+          return res.status(400).json({ error: 'Bad Request', message: `해당 이메일(${admin_email})로 가입된 회원을 찾을 수 없습니다`, timestamp: new Date().toISOString() });
+        }
+        updates.admin_user_id = adminUserId;
+        const { error: adminInsertErr } = await supabase.from('community_admins_with').insert([{ community_id: req.params.id, user_id: adminUserId }]);
+        if (adminInsertErr && adminInsertErr.code === '23505') {
+          // 이미 이 조직 담당자거나, 다른 조직 담당자인 경우 - 어느 쪽이든 조용히 건너뛰되 후자는 안내
+          const { data: alreadyThisOrg } = await supabase.from('community_admins_with').select('id').eq('community_id', req.params.id).eq('user_id', adminUserId).maybeSingle();
+          if (!alreadyThisOrg) {
+            putAdminAssignWarning = '지정한 담당자가 이미 다른 분양 조직의 담당자로 등록되어 있어, 이 조직의 담당자로는 추가되지 않았습니다. "담당자 관리"에서 다시 추가해주세요.';
+          }
+        }
+      }
+    }
+    // 이 조직 전용 적립율 변경/해제 (본부 관리자는 어느 조직이든 조정 가능)
+    {
+      const personalRate = parsePointRateInput(personal_point_rate);
+      const communityRate = parsePointRateInput(community_point_rate);
+      if (personalRate.invalid || communityRate.invalid) {
+        return res.status(400).json({ error: 'Bad Request', message: '적립율은 0% ~ 50% 사이여야 합니다', timestamp: new Date().toISOString() });
+      }
+      if (personalRate.present) updates.personal_point_rate = personalRate.value;
+      if (communityRate.present) updates.community_point_rate = communityRate.value;
+    }
+
+    const { data, error } = await supabase
+      .from('communities')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'Conflict', message: '이미 존재하는 슬러그입니다', timestamp: new Date().toISOString() });
+      }
+      throw error;
+    }
+    if (!data) {
+      return res.status(404).json({ error: 'Not Found', message: 'Community not found', timestamp: new Date().toISOString() });
+    }
+    res.json({ success: true, data, warning: putAdminAssignWarning, message: '커뮤니티 정보가 수정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating community:', err);
+    res.status(500).json({ error: 'Failed to update community', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 분양 조직(커뮤니티) 다중 담당자 관리 (본부 관리자 전용)
+// 한 조직에 여러 명의 담당 직원을 둘 수 있다. 단, 한 사람은 동시에 한 조직만 담당할 수 있다
+// (community_admins_with.user_id UNIQUE 제약으로 DB에서 강제됨 - 겸직으로 인한 데이터 혼선 방지)
+// ============================================
+
+app.get('/api/admin/communities/:id/admins', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: rows, error } = await supabase
+      .from('community_admins_with')
+      .select('id, user_id, created_at')
+      .eq('community_id', req.params.id)
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+
+    const userIds = (rows || []).map(r => r.user_id);
+    let profileMap = {};
+    if (userIds.length > 0) {
+      const { data: profiles } = await supabase.from('profiles').select('id, email, full_name').in('id', userIds);
+      (profiles || []).forEach(p => { profileMap[p.id] = p; });
+    }
+    const result = (rows || []).map(r => ({
+      id: r.id,
+      user_id: r.user_id,
+      email: profileMap[r.user_id]?.email || null,
+      full_name: profileMap[r.user_id]?.full_name || null,
+      added_at: r.created_at
+    }));
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching community admins:', err);
+    res.status(500).json({ error: 'Failed to fetch community admins', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/communities/:id/admins', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || !String(email).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: '이메일을 입력해주세요', timestamp: new Date().toISOString() });
+    }
+    const { data: community } = await supabase.from('communities').select('id, name').eq('id', req.params.id).maybeSingle();
+    if (!community) {
+      return res.status(404).json({ error: 'Not Found', message: '분양 조직을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    const userId = await resolveUserIdByEmail(String(email).trim());
+    if (!userId) {
+      return res.status(400).json({ error: 'Bad Request', message: `해당 이메일(${email})로 가입된 회원을 찾을 수 없습니다. WITH+에 먼저 일반 회원으로 가입되어 있어야 합니다.`, timestamp: new Date().toISOString() });
+    }
+
+    const { data, error } = await supabase
+      .from('community_admins_with')
+      .insert([{ community_id: req.params.id, user_id: userId }])
+      .select()
+      .single();
+    if (error) {
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'Conflict', message: '이미 다른 분양 조직의 담당자로 지정되어 있는 회원입니다. 먼저 기존 담당에서 해제해주세요.', timestamp: new Date().toISOString() });
+      }
+      throw error;
+    }
+    res.status(201).json({ success: true, data, message: `${community.name}의 담당자로 추가되었습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error adding community admin:', err);
+    res.status(500).json({ error: 'Failed to add community admin', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.delete('/api/admin/communities/:id/admins/:userId', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('community_admins_with')
+      .delete()
+      .eq('community_id', req.params.id)
+      .eq('user_id', req.params.userId);
+    if (error) throw error;
+    res.json({ success: true, message: '담당자에서 해제되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error removing community admin:', err);
+    res.status(500).json({ error: 'Failed to remove community admin', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 분양 조직별 상품 노출 범위 ("전체 노출" 또는 "선택한 상품만 노출")
+// - 기본값은 all(전체 노출) - 지금까지와 동일하게 모든 조직에 전체 카탈로그가 그대로 보인다.
+// - curated로 바꾸면 community_products에 등록해둔 상품만 그 조직 방문자에게 보인다.
+// ============================================
+app.get('/api/admin/communities/:id/products', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: community, error: cErr } = await supabase
+      .from('communities')
+      .select('id, product_visibility')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (cErr) throw cErr;
+    if (!community) {
+      return res.status(404).json({ error: 'Not Found', message: '분양 조직을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    const { data: picks, error: pErr } = await supabase
+      .from('community_products')
+      .select('product_id')
+      .eq('community_id', req.params.id);
+    if (pErr) throw pErr;
+    res.json({
+      success: true,
+      data: { product_visibility: community.product_visibility, product_ids: (picks || []).map(p => p.product_id) },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching community product visibility:', err);
+    res.status(500).json({ error: 'Failed to fetch community products', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/communities/:id/products', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { product_visibility, product_ids } = req.body;
+    if (!['all', 'curated'].includes(product_visibility)) {
+      return res.status(400).json({ error: 'Bad Request', message: "product_visibility는 'all' 또는 'curated'여야 합니다", timestamp: new Date().toISOString() });
+    }
+    const ids = Array.isArray(product_ids) ? [...new Set(product_ids)] : [];
+
+    const { data: community, error: cErr } = await supabase
+      .from('communities')
+      .select('id, name')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (cErr) throw cErr;
+    if (!community) {
+      return res.status(404).json({ error: 'Not Found', message: '분양 조직을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    if (ids.length > 0) {
+      const { data: validProducts, error: vErr } = await supabase.from('products_with').select('id').in('id', ids);
+      if (vErr) throw vErr;
+      const validIds = new Set((validProducts || []).map(p => p.id));
+      const invalid = ids.filter(id => !validIds.has(id));
+      if (invalid.length > 0) {
+        return res.status(400).json({ error: 'Bad Request', message: `존재하지 않는 상품 id가 포함되어 있습니다: ${invalid.join(', ')}`, timestamp: new Date().toISOString() });
+      }
+    }
+
+    const { error: upErr } = await supabase.from('communities').update({ product_visibility }).eq('id', req.params.id);
+    if (upErr) throw upErr;
+
+    // 선택 목록은 통째로 교체한다(기존 것 전부 삭제 후 새로 넣기) - 부분 추가/삭제보다 "지금 화면에서 고른 것 = 저장 결과"가 명확함
+    const { error: delErr } = await supabase.from('community_products').delete().eq('community_id', req.params.id);
+    if (delErr) throw delErr;
+    if (ids.length > 0) {
+      const { error: insErr } = await supabase.from('community_products').insert(ids.map(product_id => ({ community_id: req.params.id, product_id })));
+      if (insErr) throw insErr;
+    }
+
+    res.json({
+      success: true,
+      data: { product_visibility, product_ids: ids },
+      message: `${community.name}의 상품 노출 설정이 저장되었습니다`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error updating community product visibility:', err);
+    res.status(500).json({ error: 'Failed to update community products', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 분양 조직별 카테고리 노출 범위 ("전체 노출" 또는 "선택한 카테고리만 노출")
+// - 위의 상품 노출 범위 기능과 완전히 같은 설계(all/curated + 매핑 테이블 통째로 교체).
+// - 기본값은 all(전체 노출) - 지금까지와 동일하게 모든 조직에 전체 카테고리 메뉴가 그대로 보인다.
+// ============================================
+app.get('/api/admin/communities/:id/categories', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: community, error: cErr } = await supabase
+      .from('communities')
+      .select('id, category_visibility')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (cErr) throw cErr;
+    if (!community) {
+      return res.status(404).json({ error: 'Not Found', message: '분양 조직을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    const { data: picks, error: pErr } = await supabase
+      .from('community_categories_with')
+      .select('category_id')
+      .eq('community_id', req.params.id);
+    if (pErr) throw pErr;
+    res.json({
+      success: true,
+      data: { category_visibility: community.category_visibility, category_ids: (picks || []).map(p => p.category_id) },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching community category visibility:', err);
+    res.status(500).json({ error: 'Failed to fetch community categories', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/communities/:id/categories', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { category_visibility, category_ids } = req.body;
+    if (!['all', 'curated'].includes(category_visibility)) {
+      return res.status(400).json({ error: 'Bad Request', message: "category_visibility는 'all' 또는 'curated'여야 합니다", timestamp: new Date().toISOString() });
+    }
+    const ids = Array.isArray(category_ids) ? [...new Set(category_ids)] : [];
+
+    const { data: community, error: cErr } = await supabase
+      .from('communities')
+      .select('id, name')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (cErr) throw cErr;
+    if (!community) {
+      return res.status(404).json({ error: 'Not Found', message: '분양 조직을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    if (ids.length > 0) {
+      const { data: validCategories, error: vErr } = await supabase.from('categories').select('id').in('id', ids);
+      if (vErr) throw vErr;
+      const validIds = new Set((validCategories || []).map(c => c.id));
+      const invalid = ids.filter(id => !validIds.has(id));
+      if (invalid.length > 0) {
+        return res.status(400).json({ error: 'Bad Request', message: `존재하지 않는 카테고리 id가 포함되어 있습니다: ${invalid.join(', ')}`, timestamp: new Date().toISOString() });
+      }
+    }
+
+    const { error: upErr } = await supabase.from('communities').update({ category_visibility }).eq('id', req.params.id);
+    if (upErr) throw upErr;
+
+    // 선택 목록은 통째로 교체한다(기존 것 전부 삭제 후 새로 넣기) - 부분 추가/삭제보다 "지금 화면에서 고른 것 = 저장 결과"가 명확함
+    const { error: delErr } = await supabase.from('community_categories_with').delete().eq('community_id', req.params.id);
+    if (delErr) throw delErr;
+    if (ids.length > 0) {
+      const { error: insErr } = await supabase.from('community_categories_with').insert(ids.map(category_id => ({ community_id: req.params.id, category_id })));
+      if (insErr) throw insErr;
+    }
+
+    res.json({
+      success: true,
+      data: { category_visibility, category_ids: ids },
+      message: `${community.name}의 카테고리 노출 설정이 저장되었습니다`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error updating community category visibility:', err);
+    res.status(500).json({ error: 'Failed to update community categories', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 분양 조직(커뮤니티) 담당 관리자용 API
+// 이 사람은 본부(admin/super_admin)가 아니라 개별 분양 조직(예: 인천선한목자교회)의 담당자로,
+// communities.admin_user_id 가 본인과 일치하는 "자기 조직" 데이터만 조회할 수 있다.
+// 다른 조직의 회원·주문은 절대 노출되지 않는다(쿼리 자체가 자기 조직 id로만 필터링됨).
+// 본부 관리자(admin/super_admin)는 이 API 대신 기존 /api/admin/* (전체 조회)를 사용한다.
+// ============================================
+
+// 담당자 지정은 community_admins_with 매핑 테이블 기준 (한 조직에 여러 담당자를 둘 수 있다 - 다중 담당자 지원)
+// communities.admin_user_id 컬럼은 "대표 담당자" 표시용으로만 남아있고, 실제 접근 권한 판정에는 쓰이지 않는다
+async function getMyManagedCommunity(userId) {
+  const { data: mapping, error: mapErr } = await supabase
+    .from('community_admins_with')
+    .select('community_id')
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (mapErr) throw mapErr;
+  if (!mapping) return null;
+  const { data, error } = await supabase.from('communities').select('*').eq('id', mapping.community_id).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+app.get('/api/community-admin/dashboard', authenticate, async (req, res) => {
+  try {
+    const community = await getMyManagedCommunity(req.user.id);
+    if (!community) {
+      return res.status(404).json({ error: 'Not Found', message: '담당하고 있는 분양 조직이 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const [{ count: memberCount }, { data: orders }] = await Promise.all([
+      supabase.from('community_members').select('id', { count: 'exact', head: true }).eq('community_id', community.id).eq('status', 'active'),
+      supabase.from('orders_with').select('final_price, community_earned_points, status').eq('community_id', community.id)
+    ]);
+
+    const validOrders = (orders || []).filter(o => !['cancelled', 'refunded'].includes(o.status));
+    const totalSales = validOrders.reduce((sum, o) => sum + Number(o.final_price || 0), 0);
+    const totalPointsEarned = validOrders.reduce((sum, o) => sum + Number(o.community_earned_points || 0), 0);
+
+    res.json({
+      success: true,
+      data: {
+        community,
+        member_count: memberCount || 0,
+        order_count: validOrders.length,
+        total_sales: totalSales,
+        total_points_earned: totalPointsEarned
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching community-admin dashboard:', err);
+    res.status(500).json({ error: 'Failed to fetch dashboard', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/community-admin/members', authenticate, async (req, res) => {
+  try {
+    const community = await getMyManagedCommunity(req.user.id);
+    if (!community) {
+      return res.status(404).json({ error: 'Not Found', message: '담당하고 있는 분양 조직이 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: members, error } = await supabase
+      .from('community_members')
+      .select('user_id, role, status, joined_at')
+      .eq('community_id', community.id)
+      .order('joined_at', { ascending: false });
+    if (error) throw error;
+
+    const userIds = (members || []).map(m => m.user_id);
+    let profileMap = {};
+    if (userIds.length > 0) {
+      // GMWOS와 공유하는 profiles 테이블이므로 이름/이메일 외 민감정보(주민번호 등)는 절대 포함하지 않는다
+      const { data: profiles } = await supabase.from('profiles').select('id, email, full_name').in('id', userIds);
+      (profiles || []).forEach(p => { profileMap[p.id] = p; });
+    }
+
+    // 회원별 이 조직에 대한 기여 적립금도 함께 내려준다 (실시간 계산, 취소/환불 제외)
+    const { data: orders } = await supabase
+      .from('orders_with')
+      .select('user_id, community_earned_points, status')
+      .eq('community_id', community.id);
+    const contributionMap = {};
+    (orders || []).filter(o => !['cancelled', 'refunded'].includes(o.status)).forEach(o => {
+      contributionMap[o.user_id] = (contributionMap[o.user_id] || 0) + Number(o.community_earned_points || 0);
+    });
+
+    const result = (members || []).map(m => ({
+      user_id: m.user_id,
+      email: profileMap[m.user_id]?.email || null,
+      full_name: profileMap[m.user_id]?.full_name || null,
+      role: m.role,
+      status: m.status,
+      joined_at: m.joined_at,
+      contribution_points: contributionMap[m.user_id] || 0
+    }));
+
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching community-admin members:', err);
+    res.status(500).json({ error: 'Failed to fetch members', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/community-admin/orders', authenticate, async (req, res) => {
+  try {
+    const community = await getMyManagedCommunity(req.user.id);
+    if (!community) {
+      return res.status(404).json({ error: 'Not Found', message: '담당하고 있는 분양 조직이 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: orders, error } = await supabase
+      .from('orders_with')
+      .select('id, order_number, user_id, items, final_price, community_earned_points, status, shipping_status, tracking_number, courier_name, created_at')
+      .eq('community_id', community.id)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    const userIds = [...new Set((orders || []).map(o => o.user_id))];
+    let profileMap = {};
+    if (userIds.length > 0) {
+      const { data: profiles } = await supabase.from('profiles').select('id, email, full_name').in('id', userIds);
+      (profiles || []).forEach(p => { profileMap[p.id] = p; });
+    }
+
+    const result = (orders || []).map(o => ({
+      ...o,
+      buyer_email: profileMap[o.user_id]?.email || null,
+      buyer_name: profileMap[o.user_id]?.full_name || null
+    }));
+
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching community-admin orders:', err);
+    res.status(500).json({ error: 'Failed to fetch orders', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 분양 조직 담당 관리자: 자기 조직의 개인/커뮤니티 적립율을 직접 동적으로 조정
+// 커스텀 값을 지정하지 않았으면(null) 플랫폼 기본값을 그대로 따른다 - 무엇이 기본값이고 무엇이 커스텀인지
+// is_custom_* 플래그로 정직하게 구분해 내려준다.
+app.get('/api/community-admin/point-rates', authenticate, async (req, res) => {
+  try {
+    const community = await getMyManagedCommunity(req.user.id);
+    if (!community) {
+      return res.status(404).json({ error: 'Not Found', message: '담당하고 있는 분양 조직이 없습니다', timestamp: new Date().toISOString() });
+    }
+    const platformRates = await getMileageRates();
+    const hasCustomPersonal = community.personal_point_rate !== null && community.personal_point_rate !== undefined;
+    const hasCustomCommunity = community.community_point_rate !== null && community.community_point_rate !== undefined;
+    res.json({
+      success: true,
+      data: {
+        personal: hasCustomPersonal ? Number(community.personal_point_rate) : platformRates.personal,
+        community: hasCustomCommunity ? Number(community.community_point_rate) : platformRates.community,
+        is_custom_personal: hasCustomPersonal,
+        is_custom_community: hasCustomCommunity,
+        platform_default: platformRates
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching community-admin point rates:', err);
+    res.status(500).json({ error: 'Failed to fetch point rates', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/community-admin/point-rates', authenticate, async (req, res) => {
+  try {
+    const community = await getMyManagedCommunity(req.user.id);
+    if (!community) {
+      return res.status(404).json({ error: 'Not Found', message: '담당하고 있는 분양 조직이 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const personalRate = parsePointRateInput(req.body.personal);
+    const communityRate = parsePointRateInput(req.body.community);
+    if (personalRate.invalid || communityRate.invalid) {
+      return res.status(400).json({ error: 'Bad Request', message: '적립율은 0% ~ 50% 사이여야 합니다', timestamp: new Date().toISOString() });
+    }
+
+    const updates = { updated_at: new Date().toISOString() };
+    if (personalRate.present) updates.personal_point_rate = personalRate.value;
+    if (communityRate.present) updates.community_point_rate = communityRate.value;
+
+    const { data, error } = await supabase
+      .from('communities')
+      .update(updates)
+      .eq('id', community.id)
+      .select()
+      .single();
+    if (error) throw error;
+
+    const platformRates = await getMileageRates();
+    const hasCustomPersonal = data.personal_point_rate !== null && data.personal_point_rate !== undefined;
+    const hasCustomCommunity = data.community_point_rate !== null && data.community_point_rate !== undefined;
+    res.json({
+      success: true,
+      data: {
+        personal: hasCustomPersonal ? Number(data.personal_point_rate) : platformRates.personal,
+        community: hasCustomCommunity ? Number(data.community_point_rate) : platformRates.community,
+        is_custom_personal: hasCustomPersonal,
+        is_custom_community: hasCustomCommunity,
+        platform_default: platformRates
+      },
+      message: '적립율이 변경되었습니다',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error updating community-admin point rates:', err);
+    res.status(500).json({ error: 'Failed to update point rates', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 플랫폼 통계 API (홈페이지 실시간 활동 섹션용, 인증 불필요)
+// ============================================
+app.get('/api/stats/summary', async (req, res) => {
+  try {
+    const [{ count: productCount }, { count: reviewCount }, { count: orderCount }, { data: mileageRows }] = await Promise.all([
+      supabase.from('products_with').select('*', { count: 'exact', head: true }).eq('status', 'active'),
+      supabase.from('product_reviews').select('*', { count: 'exact', head: true }).eq('status', 'published'),
+      supabase.from('orders_with').select('*', { count: 'exact', head: true }),
+      supabase.from('orders_with').select('personal_earned_points, community_earned_points')
+    ]);
+
+    const totalMileage = (mileageRows || []).reduce(
+      (sum, o) => sum + Number(o.personal_earned_points || 0) + Number(o.community_earned_points || 0),
+      0
+    );
+
+    res.json({
+      success: true,
+      data: {
+        totalProducts: productCount || 0,
+        totalReviews: reviewCount || 0,
+        totalOrders: orderCount || 0,
+        totalMileagePaid: totalMileage
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching stats summary:', err);
+    res.status(500).json({ error: 'Failed to fetch stats', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 게시판 API (공지사항 / 사용후기 / Q&A / 자유게시판)
+// 읽기는 ANON_KEY(RLS: published만 공개), 쓰기는 전부 서버(service role)를 거쳐
+// 인증 + 권한 체크 후 처리 -- products_with/orders_with 와 동일한 설계 원칙
+// ============================================
+const BOARD_TYPES = ['notice', 'review', 'qa', 'free'];
+
+// 게시글 목록 (공개, 페이지네이션 없이 최신순 최대 100건)
+app.get('/api/boards', async (req, res) => {
+  try {
+    const { type, search } = req.query;
+    if (type && !BOARD_TYPES.includes(type)) {
+      return res.status(400).json({ error: 'Bad Request', message: `type must be one of: ${BOARD_TYPES.join(', ')}`, timestamp: new Date().toISOString() });
+    }
+
+    let query = supabasePublic
+      .from('board_posts')
+      .select('id, board_type, title, author_name, is_pinned, view_count, is_answered, created_at')
+      .order('is_pinned', { ascending: false })
+      .order('created_at', { ascending: false })
+      .limit(100);
+
+    if (type) query = query.eq('board_type', type);
+    if (search) query = query.ilike('title', `%${search}%`);
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    res.json({ success: true, data: data || [], count: data?.length || 0, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching boards:', err);
+    res.status(500).json({ error: 'Failed to fetch boards', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 게시글 상세 (공개, 조회수 +1) + 댓글 목록
+app.get('/api/boards/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: post, error } = await supabasePublic
+      .from('board_posts')
+      .select('*')
+      .eq('id', id)
+      .single();
+
+    if (error || !post) {
+      return res.status(404).json({ error: 'Not Found', message: 'Post not found', timestamp: new Date().toISOString() });
+    }
+
+    // 조회수 증가는 service role로 (anon 키엔 update 권한 없음)
+    supabase.from('board_posts').update({ view_count: (post.view_count || 0) + 1 }).eq('id', id).then(() => {}).catch(() => {});
+
+    const { data: comments } = await supabasePublic
+      .from('board_comments')
+      .select('*')
+      .eq('post_id', id)
+      .order('created_at', { ascending: true });
+
+    res.json({ success: true, data: { ...post, comments: comments || [] }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching board post:', err);
+    res.status(500).json({ error: 'Failed to fetch post', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 게시글 작성 (로그인 필요, 공지사항은 관리자만)
+app.post('/api/boards', authenticate, async (req, res) => {
+  try {
+    const { board_type, title, content } = req.body;
+    if (!board_type || !BOARD_TYPES.includes(board_type)) {
+      return res.status(400).json({ error: 'Bad Request', message: `board_type must be one of: ${BOARD_TYPES.join(', ')}`, timestamp: new Date().toISOString() });
+    }
+    if (!title || !content) {
+      return res.status(400).json({ error: 'Bad Request', message: 'Required fields: title, content', timestamp: new Date().toISOString() });
+    }
+
+    if (board_type === 'notice') {
+      const { data: profile } = await supabase.from('profiles').select('role').eq('id', req.user.id).single();
+      if (!profile || !isAdminRole(profile.role)) {
+        return res.status(403).json({ error: 'Forbidden', message: '공지사항은 관리자만 작성할 수 있습니다', timestamp: new Date().toISOString() });
+      }
+    }
+
+    const { data: profile } = await supabase.from('profiles').select('email, full_name').eq('id', req.user.id).single();
+    const authorName = profile?.full_name || profile?.email || req.user.email || '회원';
+
+    const { data, error } = await supabase
+      .from('board_posts')
+      .insert([{ board_type, title, content, author_id: req.user.id, author_name: authorName, status: 'published' }])
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.status(201).json({ success: true, data, message: 'Post created successfully', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating board post:', err);
+    res.status(500).json({ error: 'Failed to create post', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 게시글 수정 (작성자 본인 또는 관리자)
+app.put('/api/boards/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, content } = req.body;
+
+    const { data: existing, error: findErr } = await supabase.from('board_posts').select('id, author_id').eq('id', id).single();
+    if (findErr || !existing) {
+      return res.status(404).json({ error: 'Not Found', message: 'Post not found', timestamp: new Date().toISOString() });
+    }
+
+    const { data: profile } = await supabase.from('profiles').select('role').eq('id', req.user.id).single();
+    const isOwnerOrAdmin = existing.author_id === req.user.id || isAdminRole(profile?.role);
+    if (!isOwnerOrAdmin) {
+      return res.status(403).json({ error: 'Forbidden', message: '본인 게시글만 수정할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+
+    const updates = { updated_at: new Date().toISOString() };
+    if (title !== undefined) updates.title = title;
+    if (content !== undefined) updates.content = content;
+
+    const { data, error } = await supabase.from('board_posts').update(updates).eq('id', id).select().single();
+    if (error) throw error;
+
+    res.json({ success: true, data, message: 'Post updated successfully', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating board post:', err);
+    res.status(500).json({ error: 'Failed to update post', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 게시글 삭제 (작성자 본인 또는 관리자)
+app.delete('/api/boards/:id', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: existing, error: findErr } = await supabase.from('board_posts').select('id, author_id').eq('id', id).single();
+    if (findErr || !existing) {
+      return res.status(404).json({ error: 'Not Found', message: 'Post not found', timestamp: new Date().toISOString() });
+    }
+
+    const { data: profile } = await supabase.from('profiles').select('role').eq('id', req.user.id).single();
+    const isOwnerOrAdmin = existing.author_id === req.user.id || isAdminRole(profile?.role);
+    if (!isOwnerOrAdmin) {
+      return res.status(403).json({ error: 'Forbidden', message: '본인 게시글만 삭제할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { error } = await supabase.from('board_posts').delete().eq('id', id);
+    if (error) throw error;
+
+    res.json({ success: true, message: 'Post deleted successfully', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting board post:', err);
+    res.status(500).json({ error: 'Failed to delete post', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 댓글 작성 (로그인 필요, Q&A 답변 등. 관리자가 작성하면 is_admin_reply=true로 자동 표시)
+app.post('/api/boards/:id/comments', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { content } = req.body;
+    if (!content) {
+      return res.status(400).json({ error: 'Bad Request', message: 'Required field: content', timestamp: new Date().toISOString() });
+    }
+
+    const { data: post } = await supabase.from('board_posts').select('id, board_type').eq('id', id).single();
+    if (!post) {
+      return res.status(404).json({ error: 'Not Found', message: 'Post not found', timestamp: new Date().toISOString() });
+    }
+
+    const { data: profile } = await supabase.from('profiles').select('role, email, full_name').eq('id', req.user.id).single();
+    const isAdminReply = isAdminRole(profile?.role);
+    const authorName = profile?.full_name || profile?.email || req.user.email || '회원';
+
+    const { data, error } = await supabase
+      .from('board_comments')
+      .insert([{ post_id: id, author_id: req.user.id, author_name: authorName, content, is_admin_reply: isAdminReply }])
+      .select()
+      .single();
+    if (error) throw error;
+
+    if (isAdminReply && post.board_type === 'qa') {
+      await supabase.from('board_posts').update({ is_answered: true }).eq('id', id);
+    }
+
+    res.status(201).json({ success: true, data, message: 'Comment created successfully', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating comment:', err);
+    res.status(500).json({ error: 'Failed to create comment', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 댓글 삭제 (작성자 본인 또는 관리자)
+app.delete('/api/boards/:postId/comments/:commentId', authenticate, async (req, res) => {
+  try {
+    const { commentId } = req.params;
+    const { data: existing } = await supabase.from('board_comments').select('id, author_id').eq('id', commentId).single();
+    if (!existing) {
+      return res.status(404).json({ error: 'Not Found', message: 'Comment not found', timestamp: new Date().toISOString() });
+    }
+
+    const { data: profile } = await supabase.from('profiles').select('role').eq('id', req.user.id).single();
+    const isOwnerOrAdmin = existing.author_id === req.user.id || isAdminRole(profile?.role);
+    if (!isOwnerOrAdmin) {
+      return res.status(403).json({ error: 'Forbidden', message: '본인 댓글만 삭제할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { error } = await supabase.from('board_comments').delete().eq('id', commentId);
+    if (error) throw error;
+
+    res.json({ success: true, message: 'Comment deleted successfully', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting comment:', err);
+    res.status(500).json({ error: 'Failed to delete comment', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자용 게시글 목록 (hidden 포함 전체, 상태/타입 필터)
+app.get('/api/admin/boards', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    let query = supabase.from('board_posts').select('*').order('created_at', { ascending: false });
+    if (req.query.type) query = query.eq('board_type', req.query.type);
+    if (req.query.status) query = query.eq('status', req.query.status);
+    if (req.query.answered !== undefined) query = query.eq('is_answered', req.query.answered === 'true');
+
+    const { data, error } = await query;
+    if (error) throw error;
+
+    res.json({ success: true, data: data || [], count: data?.length || 0, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching admin boards:', err);
+    res.status(500).json({ error: 'Failed to fetch boards', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자용 게시글 상태 변경 (숨김 처리/고정)
+app.patch('/api/admin/boards/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, is_pinned } = req.body;
+
+    const updates = {};
+    if (status !== undefined) {
+      if (!['published', 'hidden'].includes(status)) {
+        return res.status(400).json({ error: 'Bad Request', message: 'status must be published or hidden', timestamp: new Date().toISOString() });
+      }
+      updates.status = status;
+    }
+    if (is_pinned !== undefined) updates.is_pinned = !!is_pinned;
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'status 또는 is_pinned 중 최소 하나는 필요합니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data, error } = await supabase.from('board_posts').update(updates).eq('id', id).select().single();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: 'Post not found', timestamp: new Date().toISOString() });
+
+    res.json({ success: true, data, message: 'Post updated successfully', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating admin board post:', err);
+    res.status(500).json({ error: 'Failed to update post', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 회원 관리 API (관리자 전용, 읽기 전용)
+// profiles 는 GMWOS 와 공유하는 테이블이므로 WITH+ 운영에 필요한 안전한 필드만 선택하고
+// 절대 쓰기(수정)는 하지 않음. 민감 정보(주민번호/복지등급/국적 등)는 조회 대상에서 제외.
+// ============================================
+app.get('/api/admin/members', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { search } = req.query;
+    let query = supabase
+      .from('profiles')
+      .select('id, email, full_name, phone, role, is_active, created_at')
+      .order('created_at', { ascending: false })
+      .limit(300);
+
+    if (search) query = query.or(`email.ilike.%${search}%,full_name.ilike.%${search}%`);
+
+    const { data: members, error } = await query;
+    if (error) throw error;
+
+    const memberIds = (members || []).map(m => m.id);
+    let orderStatsByUser = {};
+    if (memberIds.length > 0) {
+      const { data: orders } = await supabase
+        .from('orders_with')
+        .select('user_id, final_price, personal_earned_points, community_earned_points')
+        .in('user_id', memberIds);
+      (orders || []).forEach(o => {
+        if (!orderStatsByUser[o.user_id]) orderStatsByUser[o.user_id] = { orderCount: 0, totalSpent: 0, totalMileage: 0 };
+        orderStatsByUser[o.user_id].orderCount += 1;
+        orderStatsByUser[o.user_id].totalSpent += Number(o.final_price || 0);
+        orderStatsByUser[o.user_id].totalMileage += Number(o.personal_earned_points || 0) + Number(o.community_earned_points || 0);
+      });
+    }
+
+    const result = (members || []).map(m => ({
+      ...m,
+      orderCount: orderStatsByUser[m.id]?.orderCount || 0,
+      totalSpent: orderStatsByUser[m.id]?.totalSpent || 0,
+      totalMileage: orderStatsByUser[m.id]?.totalMileage || 0
+    }));
+
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching admin members:', err);
+    res.status(500).json({ error: 'Failed to fetch members', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 회원 상세 (본인 주문 내역 포함, 관리자 전용, 읽기 전용)
+app.get('/api/admin/members/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: member, error } = await supabase
+      .from('profiles')
+      .select('id, email, full_name, phone, role, is_active, created_at')
+      .eq('id', id)
+      .single();
+    if (error || !member) {
+      return res.status(404).json({ error: 'Not Found', message: 'Member not found', timestamp: new Date().toISOString() });
+    }
+
+    const { data: orders } = await supabase
+      .from('orders_with')
+      .select('id, order_number, status, final_price, personal_earned_points, community_earned_points, created_at')
+      .eq('user_id', id)
+      .order('created_at', { ascending: false });
+
+    res.json({ success: true, data: { ...member, orders: orders || [] }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching member detail:', err);
+    res.status(500).json({ error: 'Failed to fetch member', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 회원 role 변경 (최고관리자 전용) - 플랫폼 관리자(admin)를 지정/해제하는 용도
+// WITH+에서 의미있는 역할만 대상으로 한다: member / provider / admin
+// - super_admin 계정끼리는 서로 건드릴 수 없음(실수로 잠기는 것 방지, 최고관리자 변경은 DB에서 직접)
+// - GMWOS 쪽에서 쓰는 role(super_admin 외 finance_manager 등)은 WITH+ 관리자 페이지에서 다루지 않음
+app.patch('/api/admin/members/:id/role', authenticate, requireRole(['super_admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { role } = req.body;
+    const ALLOWED_ROLES = ['member', 'provider', 'admin'];
+
+    if (!ALLOWED_ROLES.includes(role)) {
+      return res.status(400).json({ error: 'Bad Request', message: `role은 ${ALLOWED_ROLES.join('/')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+    }
+    if (id === req.user.id) {
+      return res.status(400).json({ error: 'Bad Request', message: '본인 계정의 권한은 이 화면에서 변경할 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: target, error: findErr } = await supabase
+      .from('profiles')
+      .select('id, email, role')
+      .eq('id', id)
+      .single();
+    if (findErr || !target) {
+      return res.status(404).json({ error: 'Not Found', message: 'Member not found', timestamp: new Date().toISOString() });
+    }
+    if (target.role === 'super_admin') {
+      return res.status(403).json({ error: 'Forbidden', message: '최고관리자 계정의 권한은 이 화면에서 변경할 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    if (!['member', 'provider', 'admin'].includes(target.role)) {
+      return res.status(403).json({ error: 'Forbidden', message: '해당 계정의 권한은 WITH+ 관리자 페이지에서 변경할 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .update({ role })
+      .eq('id', id)
+      .select('id, email, full_name, phone, role, is_active, created_at')
+      .single();
+    if (error) throw error;
+
+    // 공유 profiles 테이블의 민감한 컬럼(role)을 변경하는 작업이므로, GMWOS 쪽에서도 추적할 수 있도록 감사 로그를 남긴다.
+    // (WITH+가 GMWOS의 권한 판단 로직을 직접 알 수 없어 role 값 자체를 신뢰성 있게 검증할 수는 없지만,
+    //  누가/언제/무엇을 바꿨는지는 남겨두어 문제 발생 시 추적 가능하게 한다)
+    try {
+      await supabase.from('admin_actions').insert([{
+        actor_id: req.user.id,
+        action: 'withplus_member_role_change',
+        target_type: 'profile',
+        target_id: id,
+        meta: { from_role: target.role, to_role: role, target_email: target.email }
+      }]);
+    } catch (logErr) {
+      console.error('admin_actions 로그 기록 실패 (권한 변경 자체는 정상 처리됨):', logErr.message);
+    }
+
+    res.json({ success: true, data, message: `${target.email}님의 권한이 ${role}(으)로 변경되었습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating member role:', err);
+    res.status(500).json({ error: 'Failed to update member role', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 관리자 대시보드 통계 API (관리자 전용)
+// ============================================
+app.get('/api/admin/dashboard', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const [
+      { data: allOrders },
+      { count: memberCount },
+      { count: productCount },
+      { count: pendingQaCount },
+      { data: recentOrdersRaw }
+    ] = await Promise.all([
+      supabase.from('orders_with').select('status, final_price, personal_earned_points, community_earned_points, items, created_at'),
+      supabase.from('profiles').select('*', { count: 'exact', head: true }),
+      supabase.from('products_with').select('*', { count: 'exact', head: true }).eq('status', 'active'),
+      supabase.from('board_posts').select('*', { count: 'exact', head: true }).eq('board_type', 'qa').eq('is_answered', false),
+      supabase.from('orders_with').select('id, order_number, final_price, status, created_at').order('created_at', { ascending: false }).limit(5)
+    ]);
+
+    const orders = allOrders || [];
+    const totalSales = orders.filter(o => o.status !== 'cancelled' && o.status !== 'refunded').reduce((s, o) => s + Number(o.final_price || 0), 0);
+    const totalMileagePaid = orders.reduce((s, o) => s + Number(o.personal_earned_points || 0) + Number(o.community_earned_points || 0), 0);
+    const statusBreakdown = {};
+    orders.forEach(o => { statusBreakdown[o.status] = (statusBreakdown[o.status] || 0) + 1; });
+
+    const oneWeekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const ordersThisWeek = orders.filter(o => o.created_at >= oneWeekAgo).length;
+
+    // 카테고리별 판매량 (주문 items의 product_id로는 카테고리를 알 수 없으므로 이름 기준 집계로 단순화)
+    const categorySales = {};
+    orders.forEach(o => {
+      (Array.isArray(o.items) ? o.items : []).forEach(item => {
+        const key = item.name || '기타';
+        categorySales[key] = (categorySales[key] || 0) + (Number(item.quantity) || 0);
+      });
+    });
+    const topSellingItems = Object.entries(categorySales)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([name, qty]) => ({ name, qty }));
+
+    res.json({
+      success: true,
+      data: {
+        totalSales,
+        totalOrders: orders.length,
+        totalMembers: memberCount || 0,
+        totalProducts: productCount || 0,
+        totalMileagePaid,
+        ordersThisWeek,
+        pendingQaCount: pendingQaCount || 0,
+        statusBreakdown,
+        topSellingItems,
+        recentOrders: recentOrdersRaw || []
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching admin dashboard:', err);
+    res.status(500).json({ error: 'Failed to fetch dashboard', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 공급사별 판매 리포트 (관리자: 전체 공급사 / 판매자(provider): 본인 데이터만)
+// 여기서 "공급사"는 플랫폼에 로그인해 상품을 등록하는 판매자 계정(provider role,
+// products_with.supplier_id)을 뜻한다 — 위의 /api/admin/suppliers(거래처 마스터데이터)와는 다른 개념.
+// 주문에 실제 상품 라인아이템 테이블이 없어(orders_with.items가 JSON 배열) 서버에서 직접 집계한다.
+// ============================================
+app.get('/api/admin/supplier-sales-report', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    let ordersQuery = supabase
+      .from('orders_with')
+      .select('id, items, status, final_price, created_at')
+      .not('status', 'in', '(cancelled,refunded)');
+    if (startDate) ordersQuery = ordersQuery.gte('created_at', startDate);
+    if (endDate) {
+      // endDate는 날짜만 넘어올 수 있으므로(예: 2026-08-12) 그 날 끝까지 포함되도록 다음날 자정 미만으로 처리
+      const endExclusive = /^\d{4}-\d{2}-\d{2}$/.test(endDate)
+        ? new Date(new Date(endDate + 'T00:00:00Z').getTime() + 24 * 60 * 60 * 1000).toISOString()
+        : endDate;
+      ordersQuery = ordersQuery.lt('created_at', endExclusive);
+    }
+
+    const [{ data: orders, error: ordersErr }, { data: allProducts, error: prodErr }] = await Promise.all([
+      ordersQuery,
+      supabase.from('products_with').select('id, supplier_id, name')
+    ]);
+    if (ordersErr) throw ordersErr;
+    if (prodErr) throw prodErr;
+
+    const productSupplierMap = {};
+    (allProducts || []).forEach(p => { productSupplierMap[String(p.id)] = p.supplier_id; });
+
+    const onlyOwnSupplierId = isAdminRole(req.userRole) ? null : req.user.id;
+
+    // supplierId -> { revenue, quantity, orderIds: Set }
+    const agg = {};
+    (orders || []).forEach(o => {
+      const items = Array.isArray(o.items) ? o.items : [];
+      items.forEach(item => {
+        const supplierId = productSupplierMap[String(item.product_id)];
+        if (!supplierId) return; // 삭제된 상품 등 공급자를 알 수 없는 라인아이템은 집계에서 제외
+        if (onlyOwnSupplierId && supplierId !== onlyOwnSupplierId) return;
+        if (!agg[supplierId]) agg[supplierId] = { revenue: 0, quantity: 0, orderIds: new Set() };
+        agg[supplierId].revenue += Number(item.price || 0) * Number(item.quantity || 1);
+        agg[supplierId].quantity += Number(item.quantity || 1);
+        agg[supplierId].orderIds.add(o.id);
+      });
+    });
+
+    const supplierIds = Object.keys(agg);
+    const { data: supplierProfiles } = supplierIds.length
+      ? await supabase.from('profiles').select('id, full_name, email').in('id', supplierIds)
+      : { data: [] };
+
+    const rows = supplierIds.map(supplierId => {
+      const profile = (supplierProfiles || []).find(p => p.id === supplierId);
+      return {
+        supplier_id: supplierId,
+        supplier_name: profile?.full_name || null,
+        supplier_email: profile?.email || null,
+        revenue: agg[supplierId].revenue,
+        quantity: agg[supplierId].quantity,
+        order_count: agg[supplierId].orderIds.size
+      };
+    }).sort((a, b) => b.revenue - a.revenue);
+
+    const totalRevenue = rows.reduce((s, r) => s + r.revenue, 0);
+    const totalQuantity = rows.reduce((s, r) => s + r.quantity, 0);
+
+    res.json({
+      success: true,
+      data: {
+        rows,
+        totalRevenue,
+        totalQuantity,
+        startDate: startDate || null,
+        endDate: endDate || null
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching supplier sales report:', err);
+    res.status(500).json({ error: 'Failed to fetch supplier sales report', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 공급자(판매자, provider role) 정산 시스템 기본 골격
+// - "공급자"는 위 suppliers 마스터 데이터(매입처)와는 다른 개념으로, 플랫폼에 상품을 등록해 파는
+//   provider role 계정(products_with.supplier_id = profiles.id)을 말한다. 위 supplier-sales-report가
+//   보여주는 매출을 바탕으로, 관리자가 수수료율을 적용해 기간별 정산 내역을 생성/관리한다.
+// ============================================
+
+// 특정 기간의 공급자별(provider) 매출 집계 - settlements 생성 시 재사용
+async function computeProviderRevenueForPeriod(startDate, endDate) {
+  let ordersQuery = supabase
+    .from('orders_with')
+    .select('id, items, status, created_at')
+    .not('status', 'in', '(cancelled,refunded)');
+  if (startDate) ordersQuery = ordersQuery.gte('created_at', startDate);
+  if (endDate) {
+    const endExclusive = /^\d{4}-\d{2}-\d{2}$/.test(endDate)
+      ? new Date(new Date(endDate + 'T00:00:00Z').getTime() + 24 * 60 * 60 * 1000).toISOString()
+      : endDate;
+    ordersQuery = ordersQuery.lt('created_at', endExclusive);
+  }
+
+  const [{ data: orders, error: ordersErr }, { data: allProducts, error: prodErr }] = await Promise.all([
+    ordersQuery,
+    supabase.from('products_with').select('id, supplier_id')
+  ]);
+  if (ordersErr) throw ordersErr;
+  if (prodErr) throw prodErr;
+
+  const productSupplierMap = {};
+  (allProducts || []).forEach(p => { productSupplierMap[String(p.id)] = p.supplier_id; });
+
+  const agg = {}; // supplierId -> { revenue, orderIds: Set }
+  (orders || []).forEach(o => {
+    const items = Array.isArray(o.items) ? o.items : [];
+    const touchedSuppliers = new Set();
+    items.forEach(item => {
+      const supplierId = productSupplierMap[String(item.product_id)];
+      if (!supplierId) return; // 삭제된 상품 등 공급자를 알 수 없는 라인아이템은 집계에서 제외
+      if (!agg[supplierId]) agg[supplierId] = { revenue: 0, orderIds: new Set() };
+      agg[supplierId].revenue += Number(item.price || 0) * Number(item.quantity || 1);
+      touchedSuppliers.add(supplierId);
+    });
+    touchedSuppliers.forEach(supplierId => agg[supplierId].orderIds.add(o.id));
+  });
+
+  return agg;
+}
+
+// 공급자(provider) 목록 + 현재 수수료율 조회 (정산 화면용)
+app.get('/api/admin/providers', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('id, full_name, email, commission_rate, is_active, created_at')
+      .eq('role', 'provider')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], count: data?.length || 0, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching providers:', err);
+    res.status(500).json({ error: 'Failed to fetch providers', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공급자별 수수료율 설정
+app.patch('/api/admin/providers/:id/commission-rate', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const rate = Number(req.body?.commission_rate);
+    if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+      return res.status(400).json({ error: 'Bad Request', message: 'commission_rate는 0~100 사이의 숫자여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const { data: target, error: targetErr } = await supabase.from('profiles').select('id, role').eq('id', id).maybeSingle();
+    if (targetErr) throw targetErr;
+    if (!target || target.role !== 'provider') {
+      return res.status(404).json({ error: 'Not Found', message: '공급자(provider) 계정을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase.from('profiles').update({ commission_rate: rate }).eq('id', id).select('id, full_name, commission_rate').single();
+    if (error) throw error;
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating commission rate:', err);
+    res.status(500).json({ error: 'Failed to update commission rate', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 기간을 지정해 공급자별 정산 내역 생성(또는 재계산). 이미 'paid' 상태인 건은 건드리지 않는다.
+app.post('/api/admin/settlements/generate', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body || {};
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Bad Request', message: 'startDate, endDate는 필수입니다 (예: 2026-08-01)', timestamp: new Date().toISOString() });
+    }
+
+    const agg = await computeProviderRevenueForPeriod(startDate, endDate);
+    const supplierIds = Object.keys(agg);
+
+    if (supplierIds.length === 0) {
+      return res.json({ success: true, data: { created: 0, updated: 0, skippedPaid: 0, rows: [] }, timestamp: new Date().toISOString() });
+    }
+
+    const { data: providers, error: provErr } = await supabase
+      .from('profiles').select('id, commission_rate').in('id', supplierIds);
+    if (provErr) throw provErr;
+    const rateMap = {};
+    (providers || []).forEach(p => { rateMap[p.id] = Number(p.commission_rate) || 0; });
+
+    const { data: existingRows, error: existErr } = await supabase
+      .from('supplier_settlements')
+      .select('id, supplier_id, status')
+      .eq('period_start', startDate)
+      .eq('period_end', endDate)
+      .in('supplier_id', supplierIds);
+    if (existErr) throw existErr;
+    const existingBySupplier = {};
+    (existingRows || []).forEach(r => { existingBySupplier[r.supplier_id] = r; });
+
+    let created = 0, updated = 0, skippedPaid = 0;
+    const resultRows = [];
+
+    for (const supplierId of supplierIds) {
+      const grossRevenue = agg[supplierId].revenue;
+      const orderCount = agg[supplierId].orderIds.size;
+      const commissionRate = rateMap[supplierId] != null ? rateMap[supplierId] : 10;
+      const commissionAmount = Math.round(grossRevenue * commissionRate / 100);
+      const netAmount = grossRevenue - commissionAmount;
+
+      const existing = existingBySupplier[supplierId];
+      if (existing && existing.status === 'paid') {
+        skippedPaid++;
+        continue;
+      }
+
+      if (existing) {
+        const { data, error } = await supabase.from('supplier_settlements').update({
+          order_count: orderCount, gross_revenue: grossRevenue, commission_rate: commissionRate,
+          commission_amount: commissionAmount, net_amount: netAmount
+        }).eq('id', existing.id).select().single();
+        if (error) throw error;
+        updated++;
+        resultRows.push(data);
+      } else {
+        const { data, error } = await supabase.from('supplier_settlements').insert([{
+          supplier_id: supplierId, period_start: startDate, period_end: endDate,
+          order_count: orderCount, gross_revenue: grossRevenue, commission_rate: commissionRate,
+          commission_amount: commissionAmount, net_amount: netAmount,
+          status: 'pending', created_by: req.user.id
+        }]).select().single();
+        if (error) throw error;
+        created++;
+        resultRows.push(data);
+      }
+    }
+
+    res.json({ success: true, data: { created, updated, skippedPaid, rows: resultRows }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error generating settlements:', err);
+    res.status(500).json({ error: 'Failed to generate settlements', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 정산 내역 조회 (관리자는 전체, provider는 본인 것만)
+app.get('/api/admin/settlements', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { status, supplierId } = req.query;
+    let query = supabase.from('supplier_settlements').select('*').order('period_start', { ascending: false });
+
+    if (!isAdminRole(req.userRole)) {
+      query = query.eq('supplier_id', req.user.id);
+    } else if (supplierId) {
+      query = query.eq('supplier_id', supplierId);
+    }
+    if (status) query = query.eq('status', status);
+
+    const { data: rows, error } = await query;
+    if (error) throw error;
+
+    const supplierIds = [...new Set((rows || []).map(r => r.supplier_id))];
+    const { data: supplierProfiles } = supplierIds.length
+      ? await supabase.from('profiles').select('id, full_name, email').in('id', supplierIds)
+      : { data: [] };
+    const profileMap = {};
+    (supplierProfiles || []).forEach(p => { profileMap[p.id] = p; });
+
+    const result = (rows || []).map(r => ({
+      ...r,
+      supplier_name: profileMap[r.supplier_id]?.full_name || null,
+      supplier_email: profileMap[r.supplier_id]?.email || null
+    }));
+
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching settlements:', err);
+    res.status(500).json({ error: 'Failed to fetch settlements', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 정산 상태 변경 (지급 완료 / 취소) - 관리자 전용
+app.patch('/api/admin/settlements/:id/status', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body || {};
+    if (!['pending', 'paid', 'cancelled'].includes(status)) {
+      return res.status(400).json({ error: 'Bad Request', message: "status는 'pending', 'paid', 'cancelled' 중 하나여야 합니다", timestamp: new Date().toISOString() });
+    }
+    const update = { status };
+    if (status === 'paid') update.paid_at = new Date().toISOString();
+    else update.paid_at = null;
+
+    const { data, error } = await supabase.from('supplier_settlements').update(update).eq('id', id).select().single();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '정산 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating settlement status:', err);
+    res.status(500).json({ error: 'Failed to update settlement status', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🕵️ 관리자 감사로그 조회 (super_admin 전용 - 로그 자체는 최고 권한만 열람 가능해야 의미가 있음)
+// ============================================
+app.get('/api/admin/audit-logs', authenticate, requireRole(['super_admin']), async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 30));
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    let query = supabase.from('admin_audit_logs_with').select('*', { count: 'exact' }).order('created_at', { ascending: false });
+
+    if (req.query.adminId) query = query.eq('admin_id', req.query.adminId);
+    if (req.query.method) query = query.eq('method', req.query.method.toUpperCase());
+    if (req.query.pathContains) query = query.ilike('path', `%${req.query.pathContains}%`);
+    if (req.query.dateFrom) query = query.gte('created_at', req.query.dateFrom);
+    if (req.query.dateTo) query = query.lte('created_at', req.query.dateTo);
+
+    const { data, error, count } = await query.range(from, to);
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      data: data || [],
+      pagination: { page, pageSize, total: count || 0, totalPages: Math.ceil((count || 0) / pageSize) },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching audit logs:', err);
+    res.status(500).json({ error: 'Failed to fetch audit logs', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자 목록(super_admin 전용) - 감사로그 화면에서 "관리자별 필터" 드롭다운을 채우는 용도
+app.get('/api/admin/audit-logs/admins', authenticate, requireRole(['super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('profiles').select('id, full_name, email').in('role', ['admin', 'super_admin']).order('email');
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch admins', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 찜하기(위시리스트) API
+// ============================================
+app.get('/api/wishlist', authenticate, async (req, res) => {
+  try {
+    const { data: rows, error } = await supabase
+      .from('wishlist_with')
+      .select('id, product_id, created_at')
+      .eq('user_id', req.user.id)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    const productIds = (rows || []).map(r => r.product_id);
+    let products = [];
+    if (productIds.length > 0) {
+      const { data: productRows, error: pErr } = await supabase
+        .from('products_with')
+        .select('*')
+        .in('id', productIds);
+      if (pErr) throw pErr;
+      products = productRows || [];
+    }
+    const byId = {};
+    products.forEach(p => { byId[p.id] = p; });
+
+    const result = (rows || [])
+      .map(r => byId[r.product_id] ? { ...byId[r.product_id], wishlisted_at: r.created_at } : null)
+      .filter(Boolean);
+
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching wishlist:', err);
+    res.status(500).json({ error: 'Failed to fetch wishlist', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/wishlist', authenticate, async (req, res) => {
+  try {
+    const { product_id } = req.body;
+    if (!product_id) {
+      return res.status(400).json({ error: 'Bad Request', message: 'product_id는 필수입니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data, error } = await supabase
+      .from('wishlist_with')
+      .upsert({ user_id: req.user.id, product_id }, { onConflict: 'user_id,product_id', ignoreDuplicates: true })
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+
+    res.status(201).json({ success: true, data, message: '찜 목록에 추가했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error adding to wishlist:', err);
+    res.status(500).json({ error: 'Failed to add to wishlist', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.delete('/api/wishlist/:productId', authenticate, async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('wishlist_with')
+      .delete()
+      .eq('user_id', req.user.id)
+      .eq('product_id', req.params.productId);
+    if (error) throw error;
+
+    res.json({ success: true, message: '찜 목록에서 제거했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error removing from wishlist:', err);
+    res.status(500).json({ error: 'Failed to remove from wishlist', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 재입고 알림 신청 + 인앱 알림
+// - 실제 이메일/SMS/푸시 발송 인프라가 없으므로, 정직하게 "사이트 안에서 확인하는 알림"으로 구현한다.
+//   품절 상품에 신청해두면, 관리자가 재고를 채워 넣는 순간(재고가 0 이하 -> 양수로 바뀌는 순간) 알림이 생성되고,
+//   신청은 1회성으로 자동 해제된다(다시 품절되면 재신청 필요 - 재입고를 계속 알림받고 싶다면 매번 다시 신청).
+// ============================================
+
+// 재고가 0 이하 -> 양수로 바뀔 때 호출되어, 해당 상품에 재입고 알림을 신청해둔 회원들에게 알림을 생성하고
+// 신청을 정리한다(1회성 알림이므로 알림을 보낸 신청 건은 삭제). 실패해도 재고 처리 자체를 막지 않는다(best-effort).
+async function triggerRestockNotifications(productId) {
+  try {
+    const { data: subs, error: subsErr } = await supabase
+      .from('restock_subscriptions_with')
+      .select('id, user_id')
+      .eq('product_id', productId);
+    if (subsErr || !subs || subs.length === 0) return;
+
+    const { data: product } = await supabase.from('products_with').select('id, name').eq('id', productId).maybeSingle();
+    const productName = product ? product.name : '상품';
+
+    const notifRows = subs.map(s => ({
+      user_id: s.user_id,
+      type: 'restock',
+      title: '재입고 알림',
+      message: `신청하신 "${productName}"이(가) 재입고되었습니다!`,
+      link: `/product/${productId}`
+    }));
+    await supabase.from('notifications_with').insert(notifRows);
+    await supabase.from('restock_subscriptions_with').delete().eq('product_id', productId);
+  } catch (err) {
+    console.error('Error triggering restock notifications:', err);
+  }
+}
+
+// 재입고 알림 신청 (품절 상품에만 신청 가능 - 재고가 있으면 바로 구매하면 되므로)
+app.post('/api/products/:id/restock-notify', authenticate, async (req, res) => {
+  try {
+    const { data: product, error: productErr } = await supabase
+      .from('products_with')
+      .select('id, name, stock')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (productErr) throw productErr;
+    if (!product) return res.status(404).json({ error: 'Not Found', message: '상품을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (Number(product.stock) > 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '현재 재고가 있는 상품입니다. 바로 구매해주세요!', timestamp: new Date().toISOString() });
+    }
+
+    const { data, error } = await supabase
+      .from('restock_subscriptions_with')
+      .upsert({ product_id: req.params.id, user_id: req.user.id }, { onConflict: 'product_id,user_id', ignoreDuplicates: true })
+      .select()
+      .maybeSingle();
+    if (error) throw error;
+
+    res.status(201).json({ success: true, data, message: '재입고되면 알림을 보내드릴게요', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error subscribing restock notification:', err);
+    res.status(500).json({ error: 'Failed to subscribe restock notification', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 재입고 알림 신청 취소
+app.delete('/api/products/:id/restock-notify', authenticate, async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('restock_subscriptions_with')
+      .delete()
+      .eq('user_id', req.user.id)
+      .eq('product_id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true, message: '재입고 알림 신청을 취소했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error unsubscribing restock notification:', err);
+    res.status(500).json({ error: 'Failed to unsubscribe restock notification', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 내가 신청해둔 재입고 알림 목록 (마이페이지에서 확인/취소용)
+app.get('/api/me/restock-notifications', authenticate, async (req, res) => {
+  try {
+    const { data: subs, error } = await supabase
+      .from('restock_subscriptions_with')
+      .select('id, product_id, created_at')
+      .eq('user_id', req.user.id)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    const productIds = (subs || []).map(s => s.product_id);
+    let products = [];
+    if (productIds.length > 0) {
+      const { data: productRows } = await supabase.from('products_with').select('id, name, stock, images_urls').in('id', productIds);
+      products = productRows || [];
+    }
+    const byId = {}; products.forEach(p => { byId[p.id] = p; });
+    const result = (subs || []).map(s => ({ subscription_id: s.id, subscribed_at: s.created_at, product: byId[s.product_id] || null })).filter(r => r.product);
+
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching restock notifications:', err);
+    res.status(500).json({ error: 'Failed to fetch restock notifications', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 내 알림함 (재입고 알림 등 - 앞으로 다른 유형의 알림도 이 테이블/API를 함께 사용할 수 있도록 범용으로 설계)
+app.get('/api/me/notifications', authenticate, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('notifications_with')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .order('created_at', { ascending: false })
+      .limit(50);
+    if (error) throw error;
+    res.json({ success: true, data: data || [], unread_count: (data || []).filter(n => !n.is_read).length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching notifications:', err);
+    res.status(500).json({ error: 'Failed to fetch notifications', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.patch('/api/me/notifications/:id/read', authenticate, async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('notifications_with')
+      .update({ is_read: true })
+      .eq('id', req.params.id)
+      .eq('user_id', req.user.id);
+    if (error) throw error;
+    res.json({ success: true, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error marking notification read:', err);
+    res.status(500).json({ error: 'Failed to update notification', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/me/notifications/read-all', authenticate, async (req, res) => {
+  try {
+    const { error } = await supabase
+      .from('notifications_with')
+      .update({ is_read: true })
+      .eq('user_id', req.user.id)
+      .eq('is_read', false);
+    if (error) throw error;
+    res.json({ success: true, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error marking all notifications read:', err);
+    res.status(500).json({ error: 'Failed to update notifications', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🔄 정기배송(구독) — 신청/일정 관리만 (자동결제/자동주문생성은 범위 밖)
+// - 카페24 관리자에 있던 "정기배송(결제)" 기능을 확인하고, 형님과 논의한 결과 이번 라운드는
+//   "일단 신청/일정 관리 기능만" 구현하기로 범위를 정했다. 즉, 회원이 상품+수량+배송주기+배송지를
+//   등록해두면 "다음 배송 예정일"이 자동으로 계산/관리되고, 관리자가 그 일정을 보고 발송을 처리하면
+//   다음 예정일로 넘어가는 것까지만 한다. 실제 결제(카드 자동청구)나 주문(orders) 자동 생성은
+//   하지 않는다 — 정직하게 범위 밖으로 남겨둔다(주석으로 명시).
+// ============================================
+const SUBSCRIPTION_CYCLE_DAYS = [7, 14, 30, 60];
+const SUBSCRIPTION_STATUSES = ['active', 'paused', 'cancelled'];
+
+function addDaysToDateString(dateStr, days) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + Number(days));
+  return d.toISOString().slice(0, 10);
+}
+
+// 정기배송 신청 (구독 가능 상품으로 표시된 상품만)
+app.post('/api/subscriptions', authenticate, async (req, res) => {
+  try {
+    const { product_id, quantity, cycle_days, shipping_address_id, recipient_name, recipient_phone, postal_code, address, address_detail, memo } = req.body;
+
+    if (!product_id) {
+      return res.status(400).json({ error: 'Bad Request', message: '상품을 선택해주세요', timestamp: new Date().toISOString() });
+    }
+    if (!SUBSCRIPTION_CYCLE_DAYS.includes(Number(cycle_days))) {
+      return res.status(400).json({ error: 'Bad Request', message: '배송 주기가 올바르지 않습니다', timestamp: new Date().toISOString() });
+    }
+    const qty = parseInt(quantity, 10);
+    if (!Number.isFinite(qty) || qty < 1 || qty > 99) {
+      return res.status(400).json({ error: 'Bad Request', message: '수량은 1~99개 사이여야 합니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: product, error: productErr } = await supabase
+      .from('products_with')
+      .select('id, name, status, subscription_available')
+      .eq('id', product_id)
+      .maybeSingle();
+    if (productErr) throw productErr;
+    if (!product || product.status !== 'active') {
+      return res.status(404).json({ error: 'Not Found', message: '상품을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    if (!product.subscription_available) {
+      return res.status(400).json({ error: 'Bad Request', message: '정기배송을 지원하지 않는 상품입니다', timestamp: new Date().toISOString() });
+    }
+
+    // 배송지: 저장된 배송지를 지정하면 그 정보를 그대로 스냅샷으로 복사해서 저장한다
+    // (나중에 배송지를 수정/삭제해도 이미 등록된 구독의 배송정보는 바뀌지 않도록 하기 위함).
+    let addressFields;
+    if (shipping_address_id) {
+      const { data: savedAddr } = await supabase
+        .from('shipping_addresses_with')
+        .select('*')
+        .eq('id', shipping_address_id)
+        .eq('user_id', req.user.id)
+        .maybeSingle();
+      if (!savedAddr) {
+        return res.status(400).json({ error: 'Bad Request', message: '선택하신 배송지를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+      }
+      addressFields = {
+        shipping_address_id: savedAddr.id,
+        recipient_name: savedAddr.receiver_name,
+        recipient_phone: savedAddr.receiver_phone,
+        postal_code: savedAddr.postal_code || null,
+        address: savedAddr.address,
+        address_detail: savedAddr.address_detail || null
+      };
+    } else {
+      if (!recipient_name || !String(recipient_name).trim() || !recipient_phone || !String(recipient_phone).trim() || !address || !String(address).trim()) {
+        return res.status(400).json({ error: 'Bad Request', message: '받는 분 성함/연락처/주소를 입력해주세요', timestamp: new Date().toISOString() });
+      }
+      addressFields = {
+        shipping_address_id: null,
+        recipient_name: String(recipient_name).trim(),
+        recipient_phone: String(recipient_phone).trim(),
+        postal_code: postal_code ? String(postal_code).trim() : null,
+        address: String(address).trim(),
+        address_detail: address_detail ? String(address_detail).trim() : null
+      };
+    }
+
+    const { data, error } = await supabase
+      .from('product_subscriptions_with')
+      .insert([{
+        user_id: req.user.id,
+        product_id,
+        quantity: qty,
+        cycle_days: Number(cycle_days),
+        ...addressFields,
+        status: 'active',
+        next_delivery_date: addDaysToDateString(todayDateString(), Number(cycle_days)),
+        memo: memo ? String(memo).trim() : null
+      }])
+      .select()
+      .single();
+    if (error) throw error;
+
+    res.status(201).json({ success: true, data, message: `정기배송 신청이 완료되었습니다. 다음 배송 예정일: ${data.next_delivery_date}`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating subscription:', err);
+    res.status(500).json({ error: 'Failed to create subscription', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 내 정기배송 목록
+app.get('/api/me/subscriptions', authenticate, async (req, res) => {
+  try {
+    const { data: subs, error } = await supabase
+      .from('product_subscriptions_with')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    const productIds = [...new Set((subs || []).map(s => s.product_id))];
+    let products = [];
+    if (productIds.length > 0) {
+      const { data: productRows } = await supabase.from('products_with').select('id, name, images_urls, price, discount_price').in('id', productIds);
+      products = productRows || [];
+    }
+    const byId = {}; products.forEach(p => { byId[p.id] = p; });
+    const result = (subs || []).map(s => ({ ...s, product: byId[s.product_id] || null }));
+
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching subscriptions:', err);
+    res.status(500).json({ error: 'Failed to fetch subscriptions', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 내 정기배송 수정 (수량/주기/상태(일시중지·재개)/배송지) - 취소된 구독은 수정 불가
+app.patch('/api/me/subscriptions/:id', authenticate, async (req, res) => {
+  try {
+    const { data: existing, error: findErr } = await supabase
+      .from('product_subscriptions_with')
+      .select('id, user_id, status, cycle_days')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing || existing.user_id !== req.user.id) {
+      return res.status(404).json({ error: 'Not Found', message: '정기배송 신청을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    if (existing.status === 'cancelled') {
+      return res.status(400).json({ error: 'Bad Request', message: '취소된 정기배송은 수정할 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { quantity, cycle_days, status, shipping_address_id, recipient_name, recipient_phone, postal_code, address, address_detail } = req.body;
+    const updates = { updated_at: new Date().toISOString() };
+
+    if (quantity !== undefined) {
+      const qty = parseInt(quantity, 10);
+      if (!Number.isFinite(qty) || qty < 1 || qty > 99) {
+        return res.status(400).json({ error: 'Bad Request', message: '수량은 1~99개 사이여야 합니다', timestamp: new Date().toISOString() });
+      }
+      updates.quantity = qty;
+    }
+    if (cycle_days !== undefined) {
+      if (!SUBSCRIPTION_CYCLE_DAYS.includes(Number(cycle_days))) {
+        return res.status(400).json({ error: 'Bad Request', message: '배송 주기가 올바르지 않습니다', timestamp: new Date().toISOString() });
+      }
+      updates.cycle_days = Number(cycle_days);
+    }
+    if (status !== undefined) {
+      if (!['active', 'paused'].includes(status)) {
+        return res.status(400).json({ error: 'Bad Request', message: '상태값이 올바르지 않습니다 (취소는 별도 API를 사용해주세요)', timestamp: new Date().toISOString() });
+      }
+      updates.status = status;
+    }
+    if (shipping_address_id !== undefined && shipping_address_id) {
+      const { data: savedAddr } = await supabase
+        .from('shipping_addresses_with')
+        .select('*')
+        .eq('id', shipping_address_id)
+        .eq('user_id', req.user.id)
+        .maybeSingle();
+      if (!savedAddr) {
+        return res.status(400).json({ error: 'Bad Request', message: '선택하신 배송지를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+      }
+      updates.shipping_address_id = savedAddr.id;
+      updates.recipient_name = savedAddr.receiver_name;
+      updates.recipient_phone = savedAddr.receiver_phone;
+      updates.postal_code = savedAddr.postal_code || null;
+      updates.address = savedAddr.address;
+      updates.address_detail = savedAddr.address_detail || null;
+    } else if (recipient_name !== undefined || recipient_phone !== undefined || address !== undefined) {
+      if (!recipient_name || !String(recipient_name).trim() || !recipient_phone || !String(recipient_phone).trim() || !address || !String(address).trim()) {
+        return res.status(400).json({ error: 'Bad Request', message: '받는 분 성함/연락처/주소를 입력해주세요', timestamp: new Date().toISOString() });
+      }
+      updates.shipping_address_id = null;
+      updates.recipient_name = String(recipient_name).trim();
+      updates.recipient_phone = String(recipient_phone).trim();
+      updates.postal_code = postal_code ? String(postal_code).trim() : null;
+      updates.address = String(address).trim();
+      updates.address_detail = address_detail ? String(address_detail).trim() : null;
+    }
+
+    const { data, error } = await supabase
+      .from('product_subscriptions_with')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    res.json({ success: true, data, message: '정기배송 신청이 수정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating subscription:', err);
+    res.status(500).json({ error: 'Failed to update subscription', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 내 정기배송 취소
+app.delete('/api/me/subscriptions/:id', authenticate, async (req, res) => {
+  try {
+    const { data: existing, error: findErr } = await supabase
+      .from('product_subscriptions_with')
+      .select('id, user_id, status')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing || existing.user_id !== req.user.id) {
+      return res.status(404).json({ error: 'Not Found', message: '정기배송 신청을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    if (existing.status === 'cancelled') {
+      return res.status(400).json({ error: 'Bad Request', message: '이미 취소된 정기배송입니다', timestamp: new Date().toISOString() });
+    }
+
+    const { error } = await supabase
+      .from('product_subscriptions_with')
+      .update({ status: 'cancelled', cancelled_at: new Date().toISOString() })
+      .eq('id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true, message: '정기배송이 취소되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error cancelling subscription:', err);
+    res.status(500).json({ error: 'Failed to cancel subscription', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// [관리자] 전체 정기배송 목록 - 상태/발송기한 도래 여부로 필터링 가능
+app.get('/api/admin/subscriptions', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    let query = supabase.from('product_subscriptions_with').select('*').order('next_delivery_date', { ascending: true });
+    if (req.query.status && SUBSCRIPTION_STATUSES.includes(req.query.status)) {
+      query = query.eq('status', req.query.status);
+    }
+    if (req.query.due === 'true') {
+      query = query.eq('status', 'active').lte('next_delivery_date', todayDateString());
+    }
+    const { data: subs, error } = await query;
+    if (error) throw error;
+
+    const productIds = [...new Set((subs || []).map(s => s.product_id))];
+    const userIds = [...new Set((subs || []).map(s => s.user_id))];
+    const [{ data: products }, { data: profiles }] = await Promise.all([
+      productIds.length > 0 ? supabase.from('products_with').select('id, name').in('id', productIds) : Promise.resolve({ data: [] }),
+      userIds.length > 0 ? supabase.from('profiles').select('id, email').in('id', userIds) : Promise.resolve({ data: [] })
+    ]);
+    const productById = {}; (products || []).forEach(p => { productById[p.id] = p; });
+    const profileById = {}; (profiles || []).forEach(p => { profileById[p.id] = p; });
+
+    const result = (subs || []).map(s => ({
+      ...s,
+      product: productById[s.product_id] || null,
+      member_email: (profileById[s.user_id] || {}).email || null
+    }));
+
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching admin subscriptions:', err);
+    res.status(500).json({ error: 'Failed to fetch subscriptions', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// [관리자] 정기배송 발송 처리 — 이번 회차를 "처리완료"로 기록하고 다음 배송 예정일로 넘긴다.
+// 정직하게 밝히자면: 실제 주문(orders) 생성이나 결제 청구는 하지 않는다(이번 라운드 범위 밖 - 신청/일정 관리만).
+app.post('/api/admin/subscriptions/:id/process', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: sub, error: findErr } = await supabase
+      .from('product_subscriptions_with')
+      .select('*')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (findErr) throw findErr;
+    if (!sub) return res.status(404).json({ error: 'Not Found', message: '정기배송 신청을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (sub.status !== 'active') {
+      return res.status(400).json({ error: 'Bad Request', message: '일시중지/취소된 정기배송은 발송 처리할 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const scheduledDate = sub.next_delivery_date;
+    const nextDate = addDaysToDateString(scheduledDate, sub.cycle_days);
+
+    const { error: logErr } = await supabase.from('subscription_delivery_logs_with').insert([{
+      subscription_id: sub.id,
+      scheduled_date: scheduledDate,
+      processed_by: req.user.id,
+      quantity: sub.quantity,
+      note: req.body && req.body.note ? String(req.body.note).trim() : null
+    }]);
+    if (logErr) throw logErr;
+
+    const { data, error } = await supabase
+      .from('product_subscriptions_with')
+      .update({ next_delivery_date: nextDate, last_delivered_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+      .eq('id', sub.id)
+      .select()
+      .single();
+    if (error) throw error;
+
+    res.json({ success: true, data, message: `발송 처리되었습니다. 다음 배송 예정일: ${nextDate}`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error processing subscription:', err);
+    res.status(500).json({ error: 'Failed to process subscription', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// [관리자] 특정 정기배송의 발송 이력
+app.get('/api/admin/subscriptions/:id/logs', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('subscription_delivery_logs_with')
+      .select('*')
+      .eq('subscription_id', req.params.id)
+      .order('processed_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching subscription logs:', err);
+    res.status(500).json({ error: 'Failed to fetch subscription logs', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🎯 개인화 추천 (쇼핑 큐레이션)
+// - 지금까지 홈 화면의 "추천 상품" 섹션은 사실 개인화가 전혀 안 되어 있었다(그냥 최신 등록순 - 방문자가
+//   누구든 항상 똑같은 목록). 정직하게 밝히고, 이번에 실제로 구매 이력·찜 목록 기반의 개인화 추천으로
+//   교체한다. 별도 AI/외부 API 없이, 회원이 관심을 보인 카테고리에 가중치를 줘서 순위를 매기는
+//   규칙 기반 추천이다 — 신규 회원(구매/찜 이력이 전혀 없음)에게는 정직하게 "인기 상품"으로 대체한다.
+// - 상품 상세페이지에는 "함께 구매한 상품"(동시구매 분석)을 추가한다. 별도 라인아이템 테이블이 없어
+//   (공급사별 판매 리포트와 동일하게) orders_with.items JSON을 직접 분석해서 계산한다.
+// ============================================
+
+// 판매량 기준 베스트셀러 상품 (개인화 신호가 없는 회원/비회원에게 정직한 대체 추천으로 사용)
+async function getBestsellingProducts(limit, excludeIds) {
+  const { data: orders } = await supabase
+    .from('orders_with')
+    .select('items')
+    .not('status', 'in', '(cancelled,refunded)')
+    .order('created_at', { ascending: false })
+    .limit(1000);
+
+  const salesCount = {};
+  (orders || []).forEach(o => {
+    (Array.isArray(o.items) ? o.items : []).forEach(item => {
+      if (!item.product_id) return;
+      salesCount[item.product_id] = (salesCount[item.product_id] || 0) + Number(item.quantity || 1);
+    });
+  });
+
+  const soldIds = Object.keys(salesCount)
+    .filter(id => !excludeIds || !excludeIds.has(id))
+    .sort((a, b) => salesCount[b] - salesCount[a])
+    .slice(0, limit);
+
+  if (soldIds.length === 0) return { data: [], basis: 'newest' };
+
+  const { data: products } = await supabase.from('products_with').select('*').in('id', soldIds).eq('status', 'active');
+  const byId = {}; (products || []).forEach(p => { byId[p.id] = p; });
+  const ordered = soldIds.map(id => byId[id]).filter(Boolean);
+  return { data: ordered, basis: 'bestseller' };
+}
+
+// 개인화 추천: 구매 이력(가중치 3) + 찜 목록(가중치 2)으로 관심 카테고리를 산출해 그 카테고리의
+// (아직 사지 않은) 상품을 추천한다. 신호가 전혀 없으면 정직하게 베스트셀러로 대체한다.
+app.get('/api/me/recommendations', authenticate, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 12, 30);
+
+    const [{ data: orders }, { data: wishlistRows }] = await Promise.all([
+      supabase.from('orders_with').select('items').eq('user_id', req.user.id).not('status', 'in', '(cancelled,refunded)'),
+      supabase.from('wishlist_with').select('product_id').eq('user_id', req.user.id)
+    ]);
+
+    const purchasedProductIds = new Set();
+    (orders || []).forEach(o => (Array.isArray(o.items) ? o.items : []).forEach(it => { if (it.product_id) purchasedProductIds.add(String(it.product_id)); }));
+    const wishlistProductIds = new Set((wishlistRows || []).map(w => String(w.product_id)));
+
+    const ownedIds = new Set([...purchasedProductIds, ...wishlistProductIds]);
+
+    if (ownedIds.size === 0) {
+      const { data, basis } = await getBestsellingProducts(limit, ownedIds);
+      return res.json({ success: true, data, basis, timestamp: new Date().toISOString() });
+    }
+
+    // 관심 있었던(구매/찜) 상품들의 카테고리를 조회해 가중치 맵을 만든다
+    const { data: ownedProducts } = await supabase.from('products_with').select('id, category').in('id', [...ownedIds]);
+    const categoryOf = {}; (ownedProducts || []).forEach(p => { categoryOf[p.id] = p.category; });
+
+    const categoryWeight = {};
+    purchasedProductIds.forEach(id => {
+      const cat = categoryOf[id];
+      if (cat) categoryWeight[cat] = (categoryWeight[cat] || 0) + 3;
+    });
+    wishlistProductIds.forEach(id => {
+      const cat = categoryOf[id];
+      if (cat) categoryWeight[cat] = (categoryWeight[cat] || 0) + 2;
+    });
+
+    if (Object.keys(categoryWeight).length === 0) {
+      const { data, basis } = await getBestsellingProducts(limit, ownedIds);
+      return res.json({ success: true, data, basis, timestamp: new Date().toISOString() });
+    }
+
+    const { data: candidates } = await supabase
+      .from('products_with')
+      .select('*')
+      .eq('status', 'active')
+      .in('category', Object.keys(categoryWeight));
+
+    const scored = (candidates || [])
+      .filter(p => !ownedIds.has(String(p.id)))
+      .map(p => ({ product: p, score: (categoryWeight[p.category] || 0) + Number(p.rating || 0) }))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(s => s.product);
+
+    if (scored.length === 0) {
+      const { data, basis } = await getBestsellingProducts(limit, ownedIds);
+      return res.json({ success: true, data, basis, timestamp: new Date().toISOString() });
+    }
+
+    res.json({ success: true, data: scored, basis: 'personalized', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error building recommendations:', err);
+    res.status(500).json({ error: 'Failed to build recommendations', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 비회원/방문자용 - 지금 잘 팔리는 상품 (인증 불필요)
+app.get('/api/recommendations/popular', async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit, 10) || 12, 30);
+    const { data, basis } = await getBestsellingProducts(limit, null);
+    res.json({ success: true, data, basis, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching popular products:', err);
+    res.status(500).json({ error: 'Failed to fetch popular products', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 상품 상세 - 같은 공급자(판매자 계정, products_with.supplier_id)가 등록한 다른 판매중인 상품 (인증 불필요)
+// 공급자가 없는 상품(관리자가 직접 등록한 상품 등)은 supplier: null, data: []로 정직하게 응답한다.
+app.get('/api/products/:id/supplier-products', async (req, res) => {
+  try {
+    const productId = req.params.id;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 8, 20);
+
+    const { data: current, error: curErr } = await supabasePublic
+      .from('products_with')
+      .select('id, supplier_id')
+      .eq('id', productId)
+      .maybeSingle();
+    if (curErr) throw curErr;
+    if (!current || !current.supplier_id) {
+      return res.json({ success: true, supplier: null, data: [], timestamp: new Date().toISOString() });
+    }
+
+    // 공급자 이름은 서비스 롤로만 조회한다 - 공개 API에 email 등 다른 개인정보가 함께 노출되지 않도록 필요한 컬럼만 select
+    const [{ data: supplierProfile }, { count: totalCount }, { data: products, error: prodErr }] = await Promise.all([
+      supabase.from('profiles').select('id, full_name').eq('id', current.supplier_id).maybeSingle(),
+      supabasePublic.from('products_with').select('id', { count: 'exact', head: true }).eq('supplier_id', current.supplier_id).eq('status', 'active'),
+      supabasePublic.from('products_with').select('*').eq('supplier_id', current.supplier_id).eq('status', 'active').neq('id', productId).order('created_at', { ascending: false }).limit(limit)
+    ]);
+    if (prodErr) throw prodErr;
+
+    res.json({
+      success: true,
+      supplier: {
+        id: current.supplier_id,
+        name: (supplierProfile && supplierProfile.full_name) || '공급사',
+        product_count: totalCount || 0
+      },
+      data: products || [],
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching supplier products:', err);
+    res.status(500).json({ error: 'Failed to fetch supplier products', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 상품 상세 - 이 상품과 함께 구매된 상품 (동시구매 분석, 인증 불필요)
+app.get('/api/products/:id/frequently-bought-together', async (req, res) => {
+  try {
+    const productId = req.params.id;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 6, 20);
+
+    const { data: orders } = await supabase
+      .from('orders_with')
+      .select('items')
+      .not('status', 'in', '(cancelled,refunded)')
+      .order('created_at', { ascending: false })
+      .limit(1000);
+
+    const coCounts = {};
+    (orders || []).forEach(o => {
+      const items = Array.isArray(o.items) ? o.items : [];
+      const ids = items.map(it => it.product_id).filter(Boolean);
+      if (!ids.includes(productId)) return;
+      ids.forEach(id => {
+        if (id === productId) return;
+        coCounts[id] = (coCounts[id] || 0) + 1;
+      });
+    });
+
+    const topIds = Object.keys(coCounts).sort((a, b) => coCounts[b] - coCounts[a]).slice(0, limit);
+    if (topIds.length === 0) {
+      return res.json({ success: true, data: [], timestamp: new Date().toISOString() });
+    }
+
+    const { data: products } = await supabase.from('products_with').select('*').in('id', topIds).eq('status', 'active');
+    const byId = {}; (products || []).forEach(p => { byId[p.id] = p; });
+    const ordered = topIds.map(id => byId[id]).filter(Boolean);
+
+    res.json({ success: true, data: ordered, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching frequently-bought-together:', err);
+    res.status(500).json({ error: 'Failed to fetch frequently-bought-together', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 취소/반품/교환 셀프 신청 API
+// - 카페24 관리자의 "취소/교환/반품/환불" 메뉴 구조를 참고해, 기존에 있던 반품/교환 셀프 신청에
+//   "취소"(배송 시작 전 주문 취소)를 함께 추가했다. 카페24는 이 넷을 각각 별도 메뉴로 나누지만,
+//   WITH+는 하나의 신청 테이블(request_type으로 구분)로 관리하면서 관리자 화면에서는 유형별로 볼 수 있게 했다.
+// ============================================
+const RETURN_REQUEST_TYPES = ['cancel', 'return', 'exchange'];
+const RETURN_REQUEST_STATUSES = ['requested', 'approved', 'rejected', 'completed'];
+// 취소는 아직 배송이 시작되지 않은 주문만, 반품/교환은 배송이 완료된 주문만 신청할 수 있다
+const CANCELLABLE_ORDER_STATUSES = ['pending', 'paid', 'processing'];
+
+// 내 반품/교환 신청 내역
+app.get('/api/me/return-requests', authenticate, async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('return_requests')
+      .select('*')
+      .eq('user_id', req.user.id)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    res.json({ success: true, data: data || [], count: data?.length || 0, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching return requests:', err);
+    res.status(500).json({ error: 'Failed to fetch return requests', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 취소/반품/교환 신청 (본인 주문만, 유형별로 신청 가능한 주문 상태가 다름)
+app.post('/api/orders/:id/return-request', authenticate, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { request_type, reason } = req.body;
+
+    if (!RETURN_REQUEST_TYPES.includes(request_type)) {
+      return res.status(400).json({ error: 'Bad Request', message: `request_type must be one of: ${RETURN_REQUEST_TYPES.join(', ')}`, timestamp: new Date().toISOString() });
+    }
+    if (!reason || !reason.trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: '신청 사유를 입력해주세요', timestamp: new Date().toISOString() });
+    }
+
+    const { data: order, error: orderErr } = await supabase
+      .from('orders_with')
+      .select('id, user_id, status')
+      .eq('id', id)
+      .single();
+    if (orderErr || !order) {
+      return res.status(404).json({ error: 'Not Found', message: '주문을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    if (order.user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Forbidden', message: '본인 주문만 신청할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+
+    if (request_type === 'cancel') {
+      if (!CANCELLABLE_ORDER_STATUSES.includes(order.status)) {
+        return res.status(400).json({ error: 'Bad Request', message: '배송이 시작되기 전(주문접수/결제완료/준비중) 상태의 주문만 취소 신청이 가능합니다. 이미 배송이 시작됐다면 반품을 이용해주세요', timestamp: new Date().toISOString() });
+      }
+    } else {
+      if (order.status !== 'delivered') {
+        return res.status(400).json({ error: 'Bad Request', message: '배송 완료된 주문만 반품/교환 신청이 가능합니다', timestamp: new Date().toISOString() });
+      }
+    }
+
+    const { data: existing } = await supabase
+      .from('return_requests')
+      .select('id')
+      .eq('order_id', id)
+      .in('status', ['requested', 'approved'])
+      .maybeSingle();
+    if (existing) {
+      return res.status(400).json({ error: 'Bad Request', message: '이미 처리 중인 신청이 있습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data, error } = await supabase
+      .from('return_requests')
+      .insert({ order_id: id, user_id: req.user.id, request_type, reason: reason.trim() })
+      .select()
+      .single();
+    if (error) throw error;
+
+    const typeLabel = request_type === 'cancel' ? '취소' : request_type === 'exchange' ? '교환' : '반품';
+    res.status(201).json({ success: true, data, message: `${typeLabel} 신청이 접수되었습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating return request:', err);
+    res.status(500).json({ error: 'Failed to create return request', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 전체 반품/교환 신청 조회
+app.get('/api/admin/return-requests', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { status } = req.query;
+    let query = supabase.from('return_requests').select('*').order('created_at', { ascending: false });
+    if (status) query = query.eq('status', status);
+    const { data, error } = await query;
+    if (error) throw error;
+
+    // 주문 정보(주문번호) 및 회원 이메일을 함께 붙여서 반환
+    const orderIds = [...new Set((data || []).map(r => r.order_id))];
+    const userIds = [...new Set((data || []).map(r => r.user_id))];
+    const [{ data: orders }, { data: profiles }] = await Promise.all([
+      orderIds.length ? supabase.from('orders_with').select('id, order_number, final_price').in('id', orderIds) : Promise.resolve({ data: [] }),
+      userIds.length ? supabase.from('profiles').select('id, email, full_name').in('id', userIds) : Promise.resolve({ data: [] })
+    ]);
+    const orderById = {}; (orders || []).forEach(o => { orderById[o.id] = o; });
+    const profileById = {}; (profiles || []).forEach(p => { profileById[p.id] = p; });
+
+    const result = (data || []).map(r => ({
+      ...r,
+      order: orderById[r.order_id] || null,
+      requester: profileById[r.user_id] ? { email: profileById[r.user_id].email, full_name: profileById[r.user_id].full_name } : null
+    }));
+
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching admin return requests:', err);
+    res.status(500).json({ error: 'Failed to fetch return requests', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 반품/교환 신청 처리
+app.patch('/api/admin/return-requests/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { status, admin_note } = req.body;
+    if (status !== undefined && !RETURN_REQUEST_STATUSES.includes(status)) {
+      return res.status(400).json({ error: 'Bad Request', message: `status must be one of: ${RETURN_REQUEST_STATUSES.join(', ')}`, timestamp: new Date().toISOString() });
+    }
+
+    // 완료 처리 시 재고 복구 + 주문상태 반영을 위해 처리 전 신청 건을 먼저 조회해둔다
+    const { data: existingRequest, error: findErr } = await supabase
+      .from('return_requests')
+      .select('id, order_id, request_type, status')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (findErr) throw findErr;
+    if (!existingRequest) {
+      return res.status(404).json({ error: 'Not Found', message: 'Return request not found', timestamp: new Date().toISOString() });
+    }
+
+    const updates = { updated_at: new Date().toISOString() };
+    if (status !== undefined) updates.status = status;
+    if (admin_note !== undefined) updates.admin_note = admin_note;
+
+    const { data, error } = await supabase
+      .from('return_requests')
+      .update(updates)
+      .eq('id', req.params.id)
+      .select()
+      .single();
+    if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ error: 'Not Found', message: 'Return request not found', timestamp: new Date().toISOString() });
+    }
+
+    // "완료" 처리로 새로 전환되는 순간에만(이미 완료된 건을 다시 저장해도 중복 실행되지 않도록) 실제 재고/주문상태를 반영한다.
+    // 취소 = 배송 전 주문 취소 → 재고 복구 + 주문상태 cancelled. 반품 = 배송 후 상품 반송 → 재고 복구 + 주문상태 refunded.
+    // 교환은 새 상품으로 맞바꾸는 절차라 재고/주문상태를 자동으로 바꾸지 않고 관리자가 별도로 처리한다(정직하게 여기서는 다루지 않음).
+    let sideEffect = null;
+    if (status === 'completed' && existingRequest.status !== 'completed' && (existingRequest.request_type === 'cancel' || existingRequest.request_type === 'return')) {
+      const { data: order } = await supabase
+        .from('orders_with')
+        .select('id, items, status')
+        .eq('id', existingRequest.order_id)
+        .maybeSingle();
+      if (order) {
+        const items = Array.isArray(order.items) ? order.items : [];
+        for (const item of items) {
+          if (!item.product_id) continue;
+          const qty = Number(item.quantity) || 1;
+          try {
+            await supabase.rpc('adjust_stock_with', {
+              p_product_id: item.product_id,
+              p_variant_id: item.variant_id || null,
+              p_delta: qty,
+              p_reason: `${existingRequest.request_type === 'cancel' ? '주문 취소' : '반품'} 승인에 따른 재고 복구 (신청 ${existingRequest.id})`,
+              p_order_id: order.id,
+              p_created_by: req.user.id,
+              p_scan_source: 'order_restore'
+            });
+          } catch (restoreErr) { /* 재고 복구는 최선을 다해 시도하되, 하나가 실패해도 전체 처리를 막지 않는다 */ }
+          if (item.variant_id) await syncProductStockFromVariants(item.product_id);
+        }
+        const newOrderStatus = existingRequest.request_type === 'cancel' ? 'cancelled' : 'refunded';
+        await supabase.from('orders_with').update({ status: newOrderStatus }).eq('id', order.id);
+        sideEffect = { order_status: newOrderStatus, stock_restored_items: items.length };
+      }
+    }
+
+    const typeLabel = existingRequest.request_type === 'cancel' ? '취소' : existingRequest.request_type === 'exchange' ? '교환' : '반품';
+    res.json({ success: true, data, sideEffect, message: `${typeLabel} 신청이 처리되었습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating return request:', err);
+    res.status(500).json({ error: 'Failed to update return request', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🔍 SEO 기초 — robots.txt / sitemap.xml / 상품·카테고리 페이지 Open Graph + 구조화데이터(JSON-LD)
+// 정직하게 짚어드리면, 지금까지 이 셋 다 전혀 없었습니다: robots.txt·sitemap.xml 라우트 자체가
+// 없었고, 상품/카테고리 페이지는 완전한 클라이언트 렌더링(SPA) 방식이라 카카오톡/페이스북 등
+// 링크 미리보기 봇이나 검색엔진이 실제 상품명·가격·이미지를 전혀 읽지 못하는 상태였습니다.
+// (봇들은 대부분 자바스크립트를 실행하지 않고 첫 HTML 응답만 읽기 때문에, 지금까지는 상품을
+// 카톡으로 공유해도 "상품 상세 - WITH+"라는 빈 제목만 뜨고 있었습니다.)
+// 이번에 상품/카테고리 HTML의 <title> 태그를 요청마다 실제 데이터로 치환해 응답하도록
+// 구현했습니다(서버 시작 시 템플릿을 1회만 읽어 캐시해두고, 요청마다 디스크를 다시 읽지 않음).
+// ============================================
+function escapeHtmlAttr(str) {
+  return String(str == null ? '' : str)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+const escapeXml = escapeHtmlAttr;
+function getBaseUrl(req) {
+  // 도메인이 아직 연결되지 않아 지금은 EC2 IP 기준으로 나오지만, 요청 헤더에서 실제 접속
+  // 호스트를 그대로 읽어오므로 나중에 도메인이 연결돼도 코드 변경 없이 자동으로 맞습니다.
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'http';
+  const host = req.headers['x-forwarded-host'] || req.get('host');
+  return `${proto}://${host}`;
+}
+
+let PRODUCT_HTML_TEMPLATE = null;
+let CATEGORY_HTML_TEMPLATE = null;
+try {
+  PRODUCT_HTML_TEMPLATE = fs.readFileSync(path.join(__dirname, 'public', 'product.html'), 'utf8');
+  CATEGORY_HTML_TEMPLATE = fs.readFileSync(path.join(__dirname, 'public', 'category.html'), 'utf8');
+} catch (e) {
+  console.error('SEO용 HTML 템플릿 캐시 로드 실패 (SEO 메타태그 없이도 페이지 자체는 정상 동작합니다):', e.message);
+}
+
+app.get('/robots.txt', (req, res) => {
+  const baseUrl = getBaseUrl(req);
+  res.type('text/plain').send(
+`User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /mypage
+Disallow: /cart
+Disallow: /api/
+
+Sitemap: ${baseUrl}/sitemap.xml
+`);
+});
+
+app.get('/sitemap.xml', async (req, res) => {
+  try {
+    const baseUrl = getBaseUrl(req);
+    const nowDate = new Date().toISOString();
+    const urls = [];
+
+    // 정적 페이지 (검색/커뮤니티/로그인/가입 + 푸터 하위 정보 페이지)
+    const staticSlugs = ['about', 'careers', 'press', 'sustainability', 'support', 'faq', 'contact',
+      'returns', 'terms', 'privacy', 'cookie', 'guides', 'partner', 'seller', 'affiliate'];
+    urls.push({ loc: `${baseUrl}/`, lastmod: nowDate, priority: '1.0' });
+    ['/search', '/communities', '/login', '/join'].forEach(p => urls.push({ loc: `${baseUrl}${p}`, lastmod: nowDate, priority: '0.5' }));
+    staticSlugs.forEach(slug => urls.push({ loc: `${baseUrl}/${slug}`, lastmod: nowDate, priority: '0.3' }));
+
+    // 노출 중(is_active)인 카테고리
+    const { data: categories, error: categoriesErr } = await supabasePublic
+      .from('categories')
+      .select('slug, updated_at')
+      .eq('is_active', true);
+    if (categoriesErr) {
+      console.error('sitemap.xml: 카테고리 목록 조회 실패, 카테고리 URL 없이 생성됨:', categoriesErr.message);
+    }
+    (categories || []).forEach(c => {
+      urls.push({ loc: `${baseUrl}/category/${c.slug}`, lastmod: c.updated_at || nowDate, priority: '0.7' });
+    });
+
+    // 판매중(active) 상품 - 사이트맵 표준 상한(5만 건)까지만 포함하고, 넘으면 정직하게 로그로 남김
+    // 참고: products_with 테이블에는 updated_at 컬럼이 없어(있는 것은 created_at뿐) created_at을 사용한다.
+    const { data: products, error: productsErr } = await supabasePublic
+      .from('products_with')
+      .select('id, created_at')
+      .eq('status', 'active')
+      .order('created_at', { ascending: false })
+      .limit(50000);
+    if (productsErr) {
+      // 조용히 빈 목록으로 넘어가지 않고 반드시 로그로 남긴다 - 상품 URL이 통째로 빠진 사이트맵을
+      // "정상"으로 오인하지 않기 위함
+      console.error('sitemap.xml: 상품 목록 조회 실패, 상품 URL 없이 생성됨:', productsErr.message);
+    }
+    if (products && products.length >= 50000) {
+      console.warn('sitemap.xml: 판매중 상품이 5만 건을 넘어 상한까지만 포함했습니다 (사이트맵 표준 제한)');
+    }
+    (products || []).forEach(p => {
+      urls.push({ loc: `${baseUrl}/product/${p.id}`, lastmod: p.created_at || nowDate, priority: '0.8' });
+    });
+
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n` +
+      urls.map(u => `  <url>\n    <loc>${escapeXml(u.loc)}</loc>\n    <lastmod>${new Date(u.lastmod).toISOString().slice(0, 10)}</lastmod>\n    <priority>${u.priority}</priority>\n  </url>`).join('\n') +
+      `\n</urlset>`;
+
+    res.type('application/xml').send(xml);
+  } catch (err) {
+    console.error('Error generating sitemap:', err);
+    res.status(500).type('text/plain').send('사이트맵을 만드는 중 오류가 발생했습니다');
+  }
+});
+
+// ============================================
+// 페이지 라우트 (카테고리 / 상품 상세)
+// express.static이 처리 못하는 동적 경로를 각 정적 템플릿으로 연결
+// ============================================
+app.get('/category/:slug', async (req, res) => {
+  try {
+    if (!CATEGORY_HTML_TEMPLATE) {
+      return res.sendFile(path.join(__dirname, 'public', 'category.html'));
+    }
+    const { slug } = req.params;
+    const { data: category } = await supabasePublic
+      .from('categories')
+      .select('slug, label, is_active')
+      .eq('slug', slug)
+      .maybeSingle();
+
+    // 존재하지 않거나 비노출 카테고리는 가짜 메타태그를 만들지 않고 기본 템플릿 그대로 응답
+    // (실제 "카테고리를 찾을 수 없습니다" 안내는 클라이언트 스크립트가 그대로 처리)
+    if (!category || !category.is_active) {
+      return res.send(CATEGORY_HTML_TEMPLATE);
+    }
+
+    const baseUrl = getBaseUrl(req);
+    const pageUrl = `${baseUrl}/category/${category.slug}`;
+    const title = `${category.label} - WITH+`;
+    const description = `WITH+에서 ${category.label} 카테고리 상품을 만나보세요.`;
+
+    const metaBlock = [
+      `<title>${escapeHtmlAttr(title)}</title>`,
+      `<meta name="description" content="${escapeHtmlAttr(description)}">`,
+      `<link rel="canonical" href="${escapeHtmlAttr(pageUrl)}">`,
+      `<meta property="og:type" content="website">`,
+      `<meta property="og:title" content="${escapeHtmlAttr(title)}">`,
+      `<meta property="og:description" content="${escapeHtmlAttr(description)}">`,
+      `<meta property="og:url" content="${escapeHtmlAttr(pageUrl)}">`,
+      `<meta property="og:site_name" content="WITH+">`,
+      `<meta name="twitter:card" content="summary">`,
+      `<meta name="twitter:title" content="${escapeHtmlAttr(title)}">`,
+      `<meta name="twitter:description" content="${escapeHtmlAttr(description)}">`
+    ].join('\n    ');
+
+    res.send(CATEGORY_HTML_TEMPLATE.replace('<title>카테고리 - WITH+</title>', metaBlock));
+  } catch (err) {
+    console.error('Error rendering category page meta:', err);
+    res.sendFile(path.join(__dirname, 'public', 'category.html'));
+  }
+});
+
+// 분양형 커뮤니티(조직) 랜딩페이지 - 브랜딩된 랜딩화면
+app.get('/c/:slug', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'community-landing.html'));
+});
+
+app.get('/product/:id', async (req, res) => {
+  try {
+    if (!PRODUCT_HTML_TEMPLATE) {
+      return res.sendFile(path.join(__dirname, 'public', 'product.html'));
+    }
+    const { id } = req.params;
+    const { data: product } = await supabasePublic
+      .from('products_with')
+      .select('id, name, description, price, discount_price, images_urls, status, stock')
+      .eq('id', id)
+      .maybeSingle();
+
+    // 존재하지 않거나 비활성 상품은 가짜 메타태그를 만들지 않고 기본 템플릿 그대로 응답
+    // (검색엔진·링크 미리보기 봇에게 없는 상품을 있는 것처럼 보여주지 않기 위함 - 실제
+    //  "상품을 찾을 수 없습니다" 안내는 클라이언트 스크립트가 그대로 처리)
+    if (!product || product.status !== 'active') {
+      return res.send(PRODUCT_HTML_TEMPLATE);
+    }
+
+    const baseUrl = getBaseUrl(req);
+    const pageUrl = `${baseUrl}/product/${product.id}`;
+    const displayPrice = product.discount_price != null ? product.discount_price : product.price;
+    const rawDesc = String(product.description || '').replace(/\s+/g, ' ').trim();
+    const ogDescription = (rawDesc || `${product.name} - WITH+에서 만나보세요`).slice(0, 150);
+    // og:image는 카카오톡/페이스북 등 링크 미리보기 봇이 절대경로 URL을 요구하므로,
+    // DB에 상대경로(/images/...)로 저장된 이미지는 여기서 절대 URL로 변환해준다
+    let ogImage = (Array.isArray(product.images_urls) && product.images_urls[0]) ? String(product.images_urls[0]) : '';
+    if (ogImage && !/^https?:\/\//i.test(ogImage)) {
+      ogImage = `${baseUrl}${ogImage.startsWith('/') ? '' : '/'}${ogImage}`;
+    }
+    const title = `${product.name} - WITH+`;
+
+    // 실제 공개(published) 리뷰의 평균 평점 - 리뷰가 하나도 없으면 가짜 평점을 만들지 않고
+    // aggregateRating 자체를 생략한다 (리뷰 없는 상품에 별점이 뜨는 것을 방지)
+    const { data: reviewRows } = await supabasePublic
+      .from('product_reviews')
+      .select('rating')
+      .eq('product_id', id)
+      .eq('status', 'published');
+
+    const productLd = {
+      '@context': 'https://schema.org',
+      '@type': 'Product',
+      name: product.name,
+      description: ogDescription,
+      url: pageUrl,
+      offers: {
+        '@type': 'Offer',
+        url: pageUrl,
+        priceCurrency: 'KRW',
+        price: String(displayPrice),
+        availability: (product.stock > 0) ? 'https://schema.org/InStock' : 'https://schema.org/OutOfStock'
+      }
+    };
+    if (ogImage) productLd.image = [ogImage];
+    if (reviewRows && reviewRows.length > 0) {
+      const avg = reviewRows.reduce((s, r) => s + (r.rating || 0), 0) / reviewRows.length;
+      productLd.aggregateRating = { '@type': 'AggregateRating', ratingValue: avg.toFixed(1), reviewCount: String(reviewRows.length) };
+    }
+
+    const metaBlock = [
+      `<title>${escapeHtmlAttr(title)}</title>`,
+      `<meta name="description" content="${escapeHtmlAttr(ogDescription)}">`,
+      `<link rel="canonical" href="${escapeHtmlAttr(pageUrl)}">`,
+      `<meta property="og:type" content="product">`,
+      `<meta property="og:title" content="${escapeHtmlAttr(title)}">`,
+      `<meta property="og:description" content="${escapeHtmlAttr(ogDescription)}">`,
+      `<meta property="og:url" content="${escapeHtmlAttr(pageUrl)}">`,
+      `<meta property="og:site_name" content="WITH+">`,
+      ogImage ? `<meta property="og:image" content="${escapeHtmlAttr(ogImage)}">` : '',
+      `<meta property="product:price:amount" content="${escapeHtmlAttr(displayPrice)}">`,
+      `<meta property="product:price:currency" content="KRW">`,
+      `<meta name="twitter:card" content="${ogImage ? 'summary_large_image' : 'summary'}">`,
+      `<meta name="twitter:title" content="${escapeHtmlAttr(title)}">`,
+      `<meta name="twitter:description" content="${escapeHtmlAttr(ogDescription)}">`,
+      `<script type="application/ld+json">${JSON.stringify(productLd)}</script>`
+    ].filter(Boolean).join('\n    ');
+
+    res.send(PRODUCT_HTML_TEMPLATE.replace('<title>상품 상세 - WITH+</title>', metaBlock));
+  } catch (err) {
+    console.error('Error rendering product page meta:', err);
+    res.sendFile(path.join(__dirname, 'public', 'product.html'));
+  }
+});
+
+// 검색 결과 페이지 (?q=검색어)
+app.get('/search', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'search.html'));
+});
+
+app.get('/login', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'login.html'));
+});
+
+app.get('/reset-password', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'reset-password.html'));
+});
+
+app.get('/join', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'join.html'));
+});
+
+app.get('/welcome', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'welcome.html'));
+});
+
+app.get('/verify-phone', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'verify-phone.html'));
+});
+
+app.get('/cart', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'cart.html'));
+});
+
+app.get('/mypage', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'mypage.html'));
+});
+
+app.get('/communities', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'communities.html'));
+});
+
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+app.get('/notice', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'board.html'));
+});
+
+app.get('/board/:type', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'board.html'));
+});
+
+app.get('/board/:type/:id', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'board-detail.html'));
+});
+
+// 푸터 하위 정보 페이지 (회사소개/고객지원/약관·정책/함께하기)
+const STATIC_INFO_PAGES = [
+  'about', 'careers', 'press', 'sustainability',
+  'support', 'faq', 'contact', 'returns',
+  'terms', 'privacy', 'cookie', 'guides',
+  'partner', 'seller', 'affiliate', 'medical-voucher'
+];
+STATIC_INFO_PAGES.forEach(slug => {
+  app.get('/' + slug, (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', slug + '.html'));
+  });
+});
+
+// ============================================
+// 404 핸들러
+// - 브라우저 탐색(HTML 요청)은 사용자 친화적인 404 페이지로 안내
+// - API/프로그램 요청은 기존처럼 JSON으로 응답
+// ============================================
+app.use((req, res) => {
+  if (req.accepts('html') && !req.path.startsWith('/api')) {
+    return res.status(404).sendFile(path.join(__dirname, 'public', '404.html'));
+  }
+  res.status(404).json({
+    error: 'Not Found',
+    message: `Route ${req.path} not found`,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ============================================
+// 에러 핸들러
+// ============================================
+app.use((err, req, res, next) => {
+  console.error('Error:', err);
+  res.status(err.status || 500).json({
+    error: err.message || 'Internal Server Error',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// ============================================
+// 서버 시작
+// ============================================
+app.listen(PORT, () => {
+  console.log(`✅ WITH+ API running on http://localhost:${PORT}`);
+  console.log(`📡 Health check: http://localhost:${PORT}/api/health`);
+  console.log(`🔌 Supabase Connected: ${supabaseUrl}`);
+  console.log(`📊 Database: GMWOS (통합 모드)`);
+});
+
+process.on('SIGTERM', () => {
+  console.log('SIGTERM signal received: closing HTTP server');
+  process.exit(0);
+});

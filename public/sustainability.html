@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>지속가능성 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B; --primary-dark: #B0154F;
+            --bg-white: #FFFFFF; --bg-light: #F5F5F5;
+            --text-dark: #333333; --text-gray: #666666;
+            --border-color: #E0E0E0; --success: #2E7D32;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; background: var(--bg-white); }
+        .header { background: var(--bg-white); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-main { max-width: 1200px; margin: 0 auto; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; }
+        .logo span { font-size: 0.7em; color: var(--text-gray); display: block; font-weight: normal; }
+        .icon-button { background: none; border: none; cursor: pointer; font-size: 1.3em; color: var(--text-dark); position: relative; text-decoration: none; display: inline-block; }
+        .cart-badge { position: absolute; top: -8px; right: -8px; background: var(--primary-color); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: bold; }
+
+        .page-hero { background: linear-gradient(135deg, var(--primary-color), var(--primary-dark)); color: white; padding: 50px 20px; text-align: center; }
+        .page-hero h1 { font-size: 2em; margin-bottom: 10px; }
+        .page-hero p { opacity: 0.95; }
+
+        .wrap { max-width: 900px; margin: 40px auto 80px; padding: 0 20px; }
+
+        .notice-box { background: linear-gradient(135deg, #FFF7E5, #FFF0F0); border: 1px solid #F5C97A; border-radius: 12px; padding: 20px 24px; margin-bottom: 36px; font-size: 0.92em; }
+        .notice-box strong { color: #B8571E; }
+
+        .content h2 { font-size: 1.3em; margin: 36px 0 14px; color: var(--primary-dark); border-bottom: 2px solid var(--border-color); padding-bottom: 8px; }
+        .content h2:first-of-type { margin-top: 0; }
+        .content h3 { font-size: 1.05em; margin: 22px 0 10px; color: var(--text-dark); }
+        .content p { margin-bottom: 12px; font-size: 0.96em; color: var(--text-dark); }
+        .content ol, .content ul { margin: 8px 0 16px 22px; font-size: 0.96em; }
+        .content li { margin-bottom: 8px; }
+        .content .placeholder { background: #FFF3CD; padding: 1px 6px; border-radius: 4px; color: #7A5200; font-weight: 600; }
+        .content table { width: 100%; border-collapse: collapse; margin: 10px 0 20px; font-size: 0.92em; }
+        .content table th, .content table td { border: 1px solid var(--border-color); padding: 10px 12px; text-align: left; }
+        .content table th { background: var(--bg-light); }
+
+        .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 20px 0 28px; }
+        .card { background: var(--bg-light); border-radius: 12px; padding: 20px; border: 1px solid var(--border-color); }
+        .card h3 { margin-top: 0; color: var(--primary-dark); font-size: 1em; }
+        .card p { font-size: 0.9em; color: var(--text-gray); margin-bottom: 0; }
+
+        .faq-item { border: 1px solid var(--border-color); border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+        .faq-q { background: var(--bg-light); padding: 14px 18px; font-weight: 600; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+        .faq-a { padding: 16px 18px; font-size: 0.93em; color: var(--text-gray); display: none; border-top: 1px solid var(--border-color); }
+        .faq-item.open .faq-a { display: block; }
+        .faq-item.open .faq-toggle { transform: rotate(45deg); }
+        .faq-toggle { transition: transform 0.2s; font-size: 1.1em; color: var(--primary-color); }
+        .faq-cat { display: inline-block; background: var(--primary-color); color: white; font-size: 0.75em; padding: 2px 10px; border-radius: 20px; margin-right: 8px; }
+
+        .contact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin: 20px 0; }
+        .contact-card { text-align: center; padding: 24px 16px; background: var(--bg-light); border-radius: 12px; }
+        .contact-card .icon { font-size: 1.8em; margin-bottom: 8px; }
+        .contact-card a { color: var(--primary-color); font-weight: 600; text-decoration: none; }
+
+        .btn-primary { display: inline-block; background: var(--primary-color); color: white; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 8px; }
+        .btn-primary:hover { background: var(--primary-dark); }
+
+        .footer { background: var(--text-dark); color: rgba(255,255,255,0.7); padding: 30px 20px; text-align: center; font-size: 0.85em; }
+        .footer a { color: #FF7FA8; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-main">
+            <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+            <div style="display:flex; gap:20px; align-items:center;">
+                <a class="icon-button" id="account-link" href="/login">👤</a>
+                <a class="icon-button" href="/cart">🛒<span class="cart-badge">0</span></a>
+            </div>
+        </div>
+    </header>
+
+    <div class="page-hero">
+        <h1>🌱 지속가능경영</h1>
+        <p>함께 나누는 소비가 만드는 지속가능한 변화</p>
+    </div>
+
+    <div class="wrap">
+
+        <div class="content">
+
+            <h2>WITH+가 생각하는 지속가능성</h2>
+            <p>WITH+는 개인의 구매가 커뮤니티의 자산으로 함께 쌓이는 구조를 통해, 소비가 단순한 소유를 넘어 공동체에 기여하는 경험이 되도록 만들어가고 있습니다. 아직 규모가 크지 않은 서비스이지만, 성장하는 매 단계마다 아래 방향을 지키려 합니다.</p>
+
+            <h2>환경(Environment)</h2>
+            <ul>
+                <li>과대포장을 지양하고, 배송 포장재를 최소화하는 판매자·공급자와 우선적으로 협력합니다.</li>
+                <li>전자영수증·전자세금계산서 등 디지털 방식을 기본으로 하여 종이 사용을 줄입니다.</li>
+            </ul>
+
+            <h2>사회(Social)</h2>
+            <ul>
+                <li>구매 시 개인 마일리지와 별도로 소속 커뮤니티에 적립되는 커뮤니티 마일리지 구조를 통해, 일상적인 소비가 자연스럽게 공동체 재원으로 이어지도록 설계했습니다.</li>
+                <li>추천인 프로그램, 회원 등급제 등을 통해 사용자 간의 건강한 참여를 유도합니다.</li>
+            </ul>
+
+            <h2>거버넌스(Governance)</h2>
+            <ul>
+                <li>이용자의 개인정보는 <a href="/privacy" style="color:var(--primary-color);">개인정보처리방침</a>에 따라 최소한으로 수집·보관합니다.</li>
+                <li>판매자(공급자)의 사업자 정보는 검증 절차를 거쳐 등록합니다.</li>
+            </ul>
+            <p style="font-size:0.85em;color:var(--text-gray);">위 내용은 현재 시점의 방향성 안내이며, 서비스가 성장함에 따라 구체적인 지표와 활동 내역을 이 페이지에 추가로 공개하겠습니다.</p>
+
+        </div>
+    </div>
+
+    <footer class="footer">
+        &copy; 2026 WITH+. All rights reserved. · <a href="/terms">이용약관</a> · <a href="/privacy">개인정보처리방침</a>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        if (window.WithPlus && WithPlus.initHeader) { WithPlus.initHeader(); }
+        function toggleFaq(el) { el.parentElement.classList.toggle('open'); }
+    </script>
+</body>
+</html>

@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>개인정보처리방침 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B; --primary-dark: #B0154F;
+            --bg-white: #FFFFFF; --bg-light: #F5F5F5;
+            --text-dark: #333333; --text-gray: #666666;
+            --border-color: #E0E0E0; --success: #2E7D32;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; background: var(--bg-white); }
+        .header { background: var(--bg-white); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-main { max-width: 1200px; margin: 0 auto; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; }
+        .logo span { font-size: 0.7em; color: var(--text-gray); display: block; font-weight: normal; }
+        .icon-button { background: none; border: none; cursor: pointer; font-size: 1.3em; color: var(--text-dark); position: relative; text-decoration: none; display: inline-block; }
+        .cart-badge { position: absolute; top: -8px; right: -8px; background: var(--primary-color); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: bold; }
+
+        .page-hero { background: linear-gradient(135deg, var(--primary-color), var(--primary-dark)); color: white; padding: 50px 20px; text-align: center; }
+        .page-hero h1 { font-size: 2em; margin-bottom: 10px; }
+        .page-hero p { opacity: 0.95; }
+
+        .wrap { max-width: 820px; margin: 40px auto 80px; padding: 0 20px; }
+
+        .draft-notice { background: linear-gradient(135deg, #FFF7E5, #FFF0F0); border: 1px solid #F5C97A; border-radius: 12px; padding: 20px 24px; margin-bottom: 36px; font-size: 0.92em; }
+        .draft-notice strong { color: #B8571E; }
+        .draft-notice ul { margin: 10px 0 0 20px; }
+
+        .legal h2 { font-size: 1.2em; margin: 36px 0 12px; color: var(--primary-dark); border-bottom: 2px solid var(--border-color); padding-bottom: 8px; }
+        .legal h2:first-of-type { margin-top: 0; }
+        .legal h3 { font-size: 1.02em; margin: 20px 0 8px; }
+        .legal p { margin-bottom: 10px; font-size: 0.94em; color: var(--text-dark); }
+        .legal ol, .legal ul { margin: 8px 0 14px 22px; font-size: 0.94em; }
+        .legal li { margin-bottom: 6px; }
+        .legal .placeholder { background: #FFF3CD; padding: 1px 6px; border-radius: 4px; color: #7A5200; font-weight: 600; }
+        .legal .updated { color: var(--text-gray); font-size: 0.85em; margin-bottom: 24px; }
+        .legal table { width: 100%; border-collapse: collapse; margin: 10px 0 16px; font-size: 0.92em; }
+        .legal table th, .legal table td { border: 1px solid var(--border-color); padding: 8px 10px; text-align: left; }
+        .legal table th { background: var(--bg-light); }
+
+        .footer { background: var(--text-dark); color: rgba(255,255,255,0.7); padding: 30px 20px; text-align: center; font-size: 0.85em; }
+        .footer a { color: #FF7FA8; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-main">
+            <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+            <div style="display:flex; gap:20px; align-items:center;">
+                <a class="icon-button" id="account-link" href="/login">👤</a>
+                <a class="icon-button" href="/cart">🛒<span class="cart-badge">0</span></a>
+            </div>
+        </div>
+    </header>
+
+    <div class="page-hero">
+        <h1>🔒 개인정보처리방침</h1>
+        <p>WITH+가 이용자의 개인정보를 어떻게 수집·이용·보호하는지 안내드립니다</p>
+    </div>
+
+    <div class="wrap">
+        <div class="draft-notice">
+            <strong>⚠️ 아직 정식 시행 전인 초안입니다</strong>
+            <p style="margin-top:8px;">이 방침은 개인정보보호위원회의 「개인정보 처리방침 작성지침」(2025.4 개정판)을 바탕으로 작성된 초안이며, 법률 자문을 대신하지 않습니다. 실제 서비스를 정식 오픈하시기 전에 반드시 변호사 등 법률 전문가의 검토를 받으시길 권해드립니다. 아래 <span class="placeholder">노란색으로 표시된 항목</span>은 사업자등록·개인정보보호책임자 지정이 완료된 뒤 실제 정보로 반드시 교체해야 하는 자리표시자입니다.</p>
+        </div>
+
+        <div class="legal">
+            <p class="updated">공고일자: <span class="placeholder">[공고일 입력 필요]</span> · 시행일자: <span class="placeholder">[시행일 입력 필요]</span> · 개정 차수: 1차(최초 제정)</p>
+
+            <h2>제1조 (개인정보의 수집 항목 및 방법)</h2>
+            <p>WITH+(이하 "회사")는 다음과 같이 서비스 제공을 위해 필요한 최소한의 개인정보를 수집하고 있습니다.</p>
+            <table>
+                <tr><th>구분</th><th>수집 항목</th><th>수집 시점</th></tr>
+                <tr><td>회원가입</td><td>이메일 주소, 비밀번호(암호화 저장), 추천인 코드(선택)</td><td>회원가입 시</td></tr>
+                <tr><td>주문/배송</td><td>수령인 이름, 연락처, 배송지 주소</td><td>주문 시</td></tr>
+                <tr><td>결제</td><td>결제수단 승인 결과값(카드 원번호 등 민감정보는 회사가 직접 보관하지 않으며, PG사가 처리·보관합니다)</td><td>결제 시</td></tr>
+                <tr><td>자동 수집</td><td>쿠키, 접속 로그, 서비스 이용기록, 기기정보(브라우저 종류 등)</td><td>서비스 이용 중</td></tr>
+                <tr><td>고객문의</td><td>문의 내용, 연락처(선택)</td><td>문의 접수 시</td></tr>
+            </table>
+            <p>회사는 이용자의 사상, 신념, 정치적 견해, 건강 등 「개인정보보호법」상 민감정보를 원칙적으로 수집하지 않습니다.</p>
+
+            <h2>제2조 (개인정보의 수집 및 이용 목적)</h2>
+            <ol>
+                <li>회원 가입 의사 확인, 본인 식별·인증, 회원자격 유지·관리</li>
+                <li>상품·서비스 주문 처리, 배송, 대금 결제 및 정산</li>
+                <li>고객 문의 응대, 불만 처리, 공지사항 전달</li>
+                <li>추천인(리퍼럴) 프로그램 등 이벤트·혜택 제공 및 부정 참여 방지</li>
+                <li>서비스 개선을 위한 통계 분석 및 이용 기록 분석</li>
+                <li>관계 법령에 따른 의무 이행 및 분쟁 대응</li>
+            </ol>
+
+            <h2>제3조 (개인정보의 보유 및 이용 기간)</h2>
+            <p>회사는 원칙적으로 개인정보의 수집·이용 목적이 달성되면 지체 없이 해당 정보를 파기합니다. 다만, 관계 법령에 따라 보존할 필요가 있는 경우 회사는 아래와 같이 관계 법령에서 정한 일정한 기간 동안 회원정보를 보관합니다.</p>
+            <table>
+                <tr><th>보관 항목</th><th>보관 기간</th><th>근거 법령</th></tr>
+                <tr><td>계약 또는 청약철회 등에 관한 기록</td><td>5년</td><td>전자상거래법</td></tr>
+                <tr><td>대금결제 및 재화 등의 공급에 관한 기록</td><td>5년</td><td>전자상거래법</td></tr>
+                <tr><td>소비자의 불만 또는 분쟁처리에 관한 기록</td><td>3년</td><td>전자상거래법</td></tr>
+                <tr><td>표시·광고에 관한 기록</td><td>6개월</td><td>전자상거래법</td></tr>
+                <tr><td>웹사이트 방문 기록(접속 로그)</td><td>3개월</td><td>통신비밀보호법</td></tr>
+                <tr><td>세법에 따른 거래 관련 장부 및 증빙서류</td><td>5년</td><td>국세기본법</td></tr>
+            </table>
+            <p>회원 탈퇴 시 이용자의 개인정보는 지체 없이 파기하되, 위 법령에 따라 보존이 필요한 정보는 별도로 분리 보관 후 해당 기간 경과 시 파기합니다.</p>
+
+            <h2>제4조 (개인정보의 제3자 제공)</h2>
+            <p>회사는 이용자의 개인정보를 제1조에서 명시한 목적 범위 내에서만 처리하며, 이용자의 사전 동의 없이는 동 범위를 초과하여 이용하거나 원칙적으로 이용자의 개인정보를 외부에 제공하지 않습니다. 다만 다음의 경우는 예외로 합니다.</p>
+            <ol>
+                <li>이용자가 사전에 제3자 제공에 동의한 경우</li>
+                <li>법령의 규정에 의거하거나, 수사 목적으로 법령에 정해진 절차와 방법에 따라 수사기관의 요구가 있는 경우</li>
+            </ol>
+
+            <h2>제5조 (개인정보 처리의 위탁)</h2>
+            <p>회사는 원활한 서비스 제공을 위해 아래와 같이 개인정보 처리 업무를 외부 전문업체에 위탁하고 있으며, 위탁계약 체결 시 개인정보보호법에 따라 위탁업무 수행 목적 외 개인정보 처리 금지, 기술적·관리적 보호조치, 재위탁 제한, 수탁자에 대한 관리·감독 등을 계약서 등을 통해 규정하고 있습니다.</p>
+            <table>
+                <tr><th>수탁업체</th><th>위탁 업무 내용</th></tr>
+                <tr><td>결제대행사(토스페이먼츠, 카카오페이, 네이버페이 등)</td><td>결제 처리 및 정산</td></tr>
+                <tr><td>Supabase Inc.</td><td>회원정보 및 서비스 데이터베이스 호스팅</td></tr>
+                <tr><td>Amazon Web Services(AWS)</td><td>서버 인프라 운영</td></tr>
+                <tr><td>이메일 발송 서비스</td><td>주문/배송 안내, 알림 메일 발송</td></tr>
+                <tr><td><span class="placeholder">[택배사 입력 필요]</span></td><td>상품 배송</td></tr>
+            </table>
+
+            <h2>제6조 (정보주체의 권리·의무 및 행사 방법)</h2>
+            <p>이용자는 개인정보주체로서 다음과 같은 권리를 행사할 수 있습니다.</p>
+            <ol>
+                <li>개인정보 열람 요구</li>
+                <li>오류 등이 있을 경우 정정 요구</li>
+                <li>삭제 요구</li>
+                <li>처리정지 요구</li>
+                <li>개인정보의 전송을 요구할 권리(전송요구권, 마이데이터)</li>
+            </ol>
+            <p>위 권리 행사는 마이페이지 내 설정 화면 또는 아래 개인정보보호책임자에게 서면, 이메일 등을 통해 하실 수 있으며, 회사는 이에 대해 지체 없이 조치하겠습니다. 만 14세 미만 아동의 개인정보에 관한 권리는 법정대리인이 대신 행사할 수 있습니다.</p>
+
+            <h2>제7조 (개인정보의 파기 절차 및 방법)</h2>
+            <p>회사는 개인정보 보유기간의 경과, 처리 목적 달성 등 개인정보가 불필요하게 되었을 때에는 지체 없이 해당 개인정보를 파기합니다.</p>
+            <ol>
+                <li><strong>파기 절차</strong>: 이용자가 입력한 정보는 목적 달성 후 별도의 DB(종이의 경우 별도의 서류함)로 옮겨져 내부 방침 및 관계 법령에 따라 일정 기간 저장된 후 파기됩니다.</li>
+                <li><strong>파기 방법</strong>: 전자적 파일 형태의 정보는 기록을 재생할 수 없는 기술적 방법을 사용하여 삭제하며, 종이에 출력된 개인정보는 분쇄기로 분쇄하거나 소각을 통하여 파기합니다.</li>
+            </ol>
+
+            <h2>제8조 (개인정보의 안전성 확보조치)</h2>
+            <p>회사는 개인정보보호법 제29조에 따라 다음과 같이 안전성 확보에 필요한 기술적·관리적·물리적 조치를 하고 있습니다.</p>
+            <ol>
+                <li>비밀번호의 암호화: 이용자의 비밀번호는 암호화되어 저장 및 관리되고 있어, 본인만이 알고 있으며 비밀번호를 이용한 인증 절차를 거쳐야 합니다.</li>
+                <li>해킹 등에 대비한 기술적 대책: 회사는 해킹이나 컴퓨터 바이러스 등에 의한 개인정보 유출 및 훼손을 막기 위하여 보안프로그램을 설치하고 주기적인 갱신·점검을 합니다.</li>
+                <li>개인정보에 대한 접근 제한: 개인정보를 처리하는 데이터베이스시스템에 대한 접근권한의 부여, 변경, 말소를 통하여 접근통제를 하고 있습니다.</li>
+                <li>접속기록의 보관 및 위변조 방지: 개인정보처리시스템에 접속한 기록을 최소 1년 이상 보관·관리하고 있습니다.</li>
+            </ol>
+
+            <h2>제9조 (쿠키의 운영 및 거부에 관한 사항)</h2>
+            <p>회사는 이용자에게 개별적인 맞춤서비스를 제공하기 위해 이용정보를 저장하고 수시로 불러오는 '쿠키(cookie)' 및 브라우저의 로컬 스토리지를 사용합니다.</p>
+            <ol>
+                <li><strong>사용 목적</strong>: 로그인 상태 유지, 장바구니 정보 저장, 이용자의 방문 및 이용형태, 관심분야 등을 파악하여 맞춤형 서비스 제공</li>
+                <li><strong>설치·운영 및 거부</strong>: 이용자는 웹브라우저 상단의 도구 &gt; 인터넷 옵션 &gt; 개인정보 메뉴를 통해 쿠키 저장을 거부할 수 있습니다. 다만 쿠키 저장을 거부할 경우 로그인이 필요한 일부 서비스 이용에 어려움이 발생할 수 있습니다.</li>
+            </ol>
+
+            <h2>제10조 (개인정보보호책임자)</h2>
+            <p>회사는 개인정보 처리에 관한 업무를 총괄해서 책임지고, 개인정보 처리와 관련한 정보주체의 불만처리 및 피해구제 등을 위하여 아래와 같이 개인정보보호책임자를 지정하고 있습니다.</p>
+            <table>
+                <tr><th>구분</th><th>내용</th></tr>
+                <tr><td>성명</td><td>최창훈</td></tr>
+                <tr><td>직책</td><td>대표 (겸임)</td></tr>
+                <tr><td>연락처</td><td>010-6202-0304 / polhun0304@naver.com</td></tr>
+            </table>
+            <p>이용자는 회사의 서비스를 이용하시면서 발생한 모든 개인정보보호 관련 문의, 불만처리, 피해구제 등에 관한 사항을 개인정보보호책임자에게 문의하실 수 있으며, 회사는 이용자의 문의에 대해 지체 없이 답변 및 처리해드릴 것입니다.</p>
+
+            <h2>제11조 (권익침해 구제방법)</h2>
+            <p>정보주체는 개인정보침해로 인한 구제를 받기 위하여 개인정보분쟁조정위원회, 한국인터넷진흥원 개인정보침해신고센터 등에 분쟁해결이나 상담 등을 신청할 수 있습니다. 이 밖에 기타 개인정보침해의 신고, 상담에 대하여는 아래 기관에 문의하시기 바랍니다.</p>
+            <ul>
+                <li>개인정보분쟁조정위원회: (국번없이) 1833-6972 (www.kopico.go.kr)</li>
+                <li>개인정보침해신고센터: (국번없이) 118 (privacy.kisa.or.kr)</li>
+                <li>대검찰청 사이버범죄수사단: (국번없이) 1301 (www.spo.go.kr)</li>
+                <li>경찰청 사이버안전국: (국번없이) 182 (cyberbureau.police.go.kr)</li>
+            </ul>
+
+            <h2>제12조 (개인정보처리방침의 변경)</h2>
+            <p>이 개인정보처리방침은 법령·정책 또는 보안기술의 변경에 따라 내용의 추가·삭제 및 수정이 있을 시에는 변경사항의 시행 최소 7일 전부터 홈페이지의 '공지사항'을 통하여 고지할 것입니다. 다만 수집하는 개인정보의 항목, 이용목적의 변경 등과 같이 이용자 권리의 중대한 변경이 발생할 때에는 최소 30일 전에 고지합니다.</p>
+            <table>
+                <tr><th>공고일자</th><th>시행일자</th><th>변경 내용</th></tr>
+                <tr><td><span class="placeholder">[입력 필요]</span></td><td><span class="placeholder">[입력 필요]</span></td><td>최초 제정</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <footer class="footer">
+        &copy; 2026 WITH+. All rights reserved. · <a href="/terms">이용약관</a>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        if (window.WithPlus && WithPlus.initHeader) { WithPlus.initHeader(); }
+    </script>
+</body>
+</html>

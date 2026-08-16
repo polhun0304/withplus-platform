@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>반품/교환 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B; --primary-dark: #B0154F;
+            --bg-white: #FFFFFF; --bg-light: #F5F5F5;
+            --text-dark: #333333; --text-gray: #666666;
+            --border-color: #E0E0E0; --success: #2E7D32;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; background: var(--bg-white); }
+        .header { background: var(--bg-white); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-main { max-width: 1200px; margin: 0 auto; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; }
+        .logo span { font-size: 0.7em; color: var(--text-gray); display: block; font-weight: normal; }
+        .icon-button { background: none; border: none; cursor: pointer; font-size: 1.3em; color: var(--text-dark); position: relative; text-decoration: none; display: inline-block; }
+        .cart-badge { position: absolute; top: -8px; right: -8px; background: var(--primary-color); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: bold; }
+
+        .page-hero { background: linear-gradient(135deg, var(--primary-color), var(--primary-dark)); color: white; padding: 50px 20px; text-align: center; }
+        .page-hero h1 { font-size: 2em; margin-bottom: 10px; }
+        .page-hero p { opacity: 0.95; }
+
+        .wrap { max-width: 900px; margin: 40px auto 80px; padding: 0 20px; }
+
+        .notice-box { background: linear-gradient(135deg, #FFF7E5, #FFF0F0); border: 1px solid #F5C97A; border-radius: 12px; padding: 20px 24px; margin-bottom: 36px; font-size: 0.92em; }
+        .notice-box strong { color: #B8571E; }
+
+        .content h2 { font-size: 1.3em; margin: 36px 0 14px; color: var(--primary-dark); border-bottom: 2px solid var(--border-color); padding-bottom: 8px; }
+        .content h2:first-of-type { margin-top: 0; }
+        .content h3 { font-size: 1.05em; margin: 22px 0 10px; color: var(--text-dark); }
+        .content p { margin-bottom: 12px; font-size: 0.96em; color: var(--text-dark); }
+        .content ol, .content ul { margin: 8px 0 16px 22px; font-size: 0.96em; }
+        .content li { margin-bottom: 8px; }
+        .content .placeholder { background: #FFF3CD; padding: 1px 6px; border-radius: 4px; color: #7A5200; font-weight: 600; }
+        .content table { width: 100%; border-collapse: collapse; margin: 10px 0 20px; font-size: 0.92em; }
+        .content table th, .content table td { border: 1px solid var(--border-color); padding: 10px 12px; text-align: left; }
+        .content table th { background: var(--bg-light); }
+
+        .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 20px 0 28px; }
+        .card { background: var(--bg-light); border-radius: 12px; padding: 20px; border: 1px solid var(--border-color); }
+        .card h3 { margin-top: 0; color: var(--primary-dark); font-size: 1em; }
+        .card p { font-size: 0.9em; color: var(--text-gray); margin-bottom: 0; }
+
+        .faq-item { border: 1px solid var(--border-color); border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+        .faq-q { background: var(--bg-light); padding: 14px 18px; font-weight: 600; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+        .faq-a { padding: 16px 18px; font-size: 0.93em; color: var(--text-gray); display: none; border-top: 1px solid var(--border-color); }
+        .faq-item.open .faq-a { display: block; }
+        .faq-item.open .faq-toggle { transform: rotate(45deg); }
+        .faq-toggle { transition: transform 0.2s; font-size: 1.1em; color: var(--primary-color); }
+        .faq-cat { display: inline-block; background: var(--primary-color); color: white; font-size: 0.75em; padding: 2px 10px; border-radius: 20px; margin-right: 8px; }
+
+        .contact-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin: 20px 0; }
+        .contact-card { text-align: center; padding: 24px 16px; background: var(--bg-light); border-radius: 12px; }
+        .contact-card .icon { font-size: 1.8em; margin-bottom: 8px; }
+        .contact-card a { color: var(--primary-color); font-weight: 600; text-decoration: none; }
+
+        .btn-primary { display: inline-block; background: var(--primary-color); color: white; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: 600; margin-top: 8px; }
+        .btn-primary:hover { background: var(--primary-dark); }
+
+        .footer { background: var(--text-dark); color: rgba(255,255,255,0.7); padding: 30px 20px; text-align: center; font-size: 0.85em; }
+        .footer a { color: #FF7FA8; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-main">
+            <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+            <div style="display:flex; gap:20px; align-items:center;">
+                <a class="icon-button" id="account-link" href="/login">👤</a>
+                <a class="icon-button" href="/cart">🛒<span class="cart-badge">0</span></a>
+            </div>
+        </div>
+    </header>
+
+    <div class="page-hero">
+        <h1>↩️ 반품/교환 안내</h1>
+        <p>취소, 반품, 교환 절차를 안내드립니다</p>
+    </div>
+
+    <div class="wrap">
+
+        <div class="content">
+
+            <h2>주문취소 (배송 시작 전)</h2>
+            <p>상품이 아직 발송되지 않은 상태(주문접수/결제완료/준비중)라면, 마이페이지 주문내역에서 '주문취소 신청' 버튼으로 직접 취소하실 수 있습니다. 취소가 승인되면 결제하신 금액은 결제수단에 따라 영업일 기준 3~5일 이내 환불됩니다.</p>
+
+            <h2>반품/교환 (배송완료 후)</h2>
+            <p>상품을 수령하신 후에는 <strong>수령일로부터 7일 이내</strong>에 마이페이지에서 반품 또는 교환을 신청하실 수 있습니다(전자상거래법상 청약철회 기간 기준).</p>
+            <ol>
+                <li>마이페이지 → 주문내역 → 해당 주문의 '반품/교환 신청' 버튼 클릭</li>
+                <li>사유 선택 및 상세 내용 작성 후 제출</li>
+                <li>관리자 검토 후 승인되면 안내에 따라 상품 발송</li>
+                <li>상품 확인 후 환불 또는 교환 상품 발송 처리</li>
+            </ol>
+
+            <h2>반품/교환이 제한되는 경우</h2>
+            <ul>
+                <li>고객의 책임 있는 사유로 상품이 멸실 또는 훼손된 경우</li>
+                <li>포장을 개봉해 상품 가치가 현저히 감소한 경우(건강기능식품 등 위생 관련 상품 포함)</li>
+                <li>시간 경과로 재판매가 곤란할 정도로 상품 가치가 감소한 경우</li>
+                <li>복제 가능한 상품의 포장을 훼손한 경우</li>
+            </ul>
+            <p style="font-size:0.85em;color:var(--text-gray);">위 예외사항은 「전자상거래 등에서의 소비자보호에 관한 법률」 제17조에 근거합니다. 상품 하자·오배송 등 판매자 귀책 사유의 경우 배송비 없이 반품/교환이 가능합니다. 자세한 내용은 <a href="/terms" style="color:var(--primary-color);">이용약관</a> 제14~15조를 참고해주세요.</p>
+
+            <h2>환불 안내</h2>
+            <p>반품 상품 확인 후 결제하신 수단으로 환불되며, 카드 결제는 승인 취소, 계좌이체·간편결제는 실제 입금까지 영업일 기준 3~7일 정도 소요될 수 있습니다.</p>
+
+        </div>
+    </div>
+
+    <footer class="footer">
+        &copy; 2026 WITH+. All rights reserved. · <a href="/terms">이용약관</a> · <a href="/privacy">개인정보처리방침</a>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        if (window.WithPlus && WithPlus.initHeader) { WithPlus.initHeader(); }
+        function toggleFaq(el) { el.parentElement.classList.toggle('open'); }
+    </script>
+</body>
+</html>

@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>휴대폰 본인인증 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --primary-color: #D32F5B; --primary-dark: #B0154F; --bg-light: #F5F5F5; --text-dark: #333; --text-gray: #666; --border-color: #E0E0E0; }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); background: white; }
+        .top-bar { display: flex; align-items: center; gap: 14px; padding: 16px 20px; }
+        .back-btn { background: none; border: none; font-size: 1.3em; cursor: pointer; color: var(--text-dark); text-decoration: none; }
+        .top-logo { font-size: 1.2em; font-weight: 800; color: var(--primary-color); }
+
+        .wrap { max-width: 420px; margin: 20px auto 60px; padding: 0 24px; text-align: center; }
+        .wrap h1 { font-size: 1.3em; margin-bottom: 10px; }
+        .wrap .sub { font-size: 0.88em; color: var(--text-gray); margin-bottom: 30px; line-height: 1.6; }
+
+        .field { text-align: left; margin-bottom: 16px; }
+        .field label { display: block; font-size: 0.85em; color: var(--text-gray); margin-bottom: 6px; }
+        .field input { width: 100%; padding: 12px 14px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 1em; }
+        .field input:focus { outline: none; border-color: var(--primary-color); }
+
+        .phone-row { display: flex; gap: 8px; }
+        .phone-row input { flex: 1; }
+        .phone-row button {
+            flex-shrink: 0; padding: 0 16px; background: var(--bg-light); border: 1px solid var(--border-color);
+            border-radius: 8px; font-size: 0.85em; font-weight: 600; color: var(--text-dark); cursor: pointer;
+        }
+
+        .code-row { position: relative; }
+        .code-row .timer { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); color: var(--primary-color); font-size: 0.85em; font-weight: 600; }
+
+        .confirm-btn {
+            width: 100%; padding: 14px; background: var(--primary-color); color: white; border: none;
+            border-radius: 8px; font-weight: 700; font-size: 1em; cursor: pointer; margin-top: 10px;
+        }
+        .confirm-btn:hover { background: var(--primary-dark); }
+
+        .notice-box {
+            margin-top: 24px; background: var(--bg-light); border-radius: 12px; padding: 18px; font-size: 0.85em;
+            color: var(--text-gray); text-align: left; line-height: 1.6;
+        }
+        .notice-box strong { color: var(--text-dark); }
+
+        .skip-link { display: block; margin-top: 22px; font-size: 0.85em; color: var(--text-gray); text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <a href="/join" class="back-btn">←</a>
+        <span class="top-logo">WITH+</span>
+    </div>
+
+    <div class="wrap">
+        <h1>휴대폰 본인인증</h1>
+        <p class="sub" id="sub-copy">안전한 서비스 이용을 위해<br>본인인증을 진행해 주세요.</p>
+
+        <form id="verify-form">
+            <div class="field">
+                <label for="vf-name">이름</label>
+                <input type="text" id="vf-name" placeholder="이름을 입력해주세요" autocomplete="name">
+            </div>
+            <div class="field phone-row">
+                <div style="flex:1;">
+                    <label for="vf-phone">휴대폰 번호</label>
+                    <input type="tel" id="vf-phone" placeholder="- 없이 숫자만 입력해주세요" autocomplete="tel">
+                </div>
+                <button type="button" id="vf-send-btn" style="margin-top:22px;">인증번호 발송</button>
+            </div>
+            <div class="field code-row" id="code-field" style="display:none;">
+                <label for="vf-code">인증번호</label>
+                <input type="text" id="vf-code" placeholder="인증번호 6자리를 입력해주세요" maxlength="6">
+            </div>
+            <button type="submit" class="confirm-btn">인증 확인</button>
+        </form>
+
+        <div class="notice-box" id="notice-box">
+            📌 휴대폰 본인인증 서비스는 준비 중입니다. 본인인증 연동(PASS/NICE평가정보 등)이 완료되면 이 화면에서 실제로 인증번호를 받아 진행하실 수 있어요. 지금은 이 단계를 건너뛰고 계속 진행하실 수 있습니다.
+        </div>
+
+        <a href="/mypage" class="skip-link" id="skip-link">나중에 하기 →</a>
+    </div>
+
+    <script src="/vendor/supabase.min.js"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        (async function () {
+            const params = new URLSearchParams(location.search);
+            const communitySlug = params.get('community');
+            if (communitySlug) {
+                try {
+                    const res = await fetch('/api/communities/' + encodeURIComponent(communitySlug));
+                    const json = await res.json();
+                    if (res.ok && json.success) {
+                        document.getElementById('sub-copy').innerHTML =
+                            `인증이 완료되면 <strong>${WithPlus.escapeHtml(json.data.name)}</strong> 소속으로<br>WITH+를 이용하실 수 있습니다.`;
+                    }
+                } catch (err) { /* 실패해도 기본 문구 유지 */ }
+                document.getElementById('skip-link').setAttribute('href', '/mypage?community=' + encodeURIComponent(communitySlug));
+            }
+
+            // 본인인증 서비스(PASS/NICE 등) 연동 전이므로, 실제 SMS 발송이나 인증을 흉내내지 않고 준비중임을 알린다
+            document.getElementById('vf-send-btn').addEventListener('click', () => {
+                document.getElementById('notice-box').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                document.getElementById('notice-box').style.background = '#FFF3E0';
+            });
+            document.getElementById('verify-form').addEventListener('submit', (e) => {
+                e.preventDefault();
+                document.getElementById('notice-box').scrollIntoView({ behavior: 'smooth', block: 'center' });
+                document.getElementById('notice-box').style.background = '#FFF3E0';
+            });
+        })();
+    </script>
+</body>
+</html>

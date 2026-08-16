@@ -1,0 +1,803 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>장바구니 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B; --primary-dark: #B0154F;
+            --bg-white: #FFFFFF; --bg-light: #F5F5F5;
+            --text-dark: #333333; --text-gray: #666666;
+            --border-color: #E0E0E0; --success: #2E7D32;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; background: var(--bg-white); }
+        .header { background: var(--bg-white); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-main { max-width: 1200px; margin: 0 auto; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; }
+        .logo span { font-size: 0.7em; color: var(--text-gray); display: block; font-weight: normal; }
+        .icon-button { background: none; border: none; cursor: pointer; font-size: 1.3em; color: var(--text-dark); position: relative; text-decoration: none; display: inline-block; }
+        .cart-badge { position: absolute; top: -8px; right: -8px; background: var(--primary-color); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: bold; }
+
+        .wrap { max-width: 900px; margin: 0 auto 80px; padding: 0 20px; }
+
+        /* 3단계 프로세스 표시 */
+        .steps { display: flex; justify-content: center; gap: 10px; padding: 30px 20px 10px; }
+        .step { display: flex; align-items: center; gap: 8px; color: var(--text-gray); font-size: 0.9em; }
+        .step .num { width: 26px; height: 26px; border-radius: 50%; background: var(--bg-light); display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 0.85em; }
+        .step.active { color: var(--primary-color); font-weight: bold; }
+        .step.active .num { background: var(--primary-color); color: white; }
+        .step-sep { color: #ccc; }
+
+        h1.page-title { font-size: 1.5em; text-align: center; margin: 10px 0 30px; }
+
+        .cart-item { display: flex; gap: 16px; align-items: center; padding: 18px 0; border-bottom: 1px solid var(--border-color); }
+        .cart-item .thumb { width: 70px; height: 70px; background: var(--bg-light); border-radius: 10px; display: flex; align-items: center; justify-content: center; font-size: 2em; flex-shrink: 0; }
+        .cart-item .info { flex: 1; min-width: 0; }
+        .cart-item .name { font-weight: 600; margin-bottom: 4px; }
+        .cart-item .name a { color: var(--text-dark); text-decoration: none; }
+        .cart-item .price { color: var(--primary-color); font-weight: bold; }
+        .cart-item .qty-control { display: flex; align-items: center; border: 1px solid var(--border-color); border-radius: 8px; }
+        .cart-item .qty-control button { width: 30px; height: 30px; border: none; background: var(--bg-light); cursor: pointer; }
+        .cart-item .qty-control input { width: 40px; text-align: center; border: none; }
+        .cart-item .line-total { font-weight: bold; min-width: 90px; text-align: right; }
+        .cart-item .remove-btn { background: none; border: none; color: #757575; cursor: pointer; font-size: 1.2em; }
+
+        /* ===== 장바구니 "컴팩트형" 디자인 템플릿 (관리자 → 디자인 부품 갤러리에서 선택 가능) =====
+           - 아이템 자체의 구조(클래스/버튼)는 그대로 재사용하고, 여백/크기만 줄여 한 줄에 더 많은 정보가 보이게 한다. */
+        .cart-items.compact .cart-item { padding: 10px 0; gap: 12px; }
+        .cart-items.compact .cart-item .thumb { width: 44px; height: 44px; font-size: 1.3em; border-radius: 6px; }
+        .cart-items.compact .cart-item .name { font-size: 0.92em; margin-bottom: 2px; }
+        .cart-items.compact .cart-item .price { font-size: 0.9em; }
+        .cart-items.compact .cart-item .qty-control button { width: 24px; height: 24px; }
+        .cart-items.compact .cart-item .qty-control input { width: 30px; }
+        .cart-items.compact .cart-item .line-total { min-width: 70px; font-size: 0.92em; }
+
+        .mileage-note { background: linear-gradient(135deg, #FFF0F6, #FFE5E5); border-radius: 12px; padding: 14px 18px; margin: 20px 0; font-size: 0.88em; }
+        .mileage-note strong { color: var(--primary-color); }
+
+        .community-select { margin: 20px 0; }
+        .community-select label { display: block; font-size: 0.9em; color: var(--text-gray); margin-bottom: 6px; }
+        .community-select select { width: 100%; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 1em; }
+
+        .summary-box { background: var(--bg-light); border-radius: 12px; padding: 20px; margin: 20px 0; }
+        .summary-row { display: flex; justify-content: space-between; padding: 6px 0; font-size: 0.95em; }
+        .summary-row.discount { color: var(--primary-color); }
+        .summary-row.total { font-size: 1.2em; font-weight: bold; color: var(--primary-color); border-top: 1px solid var(--border-color); margin-top: 8px; padding-top: 14px; }
+
+        .coupon-row { display: flex; gap: 8px; margin: 20px 0; }
+        .coupon-row input { flex: 1; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95em; text-transform: uppercase; }
+        .coupon-row button { padding: 0 18px; background: var(--text-dark); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+        .coupon-row button:disabled { opacity: 0.6; cursor: not-allowed; }
+        .coupon-applied { display: flex; justify-content: space-between; align-items: center; background: #E8F5E9; color: #2E7D32; border-radius: 8px; padding: 10px 14px; margin: 20px 0; font-size: 0.9em; }
+        .coupon-applied button { background: none; border: none; color: #2E7D32; text-decoration: underline; cursor: pointer; font-size: 0.85em; }
+        .coupon-reapply-row { margin: -12px 0 20px; }
+
+        .mileage-use-row { margin: 20px 0; }
+        .mileage-use-row label { display: block; font-size: 0.9em; color: var(--text-gray); margin-bottom: 6px; }
+        .mileage-use-row .mileage-use-input-row { display: flex; gap: 8px; }
+        .mileage-use-row input { flex: 1; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95em; }
+        .mileage-use-row button { padding: 0 18px; background: var(--text-dark); color: white; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; white-space: nowrap; }
+        .mileage-use-row .mileage-use-hint { font-size: 0.8em; color: #757575; margin-top: 6px; }
+        .coupon-reapply-row button { background: none; border: none; color: var(--primary-color); text-decoration: underline; cursor: pointer; font-size: 0.85em; padding: 0; }
+        .coupon-msg { margin: -10px 0 20px; font-size: 0.85em; padding: 8px 12px; border-radius: 8px; display: none; }
+        .coupon-msg.error { display: block; background: #FDECEA; color: #C62828; }
+
+        .field { margin-bottom: 14px; }
+        .field label { display: block; font-size: 0.85em; color: var(--text-gray); margin-bottom: 6px; }
+        .field input { width: 100%; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 1em; }
+        .field select { width: 100%; padding: 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 1em; }
+
+        .checkout-btn { width: 100%; padding: 16px; background: var(--primary-color); color: white; border: none; border-radius: 8px; font-weight: 600; font-size: 1.05em; cursor: pointer; margin-top: 10px; }
+        .checkout-btn:hover { background: var(--primary-dark); }
+        .checkout-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+        .msg { margin-top: 14px; font-size: 0.9em; padding: 10px 12px; border-radius: 8px; display: none; }
+        .msg.error { display: block; background: #FDECEA; color: #C62828; }
+        .msg.success { display: block; background: #E8F5E9; color: #2E7D32; }
+
+        .state-box { text-align: center; padding: 80px 20px; color: var(--text-gray); }
+        .state-box .emoji { font-size: 3em; margin-bottom: 16px; }
+        .state-box a { display: inline-block; margin-top: 20px; padding: 10px 24px; background: var(--primary-color); color: white; text-decoration: none; border-radius: 24px; font-weight: 600; }
+
+        .order-complete { text-align: center; padding: 60px 20px; }
+        .order-complete .emoji { font-size: 3.5em; margin-bottom: 16px; }
+        .order-complete .order-no { color: var(--text-gray); margin: 10px 0; }
+        .order-complete .mileage { background: linear-gradient(135deg, #FFF0F6, #FFE5E5); border-radius: 12px; padding: 20px; margin: 20px auto; max-width: 400px; }
+        .order-complete .mileage strong { color: var(--primary-color); font-size: 1.2em; }
+        .order-complete a { display: inline-block; margin: 8px; padding: 12px 28px; border-radius: 24px; font-weight: 600; text-decoration: none; }
+        .order-complete a.primary { background: var(--primary-color); color: white; }
+        .order-complete a.secondary { background: var(--bg-light); color: var(--text-dark); }
+
+        .footer { background: var(--text-dark); color: rgba(255,255,255,0.7); padding: 30px 20px; text-align: center; font-size: 0.85em; margin-top: 40px; }
+        .footer a { color: #FF7FA8; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-main">
+            <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+            <div style="display:flex; gap:20px; align-items:center;">
+                <a class="icon-button" id="account-link" href="/login">👤</a>
+                <a class="icon-button" href="/cart">🛒<span class="cart-badge">0</span></a>
+            </div>
+        </div>
+    </header>
+
+    <div class="steps">
+        <div class="step active"><span class="num">1</span> 장바구니</div>
+        <span class="step-sep">›</span>
+        <div class="step" id="step2"><span class="num">2</span> 주문서 작성</div>
+        <span class="step-sep">›</span>
+        <div class="step" id="step3"><span class="num">3</span> 주문완료</div>
+    </div>
+
+    <div class="wrap">
+        <h1 class="page-title">🛒 장바구니</h1>
+        <div id="cart-area">
+            <div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중입니다...</h3></div>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <p>&copy; 2024-2026 WITH+ Co., Ltd. All Rights Reserved. | <a href="/">홈으로</a></p>
+    </footer>
+
+    <script src="/vendor/supabase.min.js"></script>
+    <script src="/withplus-common.js"></script>
+    <script src="//t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>
+    <script>
+        (async function () {
+            WithPlus.initHeader();
+            await Promise.all([WithPlus.refreshCategoryMap(), WithPlus.refreshMileageRates(), WithPlus.refreshPageTemplates()]);
+            const area = document.getElementById('cart-area');
+            const cartItemsClass = WithPlus.getPageTemplatesCached().cart === 'compact' ? 'cart-items compact' : 'cart-items';
+            let appliedCoupon = null; // { code, label, discountAmount, auto } — 장바구니 내용이 바뀌면 초기화됨
+            let autoCouponDismissed = false; // 사용자가 자동 적용된 쿠폰을 직접 해제하면, 이번 화면에서는 다시 자동 적용하지 않음
+            let mileageBalance = 0; // 보유 마일리지 잔액 (서버에서 조회)
+            let mileageToUse = 0; // 이번 결제에 사용할 마일리지 (사용자가 직접 입력)
+            let lastKnownPostal = ''; // 배송비(도서산간 추가금액) 실시간 계산을 위해 마지막으로 선택/입력된 우편번호를 기억해둔다
+            let shippingPolicyCache = null; // 배송비 정책(기본배송비/무료배송기준/도서산간 추가금액) - 최초 1회만 조회해 재사용
+            async function getShippingPolicy() {
+                if (shippingPolicyCache) return shippingPolicyCache;
+                try {
+                    const res = await fetch('/api/settings/shipping-policy');
+                    const json = await res.json();
+                    if (res.ok && json.success) shippingPolicyCache = json.data;
+                } catch (e) { /* 조회 실패 시 아래 calcShippingFee가 정책 없이도(기본배송비 없이) 안전하게 동작 */ }
+                return shippingPolicyCache || { base_fee: 0, free_shipping_threshold: 0, surcharge_zones: [] };
+            }
+            function calcShippingFee(policy, subtotal, postal) {
+                const base = subtotal >= policy.free_shipping_threshold ? 0 : policy.base_fee;
+                let surcharge = 0, surchargeLabel = null;
+                const p = postal ? String(postal).replace(/[^0-9]/g, '').padStart(5, '0').slice(0, 5) : null;
+                if (p) {
+                    const zone = (policy.surcharge_zones || []).find(z => p >= z.postal_start && p <= z.postal_end);
+                    if (zone) { surcharge = zone.fee; surchargeLabel = zone.label; }
+                }
+                return { fee: base + surcharge, surchargeLabel };
+            }
+
+            // 주문 접수 완료 화면(결제 연동이 꺼져있을 때 - 기존과 동일한 화면)
+            function renderOrderComplete(order, mileage) {
+                area.innerHTML = `
+                    <div class="order-complete">
+                        <div class="emoji">🎉</div>
+                        <h2>주문이 완료되었습니다!</h2>
+                        <div class="order-no">주문번호: ${WithPlus.escapeHtml(order.order_number)}</div>
+                        ${Number(order.used_mileage) > 0 ? `<div style="color:var(--text-gray); font-size:0.9em; margin-top:8px;">마일리지 ${Number(order.used_mileage).toLocaleString('ko-KR')}원 사용 · 실결제 ${WithPlus.formatPrice(order.final_price)}</div>` : ''}
+                        <div class="mileage">
+                            적립된 마일리지<br>
+                            <strong>${(mileage.total).toLocaleString('ko-KR')}원</strong>
+                            <div style="font-size:0.85em; color:var(--text-gray); margin-top:6px;">
+                                개인 ${mileage.personal.toLocaleString('ko-KR')}원 ${mileage.community > 0 ? '+ 커뮤니티 ' + mileage.community.toLocaleString('ko-KR') + '원' : ''}
+                            </div>
+                        </div>
+                        <p style="color:var(--text-gray); font-size:0.9em;">💳 실제 결제는 준비 중이며, 주문 접수와 마일리지 적립까지 정상 처리되었습니다.</p>
+                        <div>
+                            <a href="/mypage" class="primary">주문내역 보기</a>
+                            <a href="/" class="secondary">쇼핑 계속하기</a>
+                        </div>
+                    </div>`;
+            }
+
+            // 결제(PG) 연동이 켜져있을 때 - 활성화된 결제수단(토스/카카오페이/네이버페이) 중 고를 수 있게 보여준다
+            async function renderPaymentStep(order, mileage, pgConfigs, customerInfo) {
+                const methods = [];
+                if (pgConfigs.kakaopay && pgConfigs.kakaopay.enabled) methods.push({ key: 'kakaopay', label: '🟡 카카오페이로 결제' });
+                if (pgConfigs.naverpay && pgConfigs.naverpay.enabled) methods.push({ key: 'naverpay', label: '🟢 네이버페이로 결제' });
+                if (pgConfigs.toss && pgConfigs.toss.enabled) methods.push({ key: 'toss', label: '💳 신용카드 등(토스페이먼츠)' });
+
+                area.innerHTML = `
+                    <div class="order-complete">
+                        <h2>주문이 접수되었습니다</h2>
+                        <div class="order-no">주문번호: ${WithPlus.escapeHtml(order.order_number)} · 결제 금액 ${WithPlus.formatPrice(order.final_price)}</div>
+                        <p style="color:var(--text-gray); font-size:0.85em; margin:10px 0 20px;">아래에서 결제를 완료해야 주문이 최종 확정됩니다.</p>
+                        <div id="pay-method-select" style="max-width:480px; margin:0 auto; display:flex; flex-direction:column; gap:8px;">
+                            ${methods.map(m => `<button type="button" class="checkout-btn pay-method-btn" data-method="${m.key}" style="background:#fff; color:var(--text-dark); border:1px solid var(--border-color);">${m.label}</button>`).join('')}
+                        </div>
+                        <div id="toss-payment-method" style="text-align:left; max-width:480px; margin:16px auto 0; display:none;"></div>
+                        <div id="toss-agreement" style="text-align:left; max-width:480px; margin:10px auto; display:none;"></div>
+                        <button type="button" id="toss-pay-btn" class="checkout-btn" style="max-width:480px; margin:16px auto 0; display:none;">${WithPlus.formatPrice(order.final_price)} 결제하기</button>
+                        <div class="msg" id="toss-pay-msg" style="max-width:480px; margin:10px auto 0;"></div>
+                    </div>`;
+
+                const msg = document.getElementById('toss-pay-msg');
+                let tossWidget = null;
+
+                // 카카오페이/네이버페이는 서버가 결제창 URL을 만들어주면 그쪽으로 페이지를 이동시키기만 하면 된다
+                async function payWithRedirectPg(method) {
+                    const btns = document.querySelectorAll('.pay-method-btn');
+                    btns.forEach(b => b.disabled = true);
+                    msg.className = 'msg';
+                    msg.textContent = '결제창을 준비하는 중입니다...';
+                    try {
+                        const token = await WithPlus.getAccessToken();
+                        const endpoint = method === 'kakaopay' ? `/api/orders/${order.id}/kakaopay/ready` : `/api/orders/${order.id}/naverpay/reserve`;
+                        const res = await fetch(endpoint, { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
+                        const json = await res.json();
+                        if (!res.ok || !json.success) throw new Error(json.message || '결제창 준비에 실패했습니다');
+                        if (method === 'kakaopay') {
+                            const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+                            location.href = (isMobile && json.data.redirect_url_mobile) ? json.data.redirect_url_mobile : json.data.redirect_url;
+                        } else {
+                            // 네이버페이는 reserveId로 결제창을 연다(네이버페이 SDK/URL 규격에 맞춰 최종 연결 - 형님의 실제 파트너 승인 후 확정)
+                            location.href = `https://npay.naver.com/pay/${json.data.mode === 'live' ? '' : 'test/'}${json.data.reserve_id}`;
+                        }
+                    } catch (err) {
+                        msg.textContent = '결제 진행 중 오류가 발생했습니다: ' + (err.message || err);
+                        msg.className = 'msg error';
+                        btns.forEach(b => b.disabled = false);
+                    }
+                }
+
+                async function showTossWidget() {
+                    document.getElementById('toss-payment-method').style.display = 'block';
+                    document.getElementById('toss-agreement').style.display = 'block';
+                    document.getElementById('toss-pay-btn').style.display = 'block';
+
+                    if (!document.getElementById('toss-sdk-script')) {
+                        await new Promise((resolve, reject) => {
+                            const s = document.createElement('script');
+                            s.id = 'toss-sdk-script';
+                            s.src = 'https://js.tosspayments.com/v1/payment-widget';
+                            s.onload = resolve;
+                            s.onerror = () => reject(new Error('토스페이먼츠 결제 위젯 스크립트를 불러오지 못했습니다'));
+                            document.head.appendChild(s);
+                        });
+                    }
+
+                    tossWidget = PaymentWidget(pgConfigs.toss.clientKey, customerInfo.userId || PaymentWidget.ANONYMOUS);
+                    tossWidget.renderPaymentMethods('#toss-payment-method', { value: order.final_price });
+                    tossWidget.renderAgreement('#toss-agreement');
+                }
+
+                document.querySelectorAll('.pay-method-btn').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        const method = btn.dataset.method;
+                        if (method === 'toss') { await showTossWidget(); return; }
+                        await payWithRedirectPg(method);
+                    });
+                });
+
+                // 결제수단이 하나뿐이면 고르는 수고 없이 바로 그 결제수단으로 진행되도록 함
+                if (methods.length === 1 && methods[0].key === 'toss') await showTossWidget();
+
+                document.getElementById('toss-pay-btn').addEventListener('click', async () => {
+                    try {
+                        await tossWidget.requestPayment({
+                            orderId: order.order_number,
+                            orderName: `WITH+ 주문 (${order.order_number})`,
+                            successUrl: location.origin + '/payment-result.html',
+                            failUrl: location.origin + '/payment-result.html',
+                            customerEmail: customerInfo.email || undefined,
+                            customerName: customerInfo.name || undefined,
+                            customerMobilePhone: (customerInfo.phone || '').replace(/[^0-9]/g, '') || undefined
+                        });
+                        // 성공 시 토스 결제창으로 페이지가 이동하므로 이 아래 코드는 보통 실행되지 않음
+                    } catch (err) {
+                        msg.textContent = '결제 진행 중 오류가 발생했습니다: ' + (err.message || err);
+                        msg.className = 'msg error';
+                    }
+                });
+            }
+
+            async function renderCart() {
+                const cart = WithPlus.getCart();
+
+                if (cart.length === 0) {
+                    area.innerHTML = `
+                        <div class="state-box">
+                            <div class="emoji">🛒</div>
+                            <h3>장바구니가 비어있습니다</h3>
+                            <a href="/">쇼핑 계속하기</a>
+                        </div>`;
+                    return;
+                }
+
+                // 장바구니에 담긴 상품들의 최신 정보(가격/재고 등)를 실제 DB에서 조회
+                let products;
+                try {
+                    const { ok, json } = await WithPlus.fetchJSON('/api/products');
+                    if (!ok || !json.success) throw new Error('상품 정보를 불러오지 못했습니다');
+                    products = json.data;
+                } catch (err) {
+                    area.innerHTML = `
+                        <div class="state-box">
+                            <div class="emoji">⚠️</div>
+                            <h3>상품 정보를 불러오는 중 문제가 발생했습니다</h3>
+                            <p>${WithPlus.escapeHtml(err.message)}</p>
+                        </div>`;
+                    return;
+                }
+
+                // 옵션(사이즈/색상 등)이 선택된 장바구니 항목이 있으면 해당 옵션들의 이름/가격조정/재고를 한번에 조회
+                let variantMap = {};
+                const variantProductIds = [...new Set(cart.filter(ci => ci.variant_id).map(ci => ci.product_id))];
+                if (variantProductIds.length > 0) {
+                    try {
+                        const { ok, json } = await WithPlus.fetchJSON('/api/product-variants?product_ids=' + variantProductIds.map(encodeURIComponent).join(','));
+                        if (ok && json.success) (json.data || []).forEach(v => { variantMap[v.id] = v; });
+                    } catch (e) { /* 조회 실패해도 상품 자체는 표시 (옵션 정보만 비어있게 됨) */ }
+                }
+
+                const lineItems = [];
+                cart.forEach(ci => {
+                    const p = products.find(pr => String(pr.id) === String(ci.product_id));
+                    if (!p) {
+                        // 판매 종료 등으로 사라진 상품은 장바구니에서 조용히 정리
+                        WithPlus.removeFromCart(ci.product_id, ci.variant_id);
+                        return;
+                    }
+                    let variant = null;
+                    if (ci.variant_id) {
+                        variant = variantMap[ci.variant_id] || null;
+                        if (!variant) {
+                            // 판매자가 삭제/비활성화한 옵션은 장바구니에서 조용히 정리
+                            WithPlus.removeFromCart(ci.product_id, ci.variant_id);
+                            return;
+                        }
+                    }
+                    const basePrice = (p.discount_price && Number(p.discount_price) < Number(p.price)) ? Number(p.discount_price) : Number(p.price);
+                    const price = basePrice + (variant ? Number(variant.price_adjustment || 0) : 0);
+                    lineItems.push({ product: p, variant, quantity: ci.quantity, price });
+                });
+
+                if (lineItems.length === 0) {
+                    area.innerHTML = `
+                        <div class="state-box">
+                            <div class="emoji">🛒</div>
+                            <h3>장바구니가 비어있습니다</h3>
+                            <a href="/">쇼핑 계속하기</a>
+                        </div>`;
+                    return;
+                }
+
+                const subtotal = lineItems.reduce((sum, li) => sum + li.price * li.quantity, 0);
+                const shippingPolicy = await getShippingPolicy();
+                const shippingCalc = calcShippingFee(shippingPolicy, subtotal, lastKnownPostal);
+                const shippingFee = shippingCalc.fee;
+                const preDiscountTotal = subtotal + shippingFee;
+
+                // 사용 가능한 쿠폰이 있으면 코드를 몰라도 자동으로 찾아 적용해준다.
+                // (쿠폰 코드 자체를 목록으로 보여주는 게 아니라, 서버가 "지금 이 사람에게 적용 가능한 것 중 가장 할인액이 큰 1건"만 판단해서 내려준다)
+                if (!appliedCoupon && !autoCouponDismissed && preDiscountTotal > 0) {
+                    try {
+                        const session = await WithPlus.getSession();
+                        if (session) {
+                            const token = await WithPlus.getAccessToken();
+                            const res = await fetch('/api/coupons/best-available?amount=' + preDiscountTotal, {
+                                headers: { Authorization: 'Bearer ' + token }
+                            });
+                            const json = await res.json();
+                            if (res.ok && json.success && json.data) {
+                                appliedCoupon = { code: json.data.code, label: json.data.label, discountAmount: json.data.discountAmount, auto: true };
+                            }
+                        }
+                    } catch (e) { /* 자동 쿠폰 조회 실패해도 결제 자체는 계속 진행 가능 */ }
+                }
+
+                // 보유 마일리지 잔액 조회 (로그인 상태일 때만)
+                try {
+                    const session = await WithPlus.getSession();
+                    if (session) {
+                        const token = await WithPlus.getAccessToken();
+                        const res = await fetch('/api/me/mileage-balance', { headers: { Authorization: 'Bearer ' + token } });
+                        const json = await res.json();
+                        if (res.ok && json.success) mileageBalance = json.data.balance;
+                    } else {
+                        mileageBalance = 0;
+                        mileageToUse = 0;
+                    }
+                } catch (e) { /* 마일리지 잔액 조회 실패해도 결제 자체는 계속 진행 가능(마일리지 사용 없이) */ }
+
+                const discountAmount = appliedCoupon ? appliedCoupon.discountAmount : 0;
+                const amountAfterCoupon = Math.max(0, preDiscountTotal - discountAmount);
+                // 사용할 마일리지는 보유 잔액과 결제 금액을 넘을 수 없다 (화면에서도 서버와 동일한 규칙으로 미리 잘라서 보여준다)
+                mileageToUse = Math.max(0, Math.min(mileageToUse, mileageBalance, amountAfterCoupon));
+                const total = Math.max(0, amountAfterCoupon - mileageToUse);
+                const mileageRates = WithPlus.getMileageRatesCached();
+                const personalPct = WithPlus.formatPercent(mileageRates.personalPercent);
+                const communityPct = WithPlus.formatPercent(mileageRates.communityPercent);
+                const personalMileage = Math.floor(total * mileageRates.personal);
+                const communityMileage = Math.floor(total * mileageRates.community);
+
+                // 커뮤니티 목록 조회 - 전체 커뮤니티가 아니라 "내가 실제로 가입한" 커뮤니티만 보여준다
+                // (다른 분양 조직은 선택할 수 없도록 애초에 목록에 포함시키지 않음 - 서버도 /api/orders에서 동일하게 검증함)
+                let communities = [];
+                let savedAddresses = [];
+                try {
+                    const session = await WithPlus.getSession();
+                    if (session) {
+                        const token = await WithPlus.getAccessToken();
+                        const [communitiesRes, addressesRes] = await Promise.all([
+                            fetch('/api/my/communities', { headers: { Authorization: 'Bearer ' + token } }),
+                            fetch('/api/me/addresses', { headers: { Authorization: 'Bearer ' + token } })
+                        ]);
+                        const json = await communitiesRes.json();
+                        if (communitiesRes.ok && json.success) communities = json.data;
+                        const addrJson = await addressesRes.json();
+                        if (addressesRes.ok && addrJson.success) savedAddresses = addrJson.data;
+                    }
+                } catch (e) { /* 커뮤니티/배송지 조회 실패해도 주문 자체는 진행 가능 */ }
+
+                const itemsHtml = lineItems.map(li => {
+                    const emoji = WithPlus.CATEGORY_EMOJI[li.product.category] || WithPlus.CATEGORY_EMOJI.default;
+                    return `
+                    <div class="cart-item" data-product-id="${li.product.id}" data-variant-id="${li.variant ? li.variant.id : ''}">
+                        <div class="thumb">${emoji}</div>
+                        <div class="info">
+                            <div class="name"><a href="/product/${li.product.id}">${WithPlus.escapeHtml(li.product.name)}</a></div>
+                            ${li.variant ? `<div style="font-size:0.85em; color:var(--text-gray); margin-bottom:2px;">옵션: ${WithPlus.escapeHtml(li.variant.name)}</div>` : ''}
+                            <div class="price">${WithPlus.formatPrice(li.price)}</div>
+                        </div>
+                        <div class="qty-control">
+                            <button type="button" class="qty-minus">−</button>
+                            <input type="text" class="qty-input" value="${li.quantity}" readonly>
+                            <button type="button" class="qty-plus">+</button>
+                        </div>
+                        <div class="line-total">${WithPlus.formatPrice(li.price * li.quantity)}</div>
+                        <button type="button" class="remove-btn" title="삭제">✕</button>
+                    </div>`;
+                }).join('');
+
+                const communityOptionsHtml = communities.map(c =>
+                    `<option value="${c.id}">${WithPlus.escapeHtml(c.name)}</option>`
+                ).join('');
+
+                area.innerHTML = `
+                    <div class="${cartItemsClass}">${itemsHtml}</div>
+                    <div class="mileage-note">
+                        이 주문으로 <strong>개인 마일리지 ${personalMileage.toLocaleString('ko-KR')}원(${personalPct}%)</strong>이 적립됩니다.
+                        커뮤니티에 참여하면 <strong>+${communityMileage.toLocaleString('ko-KR')}원(${communityPct}%)</strong>이 추가로 적립돼요.
+                    </div>
+                    ${appliedCoupon ? `
+                    <div class="coupon-applied">
+                        <span>${appliedCoupon.auto ? '🎉 사용 가능한 쿠폰이 자동으로 적용되었습니다! ' : '🎟️ '}'${WithPlus.escapeHtml(appliedCoupon.code)}' 쿠폰 적용됨 — ${WithPlus.escapeHtml(appliedCoupon.label || '')} (-${discountAmount.toLocaleString('ko-KR')}원)</span>
+                        <button type="button" id="coupon-remove-btn">해제</button>
+                    </div>` : `
+                    <div class="coupon-row">
+                        <input type="text" id="coupon-code-input" placeholder="쿠폰 코드 입력">
+                        <button type="button" id="coupon-apply-btn">적용</button>
+                    </div>
+                    <div class="coupon-msg" id="coupon-msg"></div>
+                    ${autoCouponDismissed ? `<div class="coupon-reapply-row"><button type="button" id="coupon-reapply-auto-btn">🔄 자동 쿠폰 추천 다시 받기</button></div>` : ''}`}
+                    ${mileageBalance > 0 ? `
+                    <div class="mileage-use-row">
+                        <label for="mileage-use-input">💰 보유 마일리지 ${mileageBalance.toLocaleString('ko-KR')}원 중 사용할 금액</label>
+                        <div class="mileage-use-input-row">
+                            <input type="number" id="mileage-use-input" min="0" max="${Math.min(mileageBalance, amountAfterCoupon)}" step="1" value="${mileageToUse || ''}" placeholder="0">
+                            <button type="button" id="mileage-use-all-btn">전액사용</button>
+                        </div>
+                        <div class="mileage-use-hint">결제 금액(${amountAfterCoupon.toLocaleString('ko-KR')}원)과 보유 잔액 중 더 적은 금액까지만 사용할 수 있어요.</div>
+                    </div>` : ''}
+                    ${communities.length > 0 ? `
+                    <div class="community-select">
+                        <label for="community-id">커뮤니티 선택 (선택 사항 — 참여 시 마일리지 ${communityPct}% 추가 적립)</label>
+                        <select id="community-id">
+                            <option value="">선택 안 함</option>
+                            ${communityOptionsHtml}
+                        </select>
+                    </div>` : ''}
+                    ${savedAddresses.length > 0 ? `
+                    <div class="field">
+                        <label for="saved-address-select">저장된 배송지 선택</label>
+                        <select id="saved-address-select">
+                            ${savedAddresses.map(a => `<option value="${a.id}">${WithPlus.escapeHtml(a.label || '배송지')} - ${WithPlus.escapeHtml(a.receiver_name)} (${WithPlus.escapeHtml(a.address)})${a.is_default ? ' [기본]' : ''}</option>`).join('')}
+                            <option value="__new__">+ 새 배송지 직접 입력</option>
+                        </select>
+                    </div>` : ''}
+                    <div class="field">
+                        <label for="receiver-name">받는 분 성함</label>
+                        <input type="text" id="receiver-name" placeholder="홍길동">
+                    </div>
+                    <div class="field">
+                        <label for="receiver-phone">연락처</label>
+                        <input type="tel" id="receiver-phone" placeholder="010-0000-0000">
+                    </div>
+                    <div class="field">
+                        <label for="receiver-address">배송지 주소</label>
+                        <div style="display:flex; gap:8px;">
+                            <input type="text" id="receiver-postal" placeholder="우편번호" readonly style="width:120px; background:#FAFAFA;">
+                            <button type="button" id="address-search-btn" style="white-space:nowrap; padding:0 14px; border:1px solid var(--border-color); border-radius:8px; background:white; cursor:pointer;">주소 검색</button>
+                        </div>
+                        <input type="text" id="receiver-address" placeholder="주소 검색을 눌러주세요" readonly style="margin-top:8px; background:#FAFAFA;">
+                        <input type="text" id="receiver-address-detail" placeholder="상세주소 (동/호수 등)" style="margin-top:8px;">
+                    </div>
+                    <div class="summary-box">
+                        <div class="summary-row"><span>상품 합계</span><span>${WithPlus.formatPrice(subtotal)}</span></div>
+                        <div class="summary-row"><span>배송비${shippingCalc.surchargeLabel ? ` (${WithPlus.escapeHtml(shippingCalc.surchargeLabel)} 추가배송비 포함)` : ''}</span><span>${shippingFee === 0 ? '무료' : WithPlus.formatPrice(shippingFee)}</span></div>
+                        ${shippingFee > 0 && !shippingCalc.surchargeLabel && shippingPolicy.free_shipping_threshold > subtotal ? `<div class="summary-row" style="font-size:0.82em; color:#757575;"><span colspan="2">${WithPlus.formatPrice(shippingPolicy.free_shipping_threshold - subtotal)} 더 담으면 무료배송</span></div>` : ''}
+                        ${discountAmount > 0 ? `<div class="summary-row discount"><span>쿠폰 할인</span><span>-${WithPlus.formatPrice(discountAmount)}</span></div>` : ''}
+                        ${mileageToUse > 0 ? `<div class="summary-row discount"><span>마일리지 사용</span><span>-${WithPlus.formatPrice(mileageToUse)}</span></div>` : ''}
+                        <div class="summary-row total"><span>총 결제금액</span><span>${WithPlus.formatPrice(total)}</span></div>
+                    </div>
+                    <button class="checkout-btn" id="checkout-btn">주문하기</button>
+                    <div class="msg" id="checkout-msg"></div>
+                    <p style="text-align:center; font-size:0.8em; color:#757575; margin-top:14px;">💳 실제 결제(카드/간편결제) 연동은 준비 중입니다. 지금은 주문 접수와 마일리지 적립까지 정상 처리됩니다.</p>
+                `;
+
+                // 회원이 가입한 커뮤니티를 장바구니에서 자동으로 선택해준다.
+                // 1순위: 커뮤니티(교회) 랜딩페이지(/c/:slug)를 통해 들어온 경우 그 커뮤니티(가입되어 있을 때만)
+                // 2순위: 가입한 커뮤니티가 정확히 하나뿐이면 그 커뮤니티
+                // (직접 다른 커뮤니티를 선택하면 그 선택이 우선됨 - 강제하지 않음)
+                const communitySelectEl = document.getElementById('community-id');
+                if (communitySelectEl) {
+                    const preferredSlug = localStorage.getItem('withplus_preferred_community_slug');
+                    const preferred = preferredSlug ? communities.find(c => c.slug === preferredSlug) : null;
+                    if (preferred) {
+                        communitySelectEl.value = preferred.id;
+                    } else if (communities.length === 1) {
+                        communitySelectEl.value = communities[0].id;
+                    }
+                }
+
+                // 저장된 배송지가 있으면 기본 배송지(없으면 첫 번째)를 자동으로 선택/입력해준다 - 매번 다시 입력할 필요 없이 바로 주문 가능
+                function fillAddressFields(addr) {
+                    document.getElementById('receiver-name').value = addr.receiver_name;
+                    document.getElementById('receiver-phone').value = addr.receiver_phone;
+                    document.getElementById('receiver-postal').value = addr.postal_code || '';
+                    document.getElementById('receiver-address').value = addr.address;
+                    document.getElementById('receiver-address-detail').value = addr.address_detail || '';
+                    // 우편번호가 바뀌면 배송비(도서산간 추가금액)가 달라질 수 있으므로 반영해 다시 렌더링한다
+                    const newPostal = addr.postal_code || '';
+                    if (newPostal !== lastKnownPostal) { lastKnownPostal = newPostal; renderCart(); }
+                }
+                function clearAddressFields() {
+                    document.getElementById('receiver-name').value = '';
+                    document.getElementById('receiver-phone').value = '';
+                    document.getElementById('receiver-postal').value = '';
+                    document.getElementById('receiver-address').value = '';
+                    document.getElementById('receiver-address-detail').value = '';
+                }
+
+                const savedAddressSelect = document.getElementById('saved-address-select');
+                if (savedAddressSelect) {
+                    const defaultAddr = savedAddresses.find(a => a.is_default) || savedAddresses[0];
+                    if (defaultAddr) {
+                        savedAddressSelect.value = defaultAddr.id;
+                        fillAddressFields(defaultAddr);
+                    }
+                    savedAddressSelect.addEventListener('change', () => {
+                        if (savedAddressSelect.value === '__new__') {
+                            clearAddressFields();
+                            return;
+                        }
+                        const chosen = savedAddresses.find(a => String(a.id) === savedAddressSelect.value);
+                        if (chosen) fillAddressFields(chosen);
+                    });
+                }
+
+                const addressSearchBtn = document.getElementById('address-search-btn');
+                if (addressSearchBtn) {
+                    addressSearchBtn.addEventListener('click', () => {
+                        if (typeof daum === 'undefined' || !daum.Postcode) return;
+                        new daum.Postcode({
+                            oncomplete: function (data) {
+                                document.getElementById('receiver-postal').value = data.zonecode;
+                                document.getElementById('receiver-address').value = data.roadAddress || data.jibunAddress;
+                                document.getElementById('receiver-address-detail').focus();
+                                if (savedAddressSelect) savedAddressSelect.value = '__new__';
+                                // 우편번호가 바뀌었으므로 배송비(도서산간 추가금액)를 다시 계산해 반영한다
+                                if (data.zonecode !== lastKnownPostal) { lastKnownPostal = data.zonecode; renderCart(); }
+                            }
+                        }).open();
+                    });
+                }
+
+                // 수량 조절 / 삭제 (옵션이 선택된 항목은 상품ID+옵션ID로 서로 다른 줄을 구분한다)
+                area.querySelectorAll('.cart-item').forEach(row => {
+                    const pid = row.getAttribute('data-product-id');
+                    const vid = row.getAttribute('data-variant-id') || null;
+                    const findItem = () => WithPlus.getCart().find(i => String(i.product_id) === String(pid) && (i.variant_id || null) === vid);
+                    row.querySelector('.qty-minus').addEventListener('click', () => {
+                        const item = findItem();
+                        const newQty = Math.max(1, (item ? item.quantity : 1) - 1);
+                        WithPlus.setCartQty(pid, newQty, vid);
+                        renderCart();
+                    });
+                    row.querySelector('.qty-plus').addEventListener('click', () => {
+                        const item = findItem();
+                        const newQty = (item ? item.quantity : 1) + 1;
+                        WithPlus.setCartQty(pid, newQty, vid);
+                        renderCart();
+                    });
+                    row.querySelector('.remove-btn').addEventListener('click', () => {
+                        WithPlus.removeFromCart(pid, vid);
+                        renderCart();
+                    });
+                });
+
+                // 쿠폰 적용
+                const couponApplyBtn = document.getElementById('coupon-apply-btn');
+                if (couponApplyBtn) {
+                    couponApplyBtn.addEventListener('click', async () => {
+                        const input = document.getElementById('coupon-code-input');
+                        const msg = document.getElementById('coupon-msg');
+                        const code = input.value.trim();
+                        msg.style.display = 'none';
+                        if (!code) return;
+
+                        const session = await WithPlus.getSession();
+                        if (!session) {
+                            msg.textContent = '로그인 후 쿠폰을 적용할 수 있습니다.';
+                            msg.style.display = 'block';
+                            return;
+                        }
+
+                        couponApplyBtn.disabled = true;
+                        couponApplyBtn.textContent = '확인 중...';
+                        try {
+                            const token = await WithPlus.getAccessToken();
+                            const res = await fetch('/api/coupons/validate', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                                body: JSON.stringify({ code, order_amount: preDiscountTotal })
+                            });
+                            const json = await res.json();
+                            if (!res.ok || !json.success) throw new Error(json.message || '쿠폰을 적용할 수 없습니다');
+                            appliedCoupon = { code: json.data.code, label: json.data.label, discountAmount: json.data.discountAmount, auto: false };
+                            renderCart();
+                        } catch (err) {
+                            msg.textContent = err.message;
+                            msg.style.display = 'block';
+                            couponApplyBtn.disabled = false;
+                            couponApplyBtn.textContent = '적용';
+                        }
+                    });
+                }
+                const couponRemoveBtn = document.getElementById('coupon-remove-btn');
+                if (couponRemoveBtn) {
+                    couponRemoveBtn.addEventListener('click', () => {
+                        appliedCoupon = null;
+                        autoCouponDismissed = true; // 자동 적용을 명시적으로 해제했으므로, 다시 열어도 자동으로 재적용하지 않음 (단, 아래 "다시 받기" 버튼으로 언제든 재개 가능)
+                        renderCart();
+                    });
+                }
+                const couponReapplyAutoBtn = document.getElementById('coupon-reapply-auto-btn');
+                if (couponReapplyAutoBtn) {
+                    couponReapplyAutoBtn.addEventListener('click', () => {
+                        autoCouponDismissed = false; // 자동 쿠폰 추천을 다시 켠다 - renderCart()가 다시 사용 가능한 쿠폰을 조회해 자동 적용한다
+                        renderCart();
+                    });
+                }
+
+                // 마일리지 사용 입력 - 실제 검증(잔액/결제금액 초과 여부)은 주문 생성 시 서버가 최종적으로 다시 확인한다
+                const mileageUseInput = document.getElementById('mileage-use-input');
+                if (mileageUseInput) {
+                    mileageUseInput.addEventListener('change', () => {
+                        const val = Math.floor(Number(mileageUseInput.value) || 0);
+                        mileageToUse = Math.max(0, val);
+                        renderCart();
+                    });
+                }
+                const mileageUseAllBtn = document.getElementById('mileage-use-all-btn');
+                if (mileageUseAllBtn) {
+                    mileageUseAllBtn.addEventListener('click', () => {
+                        mileageToUse = Math.min(mileageBalance, amountAfterCoupon);
+                        renderCart();
+                    });
+                }
+
+                // 주문하기
+                document.getElementById('checkout-btn').addEventListener('click', async function () {
+                    const btn = this;
+                    const msg = document.getElementById('checkout-msg');
+                    msg.className = 'msg';
+
+                    const session = await WithPlus.getSession();
+                    if (!session) {
+                        msg.textContent = '로그인이 필요합니다. 로그인 페이지로 이동합니다...';
+                        msg.className = 'msg error';
+                        setTimeout(() => { location.href = '/login'; }, 900);
+                        return;
+                    }
+
+                    const receiverName = document.getElementById('receiver-name').value.trim();
+                    const receiverPhone = document.getElementById('receiver-phone').value.trim();
+                    const receiverAddress = document.getElementById('receiver-address').value.trim();
+                    const receiverAddressDetail = document.getElementById('receiver-address-detail').value.trim();
+                    const receiverPostal = document.getElementById('receiver-postal').value.trim();
+                    if (!receiverName || !receiverPhone || !receiverAddress) {
+                        msg.textContent = '받는 분 성함, 연락처, 배송지 주소를 모두 입력해주세요. (주소는 "주소 검색" 버튼으로 선택해주세요)';
+                        msg.className = 'msg error';
+                        return;
+                    }
+                    const fullAddress = receiverAddressDetail ? receiverAddress + ' ' + receiverAddressDetail : receiverAddress;
+
+                    const communitySelect = document.getElementById('community-id');
+                    const communityId = communitySelect ? (communitySelect.value || null) : null;
+
+                    btn.disabled = true;
+                    btn.textContent = '주문 처리 중...';
+
+                    try {
+                        const token = await WithPlus.getAccessToken();
+                        const res = await fetch('/api/orders', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                            body: JSON.stringify({
+                                items: lineItems.map(li => ({
+                                    product_id: li.product.id,
+                                    variant_id: li.variant ? li.variant.id : undefined,
+                                    name: li.product.name + (li.variant ? ` (${li.variant.name})` : ''),
+                                    price: li.price,
+                                    quantity: li.quantity
+                                })),
+                                community_id: communityId,
+                                shipping_address: { name: receiverName, phone: receiverPhone, address: fullAddress, postal_code: receiverPostal || undefined },
+                                payment_method: 'pending',
+                                coupon_code: appliedCoupon ? appliedCoupon.code : undefined,
+                                use_mileage: mileageToUse > 0 ? mileageToUse : undefined
+                            })
+                        });
+                        const json = await res.json();
+
+                        if (!res.ok || !json.success) {
+                            throw new Error(json.message || '주문 처리에 실패했습니다');
+                        }
+
+                        WithPlus.clearCart();
+                        appliedCoupon = null;
+                        mileageToUse = 0;
+                        document.getElementById('step2').classList.add('active');
+                        document.getElementById('step3').classList.add('active');
+
+                        // 결제(PG) 연동이 하나라도 켜져있으면 실제 결제 단계로, 전부 꺼져있으면 기존처럼 주문 접수만으로 완료 처리
+                        const pgConfigs = { toss: { enabled: false }, kakaopay: { enabled: false }, naverpay: { enabled: false } };
+                        try {
+                            const [tossRes, kakaoRes, naverRes] = await Promise.all([
+                                fetch('/api/payments/toss/config'), fetch('/api/payments/kakaopay/config'), fetch('/api/payments/naverpay/config')
+                            ]);
+                            const [tossJson, kakaoJson, naverJson] = await Promise.all([tossRes.json(), kakaoRes.json(), naverRes.json()]);
+                            if (tossJson.success) pgConfigs.toss = tossJson.data;
+                            if (kakaoJson.success) pgConfigs.kakaopay = kakaoJson.data;
+                            if (naverJson.success) pgConfigs.naverpay = naverJson.data;
+                        } catch (e) { /* 조회 실패 시 결제 단계 없이 기존 흐름으로 진행 */ }
+
+                        if (pgConfigs.toss.enabled || pgConfigs.kakaopay.enabled || pgConfigs.naverpay.enabled) {
+                            const sessionInfo = await WithPlus.getSession();
+                            await renderPaymentStep(json.data, json.mileage, pgConfigs, {
+                                userId: sessionInfo?.user?.id,
+                                email: sessionInfo?.user?.email,
+                                name: receiverName,
+                                phone: receiverPhone
+                            });
+                        } else {
+                            renderOrderComplete(json.data, json.mileage);
+                        }
+                    } catch (err) {
+                        msg.textContent = '주문 처리 중 오류가 발생했습니다: ' + err.message;
+                        msg.className = 'msg error';
+                        btn.disabled = false;
+                        btn.textContent = '주문하기';
+                    }
+                });
+            }
+
+            renderCart();
+        })();
+    </script>
+</body>
+</html>

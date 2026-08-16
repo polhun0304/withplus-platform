@@ -1,0 +1,1113 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>마이페이지 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B; --primary-dark: #B0154F;
+            --bg-white: #FFFFFF; --bg-light: #F5F5F5;
+            --text-dark: #333333; --text-gray: #666666;
+            --border-color: #E0E0E0; --success: #2E7D32;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; background: var(--bg-white); }
+        .header { background: var(--bg-white); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-main { max-width: 1000px; margin: 0 auto; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; }
+        .logo span { font-size: 0.7em; color: var(--text-gray); display: block; font-weight: normal; }
+        .icon-button { background: none; border: none; cursor: pointer; font-size: 1.3em; color: var(--text-dark); position: relative; text-decoration: none; display: inline-block; }
+        .cart-badge { position: absolute; top: -8px; right: -8px; background: var(--primary-color); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: bold; }
+
+        .wrap { max-width: 1000px; margin: 30px auto 80px; padding: 0 20px; }
+        h1.page-title { font-size: 1.5em; margin-bottom: 20px; }
+
+        .profile-box { display: flex; justify-content: space-between; align-items: center; background: var(--bg-light); border-radius: 12px; padding: 20px 24px; margin-bottom: 30px; }
+        .profile-box .email { font-weight: 600; }
+        .profile-box .logout-btn { background: none; border: 1px solid var(--border-color); padding: 8px 16px; border-radius: 20px; cursor: pointer; font-size: 0.85em; color: var(--text-gray); }
+        .profile-box .logout-btn:hover { border-color: var(--primary-color); color: var(--primary-color); }
+
+        .grade-box { background: linear-gradient(135deg, #FFF8E1, #FFF3E0); border: 1px solid #FFE0B2; border-radius: 12px; padding: 16px 20px; margin-bottom: 20px; }
+        .grade-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; flex-wrap: wrap; gap: 8px; }
+        .grade-badge { font-weight: 700; font-size: 1.05em; color: #E65100; }
+        .grade-spent { font-size: 0.85em; color: var(--text-gray); }
+        .grade-benefit { font-size: 0.88em; margin-bottom: 4px; }
+        .grade-next { font-size: 0.82em; color: var(--text-gray); }
+        .mileage-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 30px; }
+        .mileage-card { background: linear-gradient(135deg, #FFF0F6, #FFE5E5); border-radius: 12px; padding: 20px; text-align: center; }
+        .mileage-card.highlight { background: linear-gradient(135deg, #FFE0EC, #FFD1DC); box-shadow: 0 2px 8px rgba(233,30,99,0.15); }
+        .mileage-card .label { font-size: 0.85em; color: var(--text-gray); margin-bottom: 6px; }
+        .mileage-card .value { font-size: 1.3em; font-weight: bold; color: var(--primary-color); }
+
+        h2.section-title { font-size: 1.2em; margin: 30px 0 16px; }
+
+        .order-card { border: 1px solid var(--border-color); border-radius: 12px; padding: 18px 20px; margin-bottom: 14px; }
+        .order-card .top-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 0.85em; color: var(--text-gray); }
+        .order-status { padding: 4px 12px; border-radius: 12px; font-size: 0.8em; font-weight: 600; }
+        .order-status.pending { background: #FFF3E0; color: #E65100; }
+        .order-status.paid, .order-status.delivered { background: #E8F5E9; color: #2E7D32; }
+        .order-status.processing, .order-status.shipped { background: #E3F2FD; color: #1565C0; }
+        .order-status.cancelled, .order-status.refunded { background: #EEEEEE; color: #757575; }
+        .order-items { font-size: 0.95em; margin-bottom: 10px; }
+        .order-bottom { display: flex; justify-content: space-between; align-items: center; }
+        .order-total { font-weight: bold; }
+        .order-mileage { font-size: 0.85em; color: var(--primary-color); }
+
+        .state-box { text-align: center; padding: 80px 20px; color: var(--text-gray); }
+        .state-box .emoji { font-size: 3em; margin-bottom: 16px; }
+        .state-box a { display: inline-block; margin-top: 20px; padding: 10px 24px; background: var(--primary-color); color: white; text-decoration: none; border-radius: 24px; font-weight: 600; }
+        .state-box.small { padding: 30px 20px; }
+
+        .wishlist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 14px; margin-bottom: 30px; }
+        .wishlist-card { border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; position: relative; text-decoration: none; color: var(--text-dark); display: block; background: white; }
+        .wishlist-card .thumb { width: 100%; aspect-ratio: 1/1; display: flex; align-items: center; justify-content: center; font-size: 2.4em; background: var(--bg-light); background-size: cover; background-position: center; }
+        .wishlist-card .info { padding: 10px 12px; }
+        .wishlist-card .name { font-size: 0.85em; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .wishlist-card .price { font-size: 0.9em; font-weight: bold; color: var(--primary-color); }
+        .wishlist-remove-btn { position: absolute; top: 8px; right: 8px; background: rgba(255,255,255,0.92); border: none; border-radius: 50%; width: 26px; height: 26px; cursor: pointer; font-size: 0.9em; line-height: 1; }
+
+        .tracking-info { font-size: 0.85em; color: var(--text-gray); margin-bottom: 10px; background: var(--bg-light); padding: 8px 12px; border-radius: 8px; }
+        .order-actions { margin-top: 10px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        .return-btn { background: none; border: 1px solid var(--border-color); padding: 6px 14px; border-radius: 16px; cursor: pointer; font-size: 0.82em; color: var(--text-gray); }
+        .return-btn:hover { border-color: var(--primary-color); color: var(--primary-color); }
+        .return-status-badge { font-size: 0.8em; padding: 4px 12px; border-radius: 12px; background: #FFF3E0; color: #E65100; }
+        .return-status-badge.approved { background: #E3F2FD; color: #1565C0; }
+        .return-status-badge.rejected { background: #FDECEA; color: #C62828; }
+        .return-status-badge.completed { background: #EEEEEE; color: #757575; }
+
+        .notification-section-title { display: flex; justify-content: space-between; align-items: center; }
+        .notification-mark-all-btn { background: none; border: none; color: var(--primary-color); font-size: 0.85em; cursor: pointer; text-decoration: underline; }
+        .notification-list { margin-bottom: 20px; }
+        .notification-item { border: 1px solid var(--border-color); border-radius: 10px; padding: 12px 16px; margin-bottom: 8px; background: white; }
+        .notification-item.unread { background: #FFF8FA; border-color: #FBD4E0; }
+        .notification-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+        .notification-title { font-weight: 600; font-size: 0.92em; }
+        .notification-time { font-size: 0.78em; color: var(--text-gray); }
+        .notification-msg { font-size: 0.88em; color: var(--text-dark); }
+        .notification-link { font-size: 0.82em; color: var(--primary-color); text-decoration: none; display: inline-block; margin-top: 4px; }
+
+        .restock-subs-box { background: var(--bg-light); border-radius: 12px; padding: 16px 20px; margin-bottom: 20px; }
+        .restock-subs-title { font-weight: 600; font-size: 0.9em; margin-bottom: 10px; }
+        .restock-sub-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 0.88em; }
+        .restock-sub-item a { color: var(--text-dark); text-decoration: none; }
+        .restock-sub-cancel-btn { background: none; border: 1px solid var(--border-color); border-radius: 14px; padding: 4px 10px; font-size: 0.78em; color: var(--text-gray); cursor: pointer; }
+
+        .promo-widgets-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
+        .attendance-box, .serial-coupon-box { background: var(--bg-light); border-radius: 12px; padding: 16px 20px; }
+        .attendance-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+        .attendance-title, .serial-coupon-title { font-weight: 600; font-size: 0.9em; }
+        .attendance-streak { font-size: 0.85em; color: var(--primary-color); font-weight: 700; }
+        .attendance-desc { font-size: 0.78em; color: var(--text-gray); line-height: 1.5; margin-bottom: 10px; }
+        .attendance-checkin-btn { width: 100%; padding: 10px; background: var(--primary-color); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.88em; }
+        .attendance-checkin-btn:disabled { background: #ccc; cursor: not-allowed; }
+        .attendance-msg, .serial-coupon-msg { font-size: 0.78em; margin-top: 6px; min-height: 1em; }
+        .attendance-msg.success, .serial-coupon-msg.success { color: var(--success); }
+        .attendance-msg.error, .serial-coupon-msg.error { color: #C62828; }
+        .serial-coupon-form { display: flex; gap: 8px; margin-top: 10px; }
+        .serial-coupon-form input { flex: 1; padding: 9px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.85em; }
+        .serial-coupon-form button { padding: 9px 16px; background: var(--primary-color); color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.85em; }
+        .referral-share-btn { width: 100%; margin-top: 8px; padding: 9px; background: #FEE500; color: #191919; border: none; border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.85em; }
+        .referral-list { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border-color); max-height: 160px; overflow-y: auto; }
+        .referral-list-item { display: flex; justify-content: space-between; align-items: center; padding: 6px 0; font-size: 0.8em; }
+        .referral-list-name { color: var(--text-dark); }
+        .referral-list-status { font-size: 0.92em; color: var(--text-gray); }
+        .referral-list-status.rewarded { color: var(--success); font-weight: 600; }
+        .referral-list-more { font-size: 0.76em; color: var(--text-gray); text-align: center; padding-top: 4px; }
+        @media (max-width: 768px) {
+            .promo-widgets-row { grid-template-columns: 1fr; }
+        }
+
+        .subscription-card { background: var(--bg-light); border-radius: 12px; padding: 16px 20px; margin-bottom: 12px; }
+        .subscription-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 6px; }
+        .subscription-name { font-weight: 600; font-size: 0.92em; }
+        .subscription-name a { color: var(--text-dark); text-decoration: none; }
+        .subscription-status-badge { font-size: 0.72em; padding: 3px 9px; border-radius: 10px; font-weight: 600; white-space: nowrap; }
+        .subscription-status-badge.active { background: #E8F5E9; color: #2E7D32; }
+        .subscription-status-badge.paused { background: #FFF8E1; color: #F57F17; }
+        .subscription-status-badge.cancelled { background: #EEEEEE; color: #757575; }
+        .subscription-meta { font-size: 0.82em; color: var(--text-gray); line-height: 1.7; }
+        .subscription-actions { display: flex; gap: 8px; margin-top: 10px; }
+        .subscription-actions button { background: white; border: 1px solid var(--border-color); border-radius: 14px; padding: 5px 12px; font-size: 0.78em; color: var(--text-gray); cursor: pointer; }
+        .subscription-actions button.sub-cancel-btn { color: #C62828; border-color: #F5C6C6; }
+        .subscription-msg { font-size: 0.78em; margin-top: 6px; }
+        .subscription-msg.error { color: #C62828; }
+
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 1000; padding: 20px; }
+        .modal-overlay.open { display: flex; }
+        .modal-box { background: white; border-radius: 16px; padding: 28px 24px; max-width: 420px; width: 100%; }
+        .modal-box h3 { margin-bottom: 16px; font-size: 1.15em; }
+        .modal-box .field { margin-bottom: 14px; }
+        .modal-box label { display: block; font-size: 0.85em; color: var(--text-gray); margin-bottom: 6px; }
+        .modal-box select, .modal-box textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95em; font-family: inherit; }
+        .modal-box textarea { min-height: 80px; resize: vertical; }
+        .modal-actions { display: flex; gap: 10px; margin-top: 18px; }
+        .modal-actions button { flex: 1; padding: 12px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; }
+        .modal-cancel-btn { background: var(--bg-light); color: var(--text-gray); }
+        .modal-submit-btn { background: var(--primary-color); color: white; }
+        .modal-submit-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .modal-msg { margin-top: 10px; font-size: 0.85em; color: #C62828; display: none; }
+
+        .footer { background: var(--text-dark); color: rgba(255,255,255,0.7); padding: 30px 20px; text-align: center; font-size: 0.85em; margin-top: 40px; }
+        .footer a { color: #FF7FA8; text-decoration: underline; }
+
+        .address-list { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+        .address-card { border: 1px solid var(--border-color); border-radius: 12px; padding: 16px 20px; }
+        .address-card .top-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+        .address-card .label { font-weight: 600; }
+        .address-default-badge { font-size: 0.75em; background: var(--primary-color); color: white; border-radius: 10px; padding: 2px 10px; }
+        .address-card .receiver { font-size: 0.9em; color: var(--text-gray); margin-bottom: 4px; }
+        .address-card .addr-text { font-size: 0.92em; margin-bottom: 10px; }
+        .address-card .addr-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+        .address-card .addr-actions button { background: none; border: 1px solid var(--border-color); padding: 5px 12px; border-radius: 14px; cursor: pointer; font-size: 0.8em; color: var(--text-gray); }
+        .address-card .addr-actions button:hover { border-color: var(--primary-color); color: var(--primary-color); }
+        .add-address-btn { display: inline-block; padding: 10px 18px; background: white; border: 1px dashed var(--primary-color); color: var(--primary-color); border-radius: 8px; cursor: pointer; font-weight: 600; font-size: 0.9em; margin-bottom: 30px; }
+        .modal-box .postal-row { display: flex; gap: 8px; }
+        .modal-box .postal-row input { flex: 1; }
+        .modal-box .postal-row button { white-space: nowrap; padding: 0 14px; border: 1px solid var(--border-color); border-radius: 8px; background: white; cursor: pointer; font-size: 0.85em; }
+        .modal-box .checkbox-row { display: flex; align-items: center; gap: 8px; font-size: 0.88em; color: var(--text-gray); margin-top: 4px; }
+
+        @media (max-width: 600px) {
+            .mileage-summary { grid-template-columns: 1fr; }
+        }
+
+        /* ===== 마이페이지 "탭형" 디자인 템플릿 (관리자 → 디자인 부품 갤러리에서 선택 가능) =====
+           - 배송지/찜한상품/주문내역을 위→아래로 다 늘어놓는 대신 탭으로 전환해서 보여준다.
+             (상단의 프로필/등급/마일리지 요약은 항상 어디서든 보이는 정보라 탭 밖에 그대로 둔다) */
+        .mypage-tabs { display: flex; gap: 6px; border-bottom: 2px solid var(--border-color); margin-bottom: 20px; }
+        .mypage-tab-btn { background: none; border: none; padding: 12px 18px; font-size: 0.98em; font-weight: 600; color: var(--text-gray); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; }
+        .mypage-tab-btn.active { color: var(--primary-color); border-bottom-color: var(--primary-color); }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-main">
+            <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+            <div style="display:flex; gap:20px; align-items:center;">
+                <a class="icon-button" id="account-link" href="/login">👤</a>
+                <a class="icon-button" href="/cart">🛒<span class="cart-badge">0</span></a>
+            </div>
+        </div>
+    </header>
+
+    <div class="wrap">
+        <h1 class="page-title">🙋 마이페이지</h1>
+        <div id="mypage-area">
+            <div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중입니다...</h3></div>
+        </div>
+    </div>
+
+    <footer class="footer">
+        <p>&copy; 2024-2026 WITH+ Co., Ltd. All Rights Reserved. | <a href="/">홈으로</a></p>
+    </footer>
+
+    <div class="modal-overlay" id="address-modal-overlay">
+        <div class="modal-box">
+            <h3 id="address-modal-title">🚚 배송지 추가</h3>
+            <form id="address-form">
+                <div class="field">
+                    <label for="addr-label">배송지 이름</label>
+                    <input type="text" id="addr-label" placeholder="예: 집, 회사" style="width:100%; padding:10px 12px; border:1px solid var(--border-color); border-radius:8px; font-size:0.95em;">
+                </div>
+                <div class="field">
+                    <label for="addr-receiver-name">받는 분 성함</label>
+                    <input type="text" id="addr-receiver-name" required style="width:100%; padding:10px 12px; border:1px solid var(--border-color); border-radius:8px; font-size:0.95em;">
+                </div>
+                <div class="field">
+                    <label for="addr-receiver-phone">연락처</label>
+                    <input type="tel" id="addr-receiver-phone" required placeholder="010-0000-0000" style="width:100%; padding:10px 12px; border:1px solid var(--border-color); border-radius:8px; font-size:0.95em;">
+                </div>
+                <div class="field">
+                    <label for="addr-postal">우편번호</label>
+                    <div class="postal-row">
+                        <input type="text" id="addr-postal" readonly style="padding:10px 12px; border:1px solid var(--border-color); border-radius:8px; font-size:0.95em; background:#FAFAFA;">
+                        <button type="button" id="addr-search-btn">주소 검색</button>
+                    </div>
+                </div>
+                <div class="field">
+                    <label for="addr-address">주소</label>
+                    <input type="text" id="addr-address" readonly required placeholder="주소 검색을 눌러주세요" style="width:100%; padding:10px 12px; border:1px solid var(--border-color); border-radius:8px; font-size:0.95em; background:#FAFAFA;">
+                </div>
+                <div class="field">
+                    <label for="addr-address-detail">상세주소</label>
+                    <input type="text" id="addr-address-detail" placeholder="동/호수 등" style="width:100%; padding:10px 12px; border:1px solid var(--border-color); border-radius:8px; font-size:0.95em;">
+                </div>
+                <div class="checkbox-row">
+                    <input type="checkbox" id="addr-is-default">
+                    <label for="addr-is-default" style="margin:0;">기본 배송지로 설정</label>
+                </div>
+                <div class="modal-msg" id="address-modal-msg"></div>
+                <div class="modal-actions">
+                    <button type="button" class="modal-cancel-btn" id="address-cancel-btn">취소</button>
+                    <button type="submit" class="modal-submit-btn" id="address-submit-btn">저장</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="return-modal-overlay">
+        <div class="modal-box">
+            <h3 id="return-modal-title">↩️ 반품/교환 신청</h3>
+            <form id="return-form">
+                <div class="field">
+                    <label for="return-type">신청 유형</label>
+                    <select id="return-type" required>
+                        <option value="return">반품</option>
+                        <option value="exchange">교환</option>
+                    </select>
+                </div>
+                <div class="field">
+                    <label for="return-reason">사유</label>
+                    <textarea id="return-reason" required placeholder="반품/교환 사유를 입력해주세요"></textarea>
+                </div>
+                <div class="modal-msg" id="return-modal-msg"></div>
+                <div class="modal-actions">
+                    <button type="button" class="modal-cancel-btn" id="return-cancel-btn">취소</button>
+                    <button type="submit" class="modal-submit-btn" id="return-submit-btn">신청하기</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="withdraw-modal-overlay">
+        <div class="modal-box">
+            <h3>😢 회원탈퇴</h3>
+            <p style="font-size:0.85em; color:var(--text-gray); line-height:1.6; margin-bottom:16px;">
+                탈퇴하시면 배송지·찜한 상품·재입고 알림 등 개인정보는 즉시 삭제되고, 계정으로 다시 로그인할 수 없습니다.
+                단, 주문/결제 내역은 전자상거래법에 따라 5년간 보관됩니다. <strong>이 작업은 되돌릴 수 없습니다.</strong>
+            </p>
+            <form id="withdraw-form">
+                <div class="field">
+                    <label for="withdraw-reason">탈퇴 사유 (선택)</label>
+                    <textarea id="withdraw-reason" placeholder="더 나은 서비스를 위해 사유를 남겨주시면 감사하겠습니다"></textarea>
+                </div>
+                <div class="checkbox-row">
+                    <input type="checkbox" id="withdraw-confirm-check" required>
+                    <label for="withdraw-confirm-check" style="margin:0;">위 내용을 확인했으며, 탈퇴에 동의합니다</label>
+                </div>
+                <div class="modal-msg" id="withdraw-modal-msg"></div>
+                <div class="modal-actions">
+                    <button type="button" class="modal-cancel-btn" id="withdraw-cancel-btn">취소</button>
+                    <button type="submit" class="modal-submit-btn" id="withdraw-submit-btn" style="background:#C62828;">탈퇴하기</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script src="/vendor/supabase.min.js"></script>
+    <script src="/withplus-common.js"></script>
+    <script src="//t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>
+    <script>
+        (async function () {
+            WithPlus.initHeader();
+            const area = document.getElementById('mypage-area');
+
+            const session = await WithPlus.getSession();
+            if (!session) {
+                area.innerHTML = `
+                    <div class="state-box">
+                        <div class="emoji">🔒</div>
+                        <h3>로그인이 필요한 페이지입니다</h3>
+                        <a href="/login">로그인하러 가기</a>
+                    </div>`;
+                return;
+            }
+
+            const STATUS_LABEL = { pending: '주문 접수', paid: '결제 완료', processing: '상품 준비 중', shipped: '배송 중', delivered: '배송 완료', cancelled: '취소됨', refunded: '환불됨' };
+            const RETURN_TYPE_LABEL = { cancel: '취소', return: '반품', exchange: '교환' };
+            const RETURN_STATUS_LABEL = { requested: '접수됨', approved: '승인됨', rejected: '거절됨', completed: '처리 완료' };
+            const CANCELLABLE_STATUSES = ['pending', 'paid', 'processing'];
+
+            async function loadMypage() {
+                try {
+                    await Promise.all([WithPlus.refreshMileageRates(), WithPlus.refreshCategoryMap(), WithPlus.refreshPageTemplates()]);
+                    const useTabs = WithPlus.getPageTemplatesCached().mypage === 'tabs';
+                    const token = await WithPlus.getAccessToken();
+                    const authHeader = { 'Authorization': 'Bearer ' + token };
+
+                    const [ordersRes, wishlistRes, returnsRes, addressesRes, gradeRes, mileageBalanceRes, notificationsRes, restockSubsRes, attendanceRes, subscriptionsRes, referralRes, referralSettingsRes] = await Promise.all([
+                        fetch('/api/orders', { headers: authHeader }),
+                        fetch('/api/wishlist', { headers: authHeader }),
+                        fetch('/api/me/return-requests', { headers: authHeader }),
+                        fetch('/api/me/addresses', { headers: authHeader }),
+                        fetch('/api/me/grade', { headers: authHeader }),
+                        fetch('/api/me/mileage-balance', { headers: authHeader }),
+                        fetch('/api/me/notifications', { headers: authHeader }),
+                        fetch('/api/me/restock-notifications', { headers: authHeader }),
+                        fetch('/api/attendance/status', { headers: authHeader }),
+                        fetch('/api/me/subscriptions', { headers: authHeader }),
+                        fetch('/api/me/referral', { headers: authHeader }),
+                        fetch('/api/settings/referral-program')
+                    ]);
+                    const ordersJson = await ordersRes.json();
+                    if (!ordersRes.ok || !ordersJson.success) throw new Error(ordersJson.message || '주문 내역을 불러오지 못했습니다');
+
+                    const wishlistJson = await wishlistRes.json().catch(() => null);
+                    const wishlist = (wishlistRes.ok && wishlistJson && wishlistJson.success) ? wishlistJson.data : [];
+
+                    const returnsJson = await returnsRes.json().catch(() => null);
+                    const returnRequests = (returnsRes.ok && returnsJson && returnsJson.success) ? returnsJson.data : [];
+
+                    const addressesJson = await addressesRes.json().catch(() => null);
+                    const addresses = (addressesRes.ok && addressesJson && addressesJson.success) ? addressesJson.data : [];
+
+                    const gradeJson = await gradeRes.json().catch(() => null);
+                    const gradeInfo = (gradeRes.ok && gradeJson && gradeJson.success) ? gradeJson.data : null;
+
+                    const mileageBalanceJson = await mileageBalanceRes.json().catch(() => null);
+                    const mileageBalance = (mileageBalanceRes.ok && mileageBalanceJson && mileageBalanceJson.success) ? mileageBalanceJson.data.balance : 0;
+
+                    const notificationsJson = await notificationsRes.json().catch(() => null);
+                    const notifications = (notificationsRes.ok && notificationsJson && notificationsJson.success) ? notificationsJson.data : [];
+                    const unreadCount = notifications.filter(n => !n.is_read).length;
+
+                    const restockSubsJson = await restockSubsRes.json().catch(() => null);
+                    const restockSubs = (restockSubsRes.ok && restockSubsJson && restockSubsJson.success) ? restockSubsJson.data : [];
+
+                    const attendanceJson = await attendanceRes.json().catch(() => null);
+                    const attendance = (attendanceRes.ok && attendanceJson && attendanceJson.success) ? attendanceJson.data : null;
+
+                    const subscriptionsJson = await subscriptionsRes.json().catch(() => null);
+                    const subscriptions = (subscriptionsRes.ok && subscriptionsJson && subscriptionsJson.success) ? subscriptionsJson.data : [];
+
+                    const referralSettingsJson = await referralSettingsRes.json().catch(() => null);
+                    const referralEnabled = (referralSettingsRes.ok && referralSettingsJson && referralSettingsJson.success) ? !!referralSettingsJson.data.enabled : false;
+                    const referralJson = await referralRes.json().catch(() => null);
+                    const referral = (referralEnabled && referralRes.ok && referralJson && referralJson.success) ? referralJson.data : null;
+                    const referredRewardAmount = (referral && Number.isFinite(Number(referral.referred_reward))) ? Number(referral.referred_reward) : 0;
+
+                    // order_id -> 가장 최근 반품/교환 신청 1건
+                    const returnByOrder = {};
+                    returnRequests
+                        .slice()
+                        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+                        .forEach(r => { returnByOrder[r.order_id] = r; });
+
+                    const orders = ordersJson.data;
+                    const totalPersonal = orders.reduce((s, o) => s + Number(o.personal_earned_points || 0), 0);
+                    const totalCommunity = orders.reduce((s, o) => s + Number(o.community_earned_points || 0), 0);
+
+                    const ordersHtml = orders.length === 0
+                        ? `<div class="state-box"><div class="emoji">📦</div><h3>아직 주문 내역이 없습니다</h3><a href="/">쇼핑하러 가기</a></div>`
+                        : orders.map(o => {
+                            const items = Array.isArray(o.items) ? o.items : [];
+                            const itemsSummary = items.length > 0
+                                ? items.map(it => `${WithPlus.escapeHtml(it.name || '상품')} x${it.quantity}`).join(', ')
+                                : '상품 정보 없음';
+                            const status = o.status || 'pending';
+                            const statusLabel = STATUS_LABEL[status] || status;
+                            const orderMileage = Number(o.personal_earned_points || 0) + Number(o.community_earned_points || 0);
+
+                            const trackingHtml = (o.tracking_number)
+                                ? `<div class="tracking-info">🚚 ${WithPlus.escapeHtml(o.courier_name || '택배사 미지정')} · 운송장번호 ${WithPlus.escapeHtml(o.tracking_number)}${o.tracking_url ? ` · <a href="${WithPlus.escapeHtml(o.tracking_url)}" target="_blank" rel="noopener">배송조회</a>` : ''}</div>`
+                                : '';
+                            const shippingFeeHtml = Number(o.shipping_fee) > 0
+                                ? `<div class="tracking-info" style="color:#757575;">배송비 ${WithPlus.formatPrice(o.shipping_fee)}${o.shipping_surcharge_label ? ` (${WithPlus.escapeHtml(o.shipping_surcharge_label)} 추가배송비 포함)` : ''} 포함</div>`
+                                : '';
+
+                            let actionsHtml = '';
+                            if (status === 'delivered') {
+                                const existing = returnByOrder[o.id];
+                                if (existing) {
+                                    const rLabel = RETURN_STATUS_LABEL[existing.status] || existing.status;
+                                    actionsHtml = `<div class="order-actions"><span class="return-status-badge ${WithPlus.escapeHtml(existing.status)}">${WithPlus.escapeHtml(RETURN_TYPE_LABEL[existing.request_type] || existing.request_type)} 신청 · ${WithPlus.escapeHtml(rLabel)}</span></div>`;
+                                } else {
+                                    actionsHtml = `<div class="order-actions"><button class="return-btn" data-order-id="${WithPlus.escapeHtml(o.id)}" data-mode="return">↩️ 반품/교환 신청</button></div>`;
+                                }
+                            } else if (CANCELLABLE_STATUSES.includes(status)) {
+                                const existing = returnByOrder[o.id];
+                                if (existing) {
+                                    const rLabel = RETURN_STATUS_LABEL[existing.status] || existing.status;
+                                    actionsHtml = `<div class="order-actions"><span class="return-status-badge ${WithPlus.escapeHtml(existing.status)}">${WithPlus.escapeHtml(RETURN_TYPE_LABEL[existing.request_type] || existing.request_type)} 신청 · ${WithPlus.escapeHtml(rLabel)}</span></div>`;
+                                } else {
+                                    actionsHtml = `<div class="order-actions"><button class="return-btn" data-order-id="${WithPlus.escapeHtml(o.id)}" data-mode="cancel">🚫 주문취소 신청</button></div>`;
+                                }
+                            }
+
+                            return `
+                            <div class="order-card">
+                                <div class="top-row">
+                                    <span>${new Date(o.created_at).toLocaleDateString('ko-KR')} · 주문번호 ${WithPlus.escapeHtml(o.order_number)}</span>
+                                    <span class="order-status ${WithPlus.escapeHtml(status)}">${WithPlus.escapeHtml(statusLabel)}</span>
+                                </div>
+                                <div class="order-items">${itemsSummary}</div>
+                                ${trackingHtml}
+                                ${shippingFeeHtml}
+                                <div class="order-bottom">
+                                    <span class="order-total">${WithPlus.formatPrice(o.final_price)}</span>
+                                    <span class="order-mileage">💰 적립 ${orderMileage.toLocaleString('ko-KR')}원</span>
+                                </div>
+                                ${actionsHtml}
+                            </div>`;
+                        }).join('');
+
+                    const addressesHtml = (!addresses || addresses.length === 0)
+                        ? `<div class="state-box small"><div class="emoji">🚚</div><p>등록된 배송지가 없습니다</p></div>`
+                        : `<div class="address-list">${addresses.map(a => `
+                            <div class="address-card" data-address-id="${WithPlus.escapeHtml(a.id)}">
+                                <div class="top-row">
+                                    <span class="label">${WithPlus.escapeHtml(a.label || '배송지')}</span>
+                                    ${a.is_default ? '<span class="address-default-badge">기본 배송지</span>' : ''}
+                                </div>
+                                <div class="receiver">${WithPlus.escapeHtml(a.receiver_name)} · ${WithPlus.escapeHtml(a.receiver_phone)}</div>
+                                <div class="addr-text">${a.postal_code ? '[' + WithPlus.escapeHtml(a.postal_code) + '] ' : ''}${WithPlus.escapeHtml(a.address)}${a.address_detail ? ' ' + WithPlus.escapeHtml(a.address_detail) : ''}</div>
+                                <div class="addr-actions">
+                                    ${!a.is_default ? `<button type="button" class="addr-default-btn" data-id="${WithPlus.escapeHtml(a.id)}">기본으로 설정</button>` : ''}
+                                    <button type="button" class="addr-edit-btn" data-id="${WithPlus.escapeHtml(a.id)}">수정</button>
+                                    <button type="button" class="addr-delete-btn" data-id="${WithPlus.escapeHtml(a.id)}">삭제</button>
+                                </div>
+                            </div>`).join('')}</div>`;
+
+                    const notificationsHtml = notifications.length === 0
+                        ? `<div class="state-box small"><div class="emoji">🔔</div><p>알림이 없습니다</p></div>`
+                        : `<div class="notification-list">${notifications.map(n => `
+                            <div class="notification-item${n.is_read ? '' : ' unread'}" data-id="${WithPlus.escapeHtml(n.id)}">
+                                <div class="notification-top">
+                                    <span class="notification-title">${n.is_read ? '' : '🔵 '}${WithPlus.escapeHtml(n.title)}</span>
+                                    <span class="notification-time">${WithPlus.timeAgo(n.created_at)}</span>
+                                </div>
+                                <div class="notification-msg">${WithPlus.escapeHtml(n.message)}</div>
+                                ${n.link ? `<a href="${WithPlus.escapeHtml(n.link)}" class="notification-link">바로가기 →</a>` : ''}
+                            </div>`).join('')}</div>`;
+
+                    const restockSubsHtml = restockSubs.length === 0 ? '' : `
+                        <div class="restock-subs-box">
+                            <div class="restock-subs-title">🔔 재입고 알림 신청 중인 상품 (${restockSubs.length}건)</div>
+                            ${restockSubs.map(s => `
+                                <div class="restock-sub-item" data-product-id="${WithPlus.escapeHtml(s.product.id)}">
+                                    <a href="/product/${WithPlus.escapeHtml(s.product.id)}">${WithPlus.escapeHtml(s.product.name)}</a>
+                                    <button type="button" class="restock-sub-cancel-btn" data-product-id="${WithPlus.escapeHtml(s.product.id)}">신청 취소</button>
+                                </div>`).join('')}
+                        </div>`;
+
+                    // 🔄 정기배송 신청 목록 - 신청/일정 관리만 지원(자동결제·자동주문생성은 없음)
+                    const SUB_CYCLE_LABEL_MY = { 7: '1주마다', 14: '2주마다', 30: '4주마다', 60: '8주마다' };
+                    const SUB_STATUS_LABEL_MY = { active: '진행중', paused: '일시중지', cancelled: '취소됨' };
+                    const activeSubscriptions = subscriptions.filter(s => s.status !== 'cancelled');
+                    const subscriptionsHtml = activeSubscriptions.length === 0 ? '' : `
+                        <h2 class="section-title">🔄 정기배송 (${activeSubscriptions.length}건)</h2>
+                        ${activeSubscriptions.map(s => `
+                            <div class="subscription-card" data-sub-id="${WithPlus.escapeHtml(s.id)}">
+                                <div class="subscription-top">
+                                    <span class="subscription-name">${s.product ? `<a href="/product/${WithPlus.escapeHtml(s.product.id)}">${WithPlus.escapeHtml(s.product.name)}</a>` : '(삭제된 상품)'}</span>
+                                    <span class="subscription-status-badge ${s.status}">${SUB_STATUS_LABEL_MY[s.status] || s.status}</span>
+                                </div>
+                                <div class="subscription-meta">
+                                    수량 ${s.quantity}개 · ${SUB_CYCLE_LABEL_MY[s.cycle_days] || s.cycle_days + '일마다'}<br>
+                                    다음 배송 예정일: <strong>${s.next_delivery_date}</strong><br>
+                                    배송지: ${WithPlus.escapeHtml(s.recipient_name)} · ${WithPlus.escapeHtml(s.address)}${s.address_detail ? ' ' + WithPlus.escapeHtml(s.address_detail) : ''}
+                                </div>
+                                <div class="subscription-actions">
+                                    ${s.status === 'active' ? `<button type="button" class="sub-pause-btn" data-id="${WithPlus.escapeHtml(s.id)}">일시중지</button>` : ''}
+                                    ${s.status === 'paused' ? `<button type="button" class="sub-resume-btn" data-id="${WithPlus.escapeHtml(s.id)}">재개</button>` : ''}
+                                    <button type="button" class="sub-cancel-btn" data-id="${WithPlus.escapeHtml(s.id)}">정기배송 취소</button>
+                                </div>
+                                <div class="subscription-msg" id="sub-msg-${WithPlus.escapeHtml(s.id)}"></div>
+                            </div>`).join('')}`;
+
+                    // 📅 출석체크 이벤트 - 이벤트가 꺼져있으면(관리자 설정) 위젯 자체를 표시하지 않는다
+                    const attendanceHtml = (attendance && attendance.is_active) ? `
+                        <div class="attendance-box">
+                            <div class="attendance-top">
+                                <span class="attendance-title">📅 출석체크</span>
+                                <span class="attendance-streak">🔥 연속 ${attendance.current_streak}일째</span>
+                            </div>
+                            <div class="attendance-desc">매일 출석하면 ${Number(attendance.daily_reward).toLocaleString('ko-KR')} 마일리지, ${attendance.streak_bonus_days}일 연속 출석 시 추가 ${Number(attendance.streak_bonus_reward).toLocaleString('ko-KR')} 마일리지를 드려요.</div>
+                            <button type="button" class="attendance-checkin-btn" id="attendance-checkin-btn" ${attendance.checked_in_today ? 'disabled' : ''}>${attendance.checked_in_today ? '✅ 오늘 출석 완료' : '오늘 출석하기'}</button>
+                            <div class="attendance-msg" id="attendance-msg"></div>
+                        </div>` : '';
+
+                    // 🎫 시리얼 쿠폰 - 이벤트·SNS 등으로 배포받은 코드를 등록하면 즉시 마일리지가 지급된다
+                    const serialCouponHtml = `
+                        <div class="serial-coupon-box">
+                            <span class="serial-coupon-title">🎫 시리얼 쿠폰 등록</span>
+                            <form id="serial-coupon-form" class="serial-coupon-form">
+                                <input type="text" id="serial-coupon-input" placeholder="시리얼 코드를 입력해주세요" autocomplete="off">
+                                <button type="submit">등록</button>
+                            </form>
+                            <div class="serial-coupon-msg" id="serial-coupon-msg"></div>
+                        </div>`;
+
+                    // 🎁 추천인(리퍼럴) 프로그램 - 관리자가 이벤트를 켜둔 경우에만 노출
+                    const referralStatusLabel = { pending: '⏳ 친구 주문 대기중', rewarded: '✅ 적립 완료' };
+                    const referralListHtml = (referral && referral.referrals && referral.referrals.length > 0) ? `
+                        <div class="referral-list">
+                            ${referral.referrals.slice(0, 10).map(r => `
+                                <div class="referral-list-item">
+                                    <span class="referral-list-name">${WithPlus.escapeHtml(r.name)}</span>
+                                    <span class="referral-list-status ${r.status === 'rewarded' ? 'rewarded' : 'pending'}">${referralStatusLabel[r.status] || r.status}</span>
+                                </div>`).join('')}
+                            ${referral.referrals.length > 10 ? `<div class="referral-list-more">외 ${referral.referrals.length - 10}명</div>` : ''}
+                        </div>` : '';
+                    const referralHtml = referral ? `
+                        <div class="attendance-box">
+                            <div class="attendance-top">
+                                <span class="attendance-title">🎁 추천인 프로그램</span>
+                                <span class="attendance-streak">누적 ${referral.total_earned_mileage.toLocaleString('ko-KR')}원 적립</span>
+                            </div>
+                            <div class="attendance-desc">내 추천코드로 가입한 친구가 첫 주문을 완료하면 나에게 마일리지가 적립되고, 친구도 그 순간 <strong>${referredRewardAmount.toLocaleString('ko-KR')}원</strong>을 받아요. (총 추천 ${referral.total_referrals}명 · 보상 완료 ${referral.rewarded_referrals}명)</div>
+                            <div class="serial-coupon-form">
+                                <input type="text" id="referral-code-display" value="${WithPlus.escapeHtml(referral.referral_code)}" readonly>
+                                <button type="button" id="referral-copy-code-btn">코드 복사</button>
+                            </div>
+                            <div class="serial-coupon-form" style="margin-top:8px;">
+                                <input type="text" id="referral-link-display" value="${WithPlus.escapeHtml(referral.referral_link)}" readonly>
+                                <button type="button" id="referral-copy-link-btn">링크 복사</button>
+                            </div>
+                            <button type="button" id="referral-share-btn" class="referral-share-btn">📤 친구에게 공유하기</button>
+                            <div class="attendance-msg" id="referral-msg"></div>
+                            ${referralListHtml}
+                        </div>` : '';
+
+                    const wishlistHtml = (!wishlist || wishlist.length === 0)
+                        ? `<div class="state-box small"><div class="emoji">🖤</div><p>아직 찜한 상품이 없습니다</p></div>`
+                        : `<div class="wishlist-grid">${wishlist.map(p => {
+                            const img = Array.isArray(p.images_urls) && p.images_urls.length > 0 ? p.images_urls[0] : null;
+                            const emoji = (WithPlus.CATEGORY_EMOJI && (WithPlus.CATEGORY_EMOJI[p.category] || WithPlus.CATEGORY_EMOJI.default)) || '🛍️';
+                            return `
+                            <a class="wishlist-card" href="/product/${WithPlus.escapeHtml(p.id)}">
+                                <button class="wishlist-remove-btn" data-product-id="${WithPlus.escapeHtml(p.id)}" title="찜 해제">✕</button>
+                                <div class="thumb" ${img ? `style="background-image:url('${img}');"` : ''}>${img ? '' : emoji}</div>
+                                <div class="info">
+                                    <div class="name">${WithPlus.escapeHtml(p.name)}</div>
+                                    <div class="price">${WithPlus.formatPrice(p.price)}</div>
+                                </div>
+                            </a>`;
+                        }).join('')}</div>`;
+
+                    const gradeHtml = gradeInfo ? `
+                        <div class="grade-box">
+                            <div class="grade-top">
+                                <span class="grade-badge">🏅 ${WithPlus.escapeHtml(gradeInfo.current.label)}</span>
+                                <span class="grade-spent">누적 구매액 ${Number(gradeInfo.totalSpent).toLocaleString('ko-KR')}원</span>
+                            </div>
+                            <div class="grade-benefit">${Number(gradeInfo.current.bonus_personal_rate) > 0 ? `개인 마일리지 적립 시 <strong>+${(Number(gradeInfo.current.bonus_personal_rate) * 100).toFixed(1)}%p</strong> 추가 혜택이 지금 적용되고 있어요` : '더 구매하시면 등급 혜택(추가 마일리지 적립)이 시작돼요'}</div>
+                            ${gradeInfo.next ? `<div class="grade-next">다음 등급(${WithPlus.escapeHtml(gradeInfo.next.label)})까지 ${Number(gradeInfo.amountToNext).toLocaleString('ko-KR')}원 남았어요</div>` : `<div class="grade-next">최고 등급이에요! 🎉</div>`}
+                        </div>` : '';
+
+                    // 배송지/찜한상품/주문내역 3개 섹션 — "기본형"은 위→아래로 순서대로,
+                    // "탭형"은 탭으로 전환해서 보여준다(데이터/로직은 동일, 배치만 다름).
+                    const sectionsHtml = useTabs ? `
+                        <div class="mypage-tabs">
+                            <button type="button" class="mypage-tab-btn active" data-panel="addr">🚚 배송지</button>
+                            <button type="button" class="mypage-tab-btn" data-panel="wish">🖤 찜한 상품 (${(wishlist || []).length})</button>
+                            <button type="button" class="mypage-tab-btn" data-panel="orders">📋 주문내역 (${orders.length})</button>
+                        </div>
+                        <div class="mypage-tab-panel" data-panel="addr">
+                            <div id="address-section">${addressesHtml}</div>
+                            <button type="button" class="add-address-btn" id="add-address-btn">+ 새 배송지 추가</button>
+                        </div>
+                        <div class="mypage-tab-panel" data-panel="wish" style="display:none;">${wishlistHtml}</div>
+                        <div class="mypage-tab-panel" data-panel="orders" style="display:none;">${ordersHtml}</div>
+                    ` : `
+                        <h2 class="section-title">🚚 배송지 관리</h2>
+                        <div id="address-section">${addressesHtml}</div>
+                        <button type="button" class="add-address-btn" id="add-address-btn">+ 새 배송지 추가</button>
+                        <h2 class="section-title">🖤 찜한 상품 (${(wishlist || []).length}개)</h2>
+                        ${wishlistHtml}
+                        <h2 class="section-title">📋 주문 내역 (${orders.length}건)</h2>
+                        ${ordersHtml}
+                    `;
+
+                    area.innerHTML = `
+                        <div class="profile-box">
+                            <span class="email">👤 ${WithPlus.escapeHtml(session.user.email)}</span>
+                            <button class="logout-btn" id="logout-btn">로그아웃</button>
+                        </div>
+                        ${gradeHtml}
+                        <div class="mileage-summary">
+                            <div class="mileage-card highlight"><div class="label">💰 사용 가능한 마일리지</div><div class="value">${mileageBalance.toLocaleString('ko-KR')}원</div></div>
+                            <div class="mileage-card"><div class="label">총 적립 마일리지</div><div class="value">${(totalPersonal + totalCommunity).toLocaleString('ko-KR')}원</div></div>
+                            <div class="mileage-card"><div class="label">개인 적립</div><div class="value">${totalPersonal.toLocaleString('ko-KR')}원</div></div>
+                            <div class="mileage-card"><div class="label">커뮤니티 보너스</div><div class="value">${totalCommunity.toLocaleString('ko-KR')}원</div></div>
+                        </div>
+                        <p style="font-size:0.78em; color:var(--text-gray); margin:-16px 0 24px;">사용 가능한 마일리지는 장바구니 결제 시 사용할 수 있어요. (취소/환불된 주문의 적립·사용 내역은 자동으로 제외됩니다)</p>
+                        <p style="font-size:0.82em; color:var(--text-gray); margin:-16px 0 24px;">현재 적립 비율: 개인 ${WithPlus.formatPercent(WithPlus.getMileageRatesCached().personalPercent)}% + 커뮤니티 참여 시 추가 ${WithPlus.formatPercent(WithPlus.getMileageRatesCached().communityPercent)}% (구매 시점 비율에 따라 과거 적립액과 다를 수 있습니다)</p>
+                        <a href="/medical-voucher" style="display:flex; align-items:center; justify-content:space-between; gap:12px; background:linear-gradient(135deg, #E6F4EF, #F5FBF8); border:1px solid #BFE3D6; border-radius:12px; padding:16px 20px; margin-bottom:30px; text-decoration:none; color:var(--text-dark);">
+                            <span>🏥 <strong>의료바우처</strong> — WITH+ 회원가입 한 번으로 함께 이용할 수 있도록 준비 중입니다</span>
+                            <span style="flex-shrink:0; font-size:0.78em; background:#1B5E4F; color:white; border-radius:12px; padding:4px 12px;">준비중</span>
+                        </a>
+                        <div class="promo-widgets-row">
+                            ${attendanceHtml}
+                            ${serialCouponHtml}
+                            ${referralHtml}
+                        </div>
+                        ${restockSubsHtml}
+                        ${subscriptionsHtml}
+                        <h2 class="section-title notification-section-title">
+                            <span>🔔 알림 ${unreadCount > 0 ? `(${unreadCount})` : ''}</span>
+                            ${unreadCount > 0 ? `<button type="button" class="notification-mark-all-btn" id="notification-mark-all-btn">모두 읽음</button>` : ''}
+                        </h2>
+                        ${notificationsHtml}
+                        ${sectionsHtml}
+                        <div style="text-align:center; margin-top:40px;">
+                            <a href="#" id="withdraw-open-link" style="font-size:0.78em; color:var(--text-gray); text-decoration:underline;">회원탈퇴</a>
+                        </div>
+                    `;
+
+                    if (useTabs) {
+                        area.querySelectorAll('.mypage-tab-btn').forEach(btn => {
+                            btn.addEventListener('click', () => {
+                                const target = btn.getAttribute('data-panel');
+                                area.querySelectorAll('.mypage-tab-btn').forEach(b => b.classList.toggle('active', b === btn));
+                                area.querySelectorAll('.mypage-tab-panel').forEach(p => {
+                                    p.style.display = (p.getAttribute('data-panel') === target) ? '' : 'none';
+                                });
+                            });
+                        });
+                    }
+
+                    document.getElementById('logout-btn').addEventListener('click', async () => {
+                        await WithPlus.signOut();
+                        location.href = '/';
+                    });
+
+                    const attendanceCheckinBtn = document.getElementById('attendance-checkin-btn');
+                    if (attendanceCheckinBtn) {
+                        attendanceCheckinBtn.addEventListener('click', async () => {
+                            const msg = document.getElementById('attendance-msg');
+                            attendanceCheckinBtn.disabled = true;
+                            msg.className = 'attendance-msg';
+                            try {
+                                const t = await WithPlus.getAccessToken();
+                                const res = await fetch('/api/attendance/checkin', { method: 'POST', headers: { Authorization: 'Bearer ' + t } });
+                                const json = await res.json();
+                                if (!res.ok) throw new Error(json.message || '출석체크에 실패했습니다');
+                                msg.textContent = json.message;
+                                msg.className = 'attendance-msg success';
+                                setTimeout(() => loadMypage(), 900);
+                            } catch (err) {
+                                msg.textContent = err.message;
+                                msg.className = 'attendance-msg error';
+                                attendanceCheckinBtn.disabled = false;
+                            }
+                        });
+                    }
+
+                    const serialCouponForm = document.getElementById('serial-coupon-form');
+                    if (serialCouponForm) {
+                        serialCouponForm.addEventListener('submit', async (e) => {
+                            e.preventDefault();
+                            const input = document.getElementById('serial-coupon-input');
+                            const msg = document.getElementById('serial-coupon-msg');
+                            const submitBtn = serialCouponForm.querySelector('button[type="submit"]');
+                            if (!input.value.trim()) return;
+                            msg.className = 'serial-coupon-msg';
+                            submitBtn.disabled = true;
+                            try {
+                                const t = await WithPlus.getAccessToken();
+                                const res = await fetch('/api/serial-coupons/redeem', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + t },
+                                    body: JSON.stringify({ code: input.value.trim() })
+                                });
+                                const json = await res.json();
+                                if (!res.ok) throw new Error(json.message || '등록에 실패했습니다');
+                                msg.textContent = json.message;
+                                msg.className = 'serial-coupon-msg success';
+                                input.value = '';
+                                setTimeout(() => loadMypage(), 900);
+                            } catch (err) {
+                                msg.textContent = err.message;
+                                msg.className = 'serial-coupon-msg error';
+                            } finally {
+                                submitBtn.disabled = false;
+                            }
+                        });
+                    }
+
+                    const referralCopyCodeBtn = document.getElementById('referral-copy-code-btn');
+                    if (referralCopyCodeBtn) {
+                        referralCopyCodeBtn.addEventListener('click', async () => {
+                            const msg = document.getElementById('referral-msg');
+                            try {
+                                await navigator.clipboard.writeText(document.getElementById('referral-code-display').value);
+                                msg.textContent = '추천코드가 복사되었습니다.';
+                                msg.className = 'attendance-msg success';
+                            } catch (err) {
+                                msg.textContent = '복사에 실패했습니다. 직접 선택해 복사해주세요.';
+                                msg.className = 'attendance-msg error';
+                            }
+                        });
+                    }
+                    const referralCopyLinkBtn = document.getElementById('referral-copy-link-btn');
+                    if (referralCopyLinkBtn) {
+                        referralCopyLinkBtn.addEventListener('click', async () => {
+                            const msg = document.getElementById('referral-msg');
+                            try {
+                                await navigator.clipboard.writeText(document.getElementById('referral-link-display').value);
+                                msg.textContent = '추천 링크가 복사되었습니다.';
+                                msg.className = 'attendance-msg success';
+                            } catch (err) {
+                                msg.textContent = '복사에 실패했습니다. 직접 선택해 복사해주세요.';
+                                msg.className = 'attendance-msg error';
+                            }
+                        });
+                    }
+                    const referralShareBtn = document.getElementById('referral-share-btn');
+                    if (referralShareBtn) {
+                        referralShareBtn.addEventListener('click', async () => {
+                            const msg = document.getElementById('referral-msg');
+                            const link = document.getElementById('referral-link-display').value;
+                            const shareText = `WITH+에서 가입만 해도 ${referredRewardAmount.toLocaleString('ko-KR')}원을 드려요! 제 추천 링크로 가입해보세요 🎁`;
+                            // 모바일에서는 OS 공유시트(카카오톡 포함)를 띄우고, 지원하지 않는 환경(대부분의 데스크톱)에서는 링크를 복사해준다.
+                            if (navigator.share) {
+                                try {
+                                    await navigator.share({ title: 'WITH+ 추천 초대', text: shareText, url: link });
+                                } catch (err) {
+                                    // 사용자가 공유창을 취소한 경우(AbortError)는 조용히 무시
+                                    if (err && err.name !== 'AbortError') {
+                                        msg.textContent = '공유에 실패했습니다. 링크를 복사해 직접 전달해주세요.';
+                                        msg.className = 'attendance-msg error';
+                                    }
+                                }
+                            } else {
+                                try {
+                                    await navigator.clipboard.writeText(`${shareText}\n${link}`);
+                                    msg.textContent = '공유 메시지가 복사되었습니다. 카카오톡 등에 붙여넣어 보내보세요.';
+                                    msg.className = 'attendance-msg success';
+                                } catch (err) {
+                                    msg.textContent = '복사에 실패했습니다. 직접 선택해 복사해주세요.';
+                                    msg.className = 'attendance-msg error';
+                                }
+                            }
+                        });
+                    }
+
+                    const notificationMarkAllBtn = document.getElementById('notification-mark-all-btn');
+                    if (notificationMarkAllBtn) {
+                        notificationMarkAllBtn.addEventListener('click', async () => {
+                            notificationMarkAllBtn.disabled = true;
+                            try {
+                                const t = await WithPlus.getAccessToken();
+                                await fetch('/api/me/notifications/read-all', { method: 'POST', headers: { Authorization: 'Bearer ' + t } });
+                                await loadMypage();
+                            } catch (err) { notificationMarkAllBtn.disabled = false; }
+                        });
+                    }
+                    area.querySelectorAll('.notification-item.unread').forEach(item => {
+                        item.addEventListener('click', async () => {
+                            const id = item.getAttribute('data-id');
+                            try {
+                                const t = await WithPlus.getAccessToken();
+                                await fetch('/api/me/notifications/' + id + '/read', { method: 'PATCH', headers: { Authorization: 'Bearer ' + t } });
+                                item.classList.remove('unread');
+                            } catch (err) { /* 읽음 처리 실패해도 화면 진행에는 지장 없음 */ }
+                        });
+                    });
+                    area.querySelectorAll('.restock-sub-cancel-btn').forEach(btn => {
+                        btn.addEventListener('click', async () => {
+                            const productId = btn.getAttribute('data-product-id');
+                            btn.disabled = true;
+                            try {
+                                const t = await WithPlus.getAccessToken();
+                                await fetch('/api/products/' + productId + '/restock-notify', { method: 'DELETE', headers: { Authorization: 'Bearer ' + t } });
+                                await loadMypage();
+                            } catch (err) { btn.disabled = false; }
+                        });
+                    });
+
+                    // 🔄 정기배송 일시중지/재개/취소
+                    async function patchSubscription(id, body) {
+                        const msgEl = document.getElementById('sub-msg-' + id);
+                        try {
+                            const t = await WithPlus.getAccessToken();
+                            const res = await fetch('/api/me/subscriptions/' + id, {
+                                method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + t }, body: JSON.stringify(body)
+                            });
+                            const json = await res.json();
+                            if (!res.ok || !json.success) throw new Error(json.message || '처리에 실패했습니다');
+                            await loadMypage();
+                        } catch (err) {
+                            if (msgEl) { msgEl.textContent = err.message; msgEl.className = 'subscription-msg error'; }
+                        }
+                    }
+                    area.querySelectorAll('.sub-pause-btn').forEach(btn => {
+                        btn.addEventListener('click', () => { btn.disabled = true; patchSubscription(btn.dataset.id, { status: 'paused' }); });
+                    });
+                    area.querySelectorAll('.sub-resume-btn').forEach(btn => {
+                        btn.addEventListener('click', () => { btn.disabled = true; patchSubscription(btn.dataset.id, { status: 'active' }); });
+                    });
+                    area.querySelectorAll('.sub-cancel-btn').forEach(btn => {
+                        btn.addEventListener('click', async () => {
+                            if (!confirm('정기배송을 취소하시겠습니까? 취소 후에는 되돌릴 수 없습니다.')) return;
+                            btn.disabled = true;
+                            const id = btn.dataset.id;
+                            const msgEl = document.getElementById('sub-msg-' + id);
+                            try {
+                                const t = await WithPlus.getAccessToken();
+                                const res = await fetch('/api/me/subscriptions/' + id, { method: 'DELETE', headers: { Authorization: 'Bearer ' + t } });
+                                const json = await res.json();
+                                if (!res.ok || !json.success) throw new Error(json.message || '취소에 실패했습니다');
+                                await loadMypage();
+                            } catch (err) {
+                                btn.disabled = false;
+                                if (msgEl) { msgEl.textContent = err.message; msgEl.className = 'subscription-msg error'; }
+                            }
+                        });
+                    });
+
+                    area.querySelectorAll('.wishlist-remove-btn').forEach(btn => {
+                        btn.addEventListener('click', async (e) => {
+                            e.preventDefault(); e.stopPropagation();
+                            const productId = btn.getAttribute('data-product-id');
+                            btn.disabled = true;
+                            try {
+                                const t = await WithPlus.getAccessToken();
+                                await fetch('/api/wishlist/' + productId, { method: 'DELETE', headers: { 'Authorization': 'Bearer ' + t } });
+                                await loadMypage();
+                            } catch (err) {
+                                btn.disabled = false;
+                            }
+                        });
+                    });
+
+                    area.querySelectorAll('.return-btn').forEach(btn => {
+                        btn.addEventListener('click', () => openReturnModal(btn.getAttribute('data-order-id'), btn.getAttribute('data-mode') || 'return'));
+                    });
+
+                    document.getElementById('add-address-btn').addEventListener('click', () => openAddressModal(null));
+                    area.querySelectorAll('.addr-edit-btn').forEach(btn => {
+                        btn.addEventListener('click', () => {
+                            const found = addresses.find(a => String(a.id) === btn.getAttribute('data-id'));
+                            if (found) openAddressModal(found);
+                        });
+                    });
+                    area.querySelectorAll('.addr-delete-btn').forEach(btn => {
+                        btn.addEventListener('click', async () => {
+                            if (!confirm('이 배송지를 삭제할까요?')) return;
+                            btn.disabled = true;
+                            try {
+                                const t = await WithPlus.getAccessToken();
+                                await fetch('/api/me/addresses/' + btn.getAttribute('data-id'), { method: 'DELETE', headers: { Authorization: 'Bearer ' + t } });
+                                await loadMypage();
+                            } catch (err) { btn.disabled = false; }
+                        });
+                    });
+                    area.querySelectorAll('.addr-default-btn').forEach(btn => {
+                        btn.addEventListener('click', async () => {
+                            btn.disabled = true;
+                            try {
+                                const t = await WithPlus.getAccessToken();
+                                await fetch('/api/me/addresses/' + btn.getAttribute('data-id') + '/default', { method: 'PUT', headers: { Authorization: 'Bearer ' + t } });
+                                await loadMypage();
+                            } catch (err) { btn.disabled = false; }
+                        });
+                    });
+                } catch (err) {
+                    area.innerHTML = `
+                        <div class="state-box">
+                            <div class="emoji">⚠️</div>
+                            <h3>정보를 불러오는 중 문제가 발생했습니다</h3>
+                            <p>${WithPlus.escapeHtml(err.message)}</p>
+                        </div>`;
+                }
+            }
+
+            // ============================================
+            // 반품/교환 신청 모달
+            // ============================================
+            const returnOverlay = document.getElementById('return-modal-overlay');
+            const returnForm = document.getElementById('return-form');
+            const returnModalMsg = document.getElementById('return-modal-msg');
+            const returnSubmitBtn = document.getElementById('return-submit-btn');
+            const returnCancelBtn = document.getElementById('return-cancel-btn');
+            let currentReturnOrderId = null;
+
+            function openReturnModal(orderId, mode) {
+                currentReturnOrderId = orderId;
+                returnForm.reset();
+                returnModalMsg.style.display = 'none';
+                returnSubmitBtn.disabled = false;
+                returnSubmitBtn.textContent = '신청하기';
+                const typeSelect = document.getElementById('return-type');
+                const modalTitle = document.getElementById('return-modal-title');
+                if (mode === 'cancel') {
+                    typeSelect.innerHTML = '<option value="cancel">취소</option>';
+                    if (modalTitle) modalTitle.textContent = '🚫 주문 취소 신청';
+                } else {
+                    typeSelect.innerHTML = '<option value="return">반품</option><option value="exchange">교환</option>';
+                    if (modalTitle) modalTitle.textContent = '↩️ 반품/교환 신청';
+                }
+                returnOverlay.classList.add('open');
+            }
+            function closeReturnModal() {
+                returnOverlay.classList.remove('open');
+                currentReturnOrderId = null;
+            }
+            returnCancelBtn.addEventListener('click', closeReturnModal);
+            returnOverlay.addEventListener('click', (e) => { if (e.target === returnOverlay) closeReturnModal(); });
+
+            returnForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                if (!currentReturnOrderId) return;
+                returnModalMsg.style.display = 'none';
+                returnSubmitBtn.disabled = true;
+                returnSubmitBtn.textContent = '신청 중...';
+                try {
+                    const token = await WithPlus.getAccessToken();
+                    const res = await fetch('/api/orders/' + currentReturnOrderId + '/return-request', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            request_type: document.getElementById('return-type').value,
+                            reason: document.getElementById('return-reason').value.trim()
+                        })
+                    });
+                    const json = await res.json();
+                    if (!res.ok || !json.success) throw new Error(json.message || '신청에 실패했습니다');
+                    closeReturnModal();
+                    await loadMypage();
+                } catch (err) {
+                    returnModalMsg.textContent = err.message;
+                    returnModalMsg.style.display = 'block';
+                    returnSubmitBtn.disabled = false;
+                    returnSubmitBtn.textContent = '신청하기';
+                }
+            });
+
+            // ============================================
+            // 회원탈퇴 모달
+            // ============================================
+            const withdrawOverlay = document.getElementById('withdraw-modal-overlay');
+            const withdrawForm = document.getElementById('withdraw-form');
+            const withdrawModalMsg = document.getElementById('withdraw-modal-msg');
+            const withdrawSubmitBtn = document.getElementById('withdraw-submit-btn');
+            const withdrawCancelBtn = document.getElementById('withdraw-cancel-btn');
+            const withdrawOpenLink = document.getElementById('withdraw-open-link');
+
+            function closeWithdrawModal() {
+                withdrawOverlay.classList.remove('open');
+            }
+            if (withdrawOpenLink) {
+                withdrawOpenLink.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    withdrawForm.reset();
+                    withdrawModalMsg.style.display = 'none';
+                    withdrawSubmitBtn.disabled = false;
+                    withdrawSubmitBtn.textContent = '탈퇴하기';
+                    withdrawOverlay.classList.add('open');
+                });
+            }
+            withdrawCancelBtn.addEventListener('click', closeWithdrawModal);
+            withdrawOverlay.addEventListener('click', (e) => { if (e.target === withdrawOverlay) closeWithdrawModal(); });
+
+            withdrawForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                withdrawModalMsg.style.display = 'none';
+                withdrawSubmitBtn.disabled = true;
+                withdrawSubmitBtn.textContent = '처리 중...';
+                try {
+                    const token = await WithPlus.getAccessToken();
+                    const res = await fetch('/api/me/withdraw', {
+                        method: 'POST',
+                        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ reason: document.getElementById('withdraw-reason').value.trim() || undefined })
+                    });
+                    const json = await res.json();
+                    if (!res.ok || !json.success) throw new Error(json.message || '탈퇴 처리에 실패했습니다');
+                    await WithPlus.signOut();
+                    withdrawForm.style.display = 'none';
+                    withdrawModalMsg.style.color = 'var(--text-dark)';
+                    withdrawModalMsg.textContent = '회원탈퇴가 완료되었습니다. 그동안 이용해주셔서 감사합니다. 잠시 후 홈으로 이동합니다.';
+                    withdrawModalMsg.style.display = 'block';
+                    setTimeout(() => { location.href = '/'; }, 1800);
+                } catch (err) {
+                    withdrawModalMsg.textContent = err.message;
+                    withdrawModalMsg.style.display = 'block';
+                    withdrawSubmitBtn.disabled = false;
+                    withdrawSubmitBtn.textContent = '탈퇴하기';
+                }
+            });
+
+            // ============================================
+            // 배송지 추가/수정 모달
+            // ============================================
+            const addressOverlay = document.getElementById('address-modal-overlay');
+            const addressForm = document.getElementById('address-form');
+            const addressModalTitle = document.getElementById('address-modal-title');
+            const addressModalMsg = document.getElementById('address-modal-msg');
+            const addressSubmitBtn = document.getElementById('address-submit-btn');
+            const addressCancelBtn = document.getElementById('address-cancel-btn');
+            let editingAddressId = null;
+
+            function openAddressModal(existing) {
+                editingAddressId = existing ? existing.id : null;
+                addressForm.reset();
+                addressModalTitle.textContent = existing ? '🚚 배송지 수정' : '🚚 배송지 추가';
+                document.getElementById('addr-label').value = existing ? (existing.label || '') : '';
+                document.getElementById('addr-receiver-name').value = existing ? existing.receiver_name : '';
+                document.getElementById('addr-receiver-phone').value = existing ? existing.receiver_phone : '';
+                document.getElementById('addr-postal').value = existing ? (existing.postal_code || '') : '';
+                document.getElementById('addr-address').value = existing ? existing.address : '';
+                document.getElementById('addr-address-detail').value = existing ? (existing.address_detail || '') : '';
+                document.getElementById('addr-is-default').checked = existing ? !!existing.is_default : false;
+                addressModalMsg.style.display = 'none';
+                addressSubmitBtn.disabled = false;
+                addressSubmitBtn.textContent = '저장';
+                addressOverlay.classList.add('open');
+            }
+            function closeAddressModal() {
+                addressOverlay.classList.remove('open');
+                editingAddressId = null;
+            }
+            addressCancelBtn.addEventListener('click', closeAddressModal);
+            addressOverlay.addEventListener('click', (e) => { if (e.target === addressOverlay) closeAddressModal(); });
+
+            document.getElementById('addr-search-btn').addEventListener('click', () => {
+                if (typeof daum === 'undefined' || !daum.Postcode) return;
+                new daum.Postcode({
+                    oncomplete: function (data) {
+                        document.getElementById('addr-postal').value = data.zonecode;
+                        document.getElementById('addr-address').value = data.roadAddress || data.jibunAddress;
+                        document.getElementById('addr-address-detail').focus();
+                    }
+                }).open();
+            });
+
+            addressForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                addressModalMsg.style.display = 'none';
+                const address = document.getElementById('addr-address').value.trim();
+                if (!address) {
+                    addressModalMsg.textContent = '주소 검색을 눌러 주소를 선택해주세요.';
+                    addressModalMsg.style.display = 'block';
+                    return;
+                }
+                addressSubmitBtn.disabled = true;
+                addressSubmitBtn.textContent = '저장 중...';
+                try {
+                    const token = await WithPlus.getAccessToken();
+                    const payload = {
+                        label: document.getElementById('addr-label').value.trim(),
+                        receiver_name: document.getElementById('addr-receiver-name').value.trim(),
+                        receiver_phone: document.getElementById('addr-receiver-phone').value.trim(),
+                        postal_code: document.getElementById('addr-postal').value.trim(),
+                        address,
+                        address_detail: document.getElementById('addr-address-detail').value.trim(),
+                        is_default: document.getElementById('addr-is-default').checked
+                    };
+                    const url = editingAddressId ? '/api/me/addresses/' + editingAddressId : '/api/me/addresses';
+                    const method = editingAddressId ? 'PUT' : 'POST';
+                    const res = await fetch(url, {
+                        method,
+                        headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const json = await res.json();
+                    if (!res.ok || !json.success) throw new Error(json.message || '저장에 실패했습니다');
+                    closeAddressModal();
+                    await loadMypage();
+                } catch (err) {
+                    addressModalMsg.textContent = err.message;
+                    addressModalMsg.style.display = 'block';
+                    addressSubmitBtn.disabled = false;
+                    addressSubmitBtn.textContent = '저장';
+                }
+            });
+
+            await loadMypage();
+        })();
+    </script>
+</body>
+</html>

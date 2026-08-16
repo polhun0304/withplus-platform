@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>게시판 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B; --primary-dark: #B0154F;
+            --bg-white: #FFFFFF; --bg-light: #F5F5F5;
+            --text-dark: #333333; --text-gray: #666666;
+            --border-color: #E0E0E0; --success: #2E7D32;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; background: var(--bg-white); }
+        .header { background: var(--bg-white); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-main { max-width: 1000px; margin: 0 auto; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; }
+        .logo span { font-size: 0.7em; color: var(--text-gray); display: block; font-weight: normal; }
+        .icon-button { background: none; border: none; cursor: pointer; font-size: 1.3em; color: var(--text-dark); position: relative; text-decoration: none; display: inline-block; }
+        .cart-badge { position: absolute; top: -8px; right: -8px; background: var(--primary-color); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: bold; }
+
+        .page-hero { background: linear-gradient(135deg, var(--primary-color), var(--primary-dark)); color: white; padding: 40px 20px; text-align: center; }
+        .page-hero h1 { font-size: 1.7em; margin-bottom: 6px; }
+        .page-hero p { opacity: 0.95; font-size: 0.92em; }
+
+        .wrap { max-width: 1000px; margin: 30px auto 80px; padding: 0 20px; }
+
+        .board-tabs { display: flex; gap: 4px; border-bottom: 2px solid var(--border-color); margin-bottom: 20px; flex-wrap: wrap; }
+        .board-tab { padding: 12px 18px; text-decoration: none; color: var(--text-gray); font-weight: 600; font-size: 0.95em; border-bottom: 3px solid transparent; margin-bottom: -2px; }
+        .board-tab.active { color: var(--primary-color); border-bottom-color: var(--primary-color); }
+
+        .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+        .search-form { display: flex; gap: 6px; flex: 1; min-width: 200px; max-width: 340px; }
+        .search-form input { flex: 1; padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.9em; }
+        .search-form button { padding: 8px 14px; border: 1px solid var(--border-color); background: var(--bg-light); border-radius: 8px; cursor: pointer; font-size: 0.9em; }
+        .write-btn { background: var(--primary-color); color: white; border: none; padding: 9px 18px; border-radius: 8px; font-weight: 600; cursor: pointer; text-decoration: none; font-size: 0.9em; white-space: nowrap; }
+        .write-btn:hover { background: var(--primary-dark); }
+
+        .post-list { border-top: 2px solid var(--text-dark); }
+        .post-row { display: flex; align-items: center; gap: 12px; padding: 14px 8px; border-bottom: 1px solid var(--border-color); text-decoration: none; color: var(--text-dark); }
+        .post-row:hover { background: var(--bg-light); }
+        .post-row .pin { color: var(--primary-color); font-weight: 700; font-size: 0.85em; }
+        .post-row .title { flex: 1; font-size: 0.95em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .post-row .badge-answered { font-size: 0.72em; background: var(--success); color: white; padding: 1px 8px; border-radius: 20px; margin-left: 6px; }
+        .post-row .badge-waiting { font-size: 0.72em; background: #FFA726; color: white; padding: 1px 8px; border-radius: 20px; margin-left: 6px; }
+        .post-row .meta { font-size: 0.82em; color: var(--text-gray); white-space: nowrap; display: flex; gap: 14px; }
+        .post-row.pinned { background: #FFF7EE; }
+
+        .empty-state { text-align: center; padding: 60px 20px; color: var(--text-gray); }
+
+        .write-modal-bg { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 200; align-items: center; justify-content: center; padding: 20px; }
+        .write-modal-bg.open { display: flex; }
+        .write-modal { background: white; border-radius: 14px; padding: 26px; width: 100%; max-width: 520px; }
+        .write-modal h3 { margin-bottom: 16px; }
+        .write-modal input, .write-modal textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.92em; margin-bottom: 12px; font-family: inherit; }
+        .write-modal textarea { min-height: 140px; resize: vertical; }
+        .write-modal .modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
+        .write-modal .btn-cancel { background: var(--bg-light); border: 1px solid var(--border-color); padding: 9px 16px; border-radius: 8px; cursor: pointer; }
+        .write-modal .btn-submit { background: var(--primary-color); color: white; border: none; padding: 9px 18px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+        .write-modal .error-msg { color: #D32F2F; font-size: 0.85em; margin-bottom: 8px; display: none; }
+
+        .footer { background: var(--text-dark); color: rgba(255,255,255,0.7); padding: 30px 20px; text-align: center; font-size: 0.85em; margin-top: 40px; }
+        .footer a { color: #FF7FA8; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-main">
+            <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+            <div style="display:flex; gap:20px; align-items:center;">
+                <a class="icon-button" id="account-link" href="/login">👤</a>
+                <a class="icon-button" href="/cart">🛒<span class="cart-badge">0</span></a>
+            </div>
+        </div>
+    </header>
+
+    <div class="page-hero">
+        <h1 id="hero-title">게시판</h1>
+        <p id="hero-sub">공지사항, 이용후기, Q&amp;A, 자유게시판을 확인하세요</p>
+    </div>
+
+    <div class="wrap">
+        <div class="board-tabs" id="board-tabs">
+            <a class="board-tab" data-type="notice" href="/notice">📢 공지사항</a>
+            <a class="board-tab" data-type="review" href="/board/review">⭐ 이용후기</a>
+            <a class="board-tab" data-type="qa" href="/board/qa">❓ Q&amp;A</a>
+            <a class="board-tab" data-type="free" href="/board/free">💬 자유게시판</a>
+        </div>
+
+        <div class="toolbar">
+            <form class="search-form" id="search-form">
+                <input type="text" id="search-input" placeholder="제목으로 검색">
+                <button type="submit">검색</button>
+            </form>
+            <button class="write-btn" id="write-btn" style="display:none;">✏️ 글쓰기</button>
+        </div>
+
+        <div class="post-list" id="post-list">
+            <div class="empty-state">불러오는 중...</div>
+        </div>
+    </div>
+
+    <footer class="footer">
+        &copy; 2026 WITH+. All rights reserved. · <a href="/terms">이용약관</a> · <a href="/privacy">개인정보처리방침</a>
+    </footer>
+
+    <div class="write-modal-bg" id="write-modal-bg">
+        <div class="write-modal">
+            <h3 id="write-modal-title">글쓰기</h3>
+            <div class="error-msg" id="write-error"></div>
+            <input type="text" id="write-title" placeholder="제목을 입력하세요" maxlength="200">
+            <textarea id="write-content" placeholder="내용을 입력하세요"></textarea>
+            <div class="modal-actions">
+                <button class="btn-cancel" id="write-cancel">취소</button>
+                <button class="btn-submit" id="write-submit">등록</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        const BOARD_LABELS = { notice: { emoji: '📢', name: '공지사항', sub: 'WITH+의 새로운 소식과 안내를 확인하세요' },
+            review: { emoji: '⭐', name: '이용후기', sub: '회원님들의 생생한 이용 후기를 나눠보세요' },
+            qa: { emoji: '❓', name: 'Q&A', sub: '궁금한 점을 남겨주시면 답변드립니다' },
+            free: { emoji: '💬', name: '자유게시판', sub: '자유롭게 이야기를 나누는 공간입니다' } };
+
+        function currentType() {
+            const path = window.location.pathname;
+            if (path === '/notice') return 'notice';
+            const m = path.match(/^\/board\/([a-z]+)/);
+            return (m && BOARD_LABELS[m[1]]) ? m[1] : 'free';
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str == null ? '' : String(str);
+            return div.innerHTML;
+        }
+
+        function formatDate(iso) {
+            try { return new Date(iso).toLocaleDateString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit' }); }
+            catch (e) { return ''; }
+        }
+
+        let CURRENT_TYPE = currentType();
+        let IS_ADMIN = false;
+        let LOGGED_IN = false;
+
+        function renderTabs() {
+            document.querySelectorAll('.board-tab').forEach(a => {
+                a.classList.toggle('active', a.getAttribute('data-type') === CURRENT_TYPE);
+            });
+            const meta = BOARD_LABELS[CURRENT_TYPE];
+            document.getElementById('hero-title').textContent = meta.emoji + ' ' + meta.name;
+            document.getElementById('hero-sub').textContent = meta.sub;
+            document.title = meta.name + ' - WITH+';
+        }
+
+        function updateWriteButtonVisibility() {
+            const btn = document.getElementById('write-btn');
+            if (!LOGGED_IN) { btn.style.display = 'none'; return; }
+            if (CURRENT_TYPE === 'notice' && !IS_ADMIN) { btn.style.display = 'none'; return; }
+            btn.style.display = 'inline-block';
+        }
+
+        async function loadPosts(search) {
+            const listEl = document.getElementById('post-list');
+            listEl.innerHTML = '<div class="empty-state">불러오는 중...</div>';
+            try {
+                const params = new URLSearchParams({ type: CURRENT_TYPE });
+                if (search) params.set('search', search);
+                const res = await fetch('/api/boards?' + params.toString());
+                const json = await res.json();
+                const posts = (json && json.data) || [];
+                if (!posts.length) {
+                    listEl.innerHTML = '<div class="empty-state">아직 등록된 게시글이 없습니다.' + (LOGGED_IN ? ' 첫 글을 남겨보세요!' : '') + '</div>';
+                    return;
+                }
+                listEl.innerHTML = posts.map(p => {
+                    const badge = CURRENT_TYPE === 'qa'
+                        ? (p.is_answered ? '<span class="badge-answered">답변완료</span>' : '<span class="badge-waiting">답변대기</span>')
+                        : '';
+                    return '<a class="post-row' + (p.is_pinned ? ' pinned' : '') + '" href="/board/' + CURRENT_TYPE + '/' + p.id + '">'
+                        + (p.is_pinned ? '<span class="pin">📌</span>' : '')
+                        + '<span class="title">' + escapeHtml(p.title) + badge + '</span>'
+                        + '<span class="meta"><span>' + escapeHtml(p.author_name || '회원') + '</span><span>' + formatDate(p.created_at) + '</span><span>조회 ' + (p.view_count || 0) + '</span></span>'
+                        + '</a>';
+                }).join('');
+            } catch (e) {
+                listEl.innerHTML = '<div class="empty-state">게시글을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.</div>';
+            }
+        }
+
+        function openWriteModal() {
+            document.getElementById('write-error').style.display = 'none';
+            document.getElementById('write-title').value = '';
+            document.getElementById('write-content').value = '';
+            document.getElementById('write-modal-title').textContent = BOARD_LABELS[CURRENT_TYPE].name + ' 글쓰기';
+            document.getElementById('write-modal-bg').classList.add('open');
+        }
+        function closeWriteModal() { document.getElementById('write-modal-bg').classList.remove('open'); }
+
+        async function submitPost() {
+            const title = document.getElementById('write-title').value.trim();
+            const content = document.getElementById('write-content').value.trim();
+            const errEl = document.getElementById('write-error');
+            if (!title || !content) {
+                errEl.textContent = '제목과 내용을 모두 입력해주세요.';
+                errEl.style.display = 'block';
+                return;
+            }
+            try {
+                const token = await WithPlus.getAccessToken();
+                if (!token) { window.location.href = '/login'; return; }
+                const res = await fetch('/api/boards', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                    body: JSON.stringify({ board_type: CURRENT_TYPE, title, content })
+                });
+                const json = await res.json();
+                if (!res.ok) {
+                    errEl.textContent = json.message || '게시글 등록에 실패했습니다.';
+                    errEl.style.display = 'block';
+                    return;
+                }
+                closeWriteModal();
+                loadPosts();
+            } catch (e) {
+                errEl.textContent = '게시글 등록 중 오류가 발생했습니다.';
+                errEl.style.display = 'block';
+            }
+        }
+
+        document.getElementById('write-btn').addEventListener('click', openWriteModal);
+        document.getElementById('write-cancel').addEventListener('click', closeWriteModal);
+        document.getElementById('write-submit').addEventListener('click', submitPost);
+        document.getElementById('write-modal-bg').addEventListener('click', (e) => { if (e.target.id === 'write-modal-bg') closeWriteModal(); });
+        document.getElementById('search-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            loadPosts(document.getElementById('search-input').value.trim());
+        });
+
+        (async function init() {
+            renderTabs();
+            loadPosts();
+            if (window.WithPlus && WithPlus.initHeader) WithPlus.initHeader();
+            try {
+                const token = await WithPlus.getAccessToken();
+                if (token) {
+                    LOGGED_IN = true;
+                    const res = await fetch('/api/me', { headers: { Authorization: 'Bearer ' + token } });
+                    const json = await res.json();
+                    IS_ADMIN = !!(json && json.data && (json.data.role === 'admin' || json.data.role === 'super_admin'));
+                }
+            } catch (e) { /* 비로그인 상태는 정상 */ }
+            updateWriteButtonVisibility();
+        })();
+    </script>
+</body>
+</html>

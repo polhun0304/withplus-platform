@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WITH+ 시작하기</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root { --primary-color: #D32F5B; --primary-dark: #B0154F; --text-dark: #333; --text-gray: #666; --border-color: #E0E0E0; }
+        body {
+            font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            color: white;
+            min-height: 100vh;
+            background: linear-gradient(160deg, var(--primary-color), var(--primary-dark));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .wrap { max-width: 400px; width: 100%; text-align: center; padding: 40px 0; }
+        .logo { font-size: 2.4em; font-weight: 800; margin-bottom: 6px; }
+        .logo .plus { color: #FFD9E6; }
+        .tagline { font-size: 1em; opacity: 0.95; margin-bottom: 34px; }
+        .illustration { font-size: 3.2em; margin-bottom: 30px; }
+        .org-brand { font-size: 1.15em; font-weight: 700; margin-bottom: 26px; }
+        .org-brand .org-sub { display: block; font-size: 0.7em; font-weight: 400; opacity: 0.9; margin-top: 2px; }
+        .benefit-list { text-align: left; margin: 0 auto 34px; max-width: 300px; }
+        .benefit-list .b-row { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 16px; }
+        .benefit-list .b-icon {
+            width: 34px; height: 34px; border-radius: 50%; background: rgba(255,255,255,0.18);
+            display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 1em;
+        }
+        .benefit-list .b-title { font-weight: 700; font-size: 0.9em; }
+        .benefit-list .b-desc { font-size: 0.8em; opacity: 0.9; margin-top: 2px; }
+
+        .social-btn {
+            display: block; width: 100%; padding: 13px; border-radius: 10px; border: none;
+            font-weight: 700; font-size: 0.92em; margin-bottom: 10px; cursor: pointer; text-decoration: none;
+        }
+        .social-btn.kakao { background: #FEE500; color: #191919; }
+        .social-btn.naver { background: #03C75A; color: white; }
+        .social-btn.email { background: white; color: var(--primary-color); }
+        .social-btn[disabled], .social-btn.disabled {
+            opacity: 0.55; cursor: not-allowed; position: relative;
+        }
+        .soon-badge {
+            font-size: 0.72em; background: rgba(0,0,0,0.15); border-radius: 8px; padding: 1px 7px; margin-left: 6px;
+        }
+        .social-note { font-size: 0.78em; opacity: 0.85; margin: 4px 0 20px; display: none; }
+        .social-note.show { display: block; }
+
+        .other-login { margin-top: 6px; }
+        .other-login a { color: white; text-decoration: underline; font-size: 0.85em; opacity: 0.9; }
+
+        .legal-note { font-size: 0.72em; opacity: 0.75; margin-top: 26px; line-height: 1.6; }
+        .legal-note a { color: white; }
+    </style>
+</head>
+<body>
+    <div class="wrap">
+        <div class="logo">WITH<span class="plus">+</span></div>
+        <div class="tagline">함께할수록 더 큰 나눔</div>
+
+        <div class="illustration">🤝</div>
+
+        <div class="org-brand" id="org-brand" style="display:none;"></div>
+
+        <div class="benefit-list">
+            <div class="b-row">
+                <div class="b-icon">🏦</div>
+                <div>
+                    <div class="b-title">공동체 적립 혜택</div>
+                    <div class="b-desc">구매 금액의 일부가 공동체에 적립됩니다</div>
+                </div>
+            </div>
+            <div class="b-row">
+                <div class="b-icon">🎟️</div>
+                <div>
+                    <div class="b-title">회원 전용 혜택</div>
+                    <div class="b-desc">할인, 쿠폰, 적립 등 다양한 혜택을 누리세요</div>
+                </div>
+            </div>
+            <div class="b-row">
+                <div class="b-icon">🌱</div>
+                <div>
+                    <div class="b-title">함께 성장</div>
+                    <div class="b-desc">우리의 작은 실천이 더 큰 나눔이 됩니다</div>
+                </div>
+            </div>
+        </div>
+
+        <button type="button" class="social-btn kakao disabled" id="kakao-btn">💬 카카오로 계속하기<span class="soon-badge">준비중</span></button>
+        <button type="button" class="social-btn naver disabled" id="naver-btn">N 네이버로 계속하기<span class="soon-badge">준비중</span></button>
+        <div class="social-note" id="social-note">카카오/네이버 로그인은 아직 준비 중입니다. 이메일로 계속해주세요.</div>
+
+        <a href="/join" class="social-btn email" id="email-cta">📧 이메일로 계속하기</a>
+
+        <div class="other-login">
+            <a href="/login" id="other-login-link">이미 계정이 있으신가요? 로그인</a>
+        </div>
+
+        <div class="legal-note">
+            로그인 시 WITH+ <a href="/terms">이용약관</a> 및 <a href="/privacy">개인정보처리방침</a>에<br>
+            동의한 것으로 간주됩니다.
+        </div>
+    </div>
+
+    <script src="/vendor/supabase.min.js"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        (async function () {
+            // 커뮤니티(교회) 랜딩페이지를 통해 들어온 경우, 해당 조직 브랜딩을 반영한다
+            const params = new URLSearchParams(location.search);
+            let communitySlug = params.get('community');
+            if (!communitySlug) {
+                try { communitySlug = localStorage.getItem('withplus_preferred_community_slug'); } catch (e) {}
+            }
+
+            if (communitySlug) {
+                try {
+                    const res = await fetch('/api/communities/' + encodeURIComponent(communitySlug));
+                    const json = await res.json();
+                    if (res.ok && json.success) {
+                        const c = json.data;
+                        const brandEl = document.getElementById('org-brand');
+                        brandEl.style.display = 'block';
+                        brandEl.innerHTML = `${WithPlus.escapeHtml(c.name)}<span class="org-sub">와 함께하는 WITH+</span>`;
+                        document.title = `${c.name}와 함께하는 WITH+`;
+                        if (c.primary_color) {
+                            document.body.style.background = `linear-gradient(160deg, ${c.primary_color}, ${c.primary_color}CC)`;
+                        }
+                    }
+                } catch (err) { /* 브랜딩 실패해도 기본 화면으로 계속 진행 */ }
+
+                // 이메일로 계속하기 / 로그인 링크에도 커뮤니티 컨텍스트를 전달
+                document.getElementById('email-cta').setAttribute('href', '/join?community=' + encodeURIComponent(communitySlug));
+                document.getElementById('other-login-link').setAttribute('href', '/login?community=' + encodeURIComponent(communitySlug));
+            }
+
+            // 카카오/네이버 로그인: 실제 앱 등록(API 키) 전이므로, 준비중임을 명확히 안내하고 실제 인증을 흉내내지 않는다
+            function showSoon() {
+                document.getElementById('social-note').classList.add('show');
+            }
+            document.getElementById('kakao-btn').addEventListener('click', showSoon);
+            document.getElementById('naver-btn').addEventListener('click', showSoon);
+
+            // 이미 로그인되어 있으면 바로 이동
+            const session = await WithPlus.getSession();
+            if (session) { location.href = '/mypage'; }
+        })();
+    </script>
+</body>
+</html>
