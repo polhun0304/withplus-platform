@@ -723,6 +723,33 @@
     });
   }
 
+  // ============================================
+  // GMWOS ↔ WITH+ 단일 로그인(SSO) 수신
+  // GMWOS(같은 Supabase 프로젝트)에서 로그인한 세션을 URL 해시(#wp_sso=1&at=..&rt=..)로
+  // 넘겨받아 이 도메인(onrender)에도 동일 세션을 심는다. 토큰은 심기 전에 URL/히스토리에서 즉시 제거.
+  // 해시는 서버로 전송되지 않으므로 서버 로그에 남지 않는다(Supabase OAuth 리다이렉트와 동일 패턴).
+  // ============================================
+  async function consumeSsoHandoff() {
+    let hash = '';
+    try { hash = location.hash || ''; } catch (e) { return; }
+    if (hash.indexOf('wp_sso=1') === -1) return;
+    const p = new URLSearchParams(hash.replace(/^#/, ''));
+    const at = p.get('at');
+    const rt = p.get('rt');
+    // 토큰을 URL/히스토리에서 먼저 제거 (심기 전에)
+    try { history.replaceState(null, '', location.pathname + location.search); }
+    catch (e) { try { location.hash = ''; } catch (e2) {} }
+    if (!at || !rt) return;
+    try {
+      const client = await getClient();
+      const { error } = await client.auth.setSession({ access_token: at, refresh_token: rt });
+      if (!error) {
+        // 세션이 반영된 상태로 전체 페이지 재초기화(헤더 로그인표시·장바구니 동기화 등)
+        location.replace(location.pathname + location.search);
+      }
+    } catch (e) { /* 실패해도 일반 로그인 흐름으로 계속 진행 */ }
+  }
+
   global.WithPlus = {
     API_BASE,
     CATEGORY_MAP,
@@ -771,6 +798,9 @@
   // 어느 페이지든 이 스크립트만 불러오면 자동으로 배너 여부를 판단하도록 한다
   // (index/category/search 처럼 initCategoryNav를 쓰는 페이지뿐 아니라 상품상세·마이페이지 등에서도
   //  "특정 매장 보는 중" 상태를 알아채고 빠져나갈 수 있어야 하기 때문에, 카테고리 렌더링과는 별도로 항상 실행한다)
+  // GMWOS에서 넘어온 SSO 세션이 있으면 먼저 이식(성공 시 재로딩되어 로그인 상태로 시작)
+  consumeSsoHandoff();
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', renderCommunityBanner);
   } else {
