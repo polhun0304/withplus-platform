@@ -1780,7 +1780,7 @@ const MODULE_REGISTRY = [
   { key: 'admin_mfa', category: '회원·커뮤니티', icon: '🔐', name: '관리자 2단계 인증(2FA)', desc: '관리자 본인 계정에 TOTP 기반 2단계 인증을 설정합니다(Supabase Auth MFA 기능 사용).', status: 'active', tabTarget: 'settings' },
   { key: 'account_withdrawal', category: '회원·커뮤니티', icon: '🚪', name: '회원 탈퇴', desc: '회원이 마이페이지에서 직접 탈퇴 신청을 할 수 있습니다. 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
   { key: 'audit_log', category: '회원·커뮤니티', icon: '🕵️', name: '관리자 감사로그', desc: '관리자/최고관리자의 주요 API 호출(등록·수정·삭제 등 57개 엔드포인트)을 자동으로 기록합니다(최고관리자 전용, 민감정보는 마스킹). ', status: 'active', tabTarget: 'audit-log' },
-  { key: 'wms', category: '재고·물류', icon: '🏭', name: '창고관리(WMS)', desc: '이벤트소싱 재고원장, 바코드/Lot 추적, 창고 로케이션(Zone-Rack-Bin), 2D 디지털트윈 평면도(다층 지원)와 AGV 이동 시뮬레이션까지 지원합니다.', status: 'active', tabTarget: 'wms' },
+  { key: 'wms', category: '재고·물류', icon: '🏭', name: '창고관리(WMS)', desc: '이벤트소싱 재고원장, 바코드/Lot 추적, 창고 로케이션(Zone-Rack-Bin), 2D 디지털트윈 평면도(다층 + 층별 최대 5단 복층 지원)와 AGV 이동 시뮬레이션까지 지원합니다.', status: 'active', tabTarget: 'wms' },
   { key: 'marketing_automation', category: '적립·혜택', icon: '📢', name: '마케팅자동화', desc: '등급/누적구매액/주문건수/미구매기간/가입일 조건으로 회원을 골라 타겟 쿠폰을 즉시 발급하는 세그먼트 캠페인과, 등급유지·구매마일스톤 조건을 매일 자동 스캔해 발급하는 자동 쿠폰 규칙을 지원합니다.', status: 'active', tabTarget: 'marketing' },
   { key: 'supplier_settlements', category: '판매·상품 관리', icon: '💰', name: '공급자 정산 관리', desc: '기간별로 공급자(판매자)의 매출·수수료·정산금액을 자동 집계하고, 정산 처리(지급완료 표시)까지 관리합니다.', status: 'active', tabTarget: 'settlements' }
 ];
@@ -3751,6 +3751,43 @@ async function verifyBusinessNumberWithNTS(bizNo) {
   }
 }
 
+// 사업자등록번호 검증 결과를 updates 객체에 반영한다 (suppliers 외에 communities 등 다른 테이블에서도 재사용).
+// existingNumber: 이미 저장되어 있던 값(신규 생성이면 undefined) - 값이 실제로 바뀔 때만 국세청에 재조회한다.
+// 반환값: { error: { status, message } } 면 그대로 응답에 사용, 그 외에는 { warning? } (형식만 통과하고 실시간 조회는 못한 경우 안내문구)
+async function applyBusinessNumberVerification(updates, businessNumber, existingNumber) {
+  updates.business_number = businessNumber || null;
+  const numberChanged = existingNumber !== (businessNumber || null);
+
+  if (businessNumber && numberChanged) {
+    if (!isValidBusinessNumberFormat(businessNumber)) {
+      return { error: { status: 400, message: '유효하지 않은 사업자등록번호입니다 (형식 오류)' } };
+    }
+    const ntsResult = await verifyBusinessNumberWithNTS(businessNumber);
+    if (ntsResult.checked) {
+      if (!ntsResult.exists) {
+        return { error: { status: 400, message: '국세청에 등록되지 않은 사업자등록번호입니다' } };
+      }
+      if (ntsResult.status === '폐업자') {
+        return { error: { status: 400, message: `국세청 조회 결과 폐업 상태인 사업자등록번호입니다 (상태: ${ntsResult.status})` } };
+      }
+      updates.business_number_verified = ntsResult.active;
+      updates.business_number_status = ntsResult.status;
+      updates.business_number_verified_at = new Date().toISOString();
+      return {};
+    }
+    updates.business_number_verified = false;
+    updates.business_number_status = null;
+    updates.business_number_verified_at = null;
+    return { warning: ntsResult.reason };
+  }
+  if (!businessNumber) {
+    updates.business_number_verified = false;
+    updates.business_number_status = null;
+    updates.business_number_verified_at = null;
+  }
+  return {};
+}
+
 // ============================================
 // 공급자(거래처) 관리 API - 관리자 전용
 // 여기서 말하는 "공급자"는 플랫폼에 로그인해 상품을 등록하는 판매자 계정(provider role, products_with.supplier_id)과는
@@ -4107,9 +4144,73 @@ app.get('/api/products/:id', async (req, res) => {
 });
 
 // 상품 생성 (공급자 전용)
+// 공급가액/부가세 - 입력값이 없으면 판매가(price)를 부가세 포함가로 보고 표준 10% 세율로 자동 역산한다
+// (유통기한/규격/공급가액/부가세 항목이 상품DB에 없던 것을 보완하면서 함께 추가한 헬퍼)
+function computeVatSplit(price, suppliedSupplyAmount, suppliedVatAmount) {
+  if (suppliedSupplyAmount !== undefined || suppliedVatAmount !== undefined) {
+    const supply = suppliedSupplyAmount !== undefined && suppliedSupplyAmount !== null && suppliedSupplyAmount !== ''
+      ? Number(suppliedSupplyAmount) : null;
+    const vat = suppliedVatAmount !== undefined && suppliedVatAmount !== null && suppliedVatAmount !== ''
+      ? Number(suppliedVatAmount) : null;
+    return { supply_amount: supply, vat_amount: vat };
+  }
+  const p = Number(price) || 0;
+  const supply = Math.round(p / 1.1);
+  return { supply_amount: supply, vat_amount: p - supply };
+}
+
+// 상품 바코드/상품코드 자동채번 — 'P' + 6자리 순번(이카운트 등 외부 코드 접두사 A/B/C와 겹치지 않게 구분). 항상 미사용 값만 반환한다.
+app.get('/api/admin/products/suggest-barcode', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('products_with')
+      .select('barcode')
+      .like('barcode', 'P______')
+      .order('barcode', { ascending: false })
+      .limit(1);
+    if (error) throw error;
+    let nextNum = 1;
+    if (data && data[0] && data[0].barcode) {
+      const m = String(data[0].barcode).match(/^P(\d{6})$/);
+      if (m) nextNum = parseInt(m[1], 10) + 1;
+    }
+    let candidate = 'P' + String(nextNum).padStart(6, '0');
+    // 동시성 등으로 이미 존재할 가능성에 대비해, 비어있는 값을 찾을 때까지 순번을 올려가며 확인한다 (최대 50회 시도)
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const { data: exists } = await supabase.from('products_with').select('id').eq('barcode', candidate).maybeSingle();
+      if (!exists) break;
+      nextNum++;
+      candidate = 'P' + String(nextNum).padStart(6, '0');
+    }
+    res.json({ success: true, data: { barcode: candidate }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error suggesting barcode:', err);
+    res.status(500).json({ error: 'Failed to suggest barcode', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 상품 바코드/상품코드 중복 확인 — 등록/수정 화면에서 입력 즉시 확인용 (exclude_id: 수정 중인 상품 자신은 제외)
+app.get('/api/admin/products/check-barcode', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const barcode = String(req.query.barcode || '').trim();
+    const excludeId = req.query.exclude_id ? String(req.query.exclude_id) : null;
+    if (!barcode) {
+      return res.status(400).json({ error: 'Bad Request', message: '확인할 바코드를 입력해주세요', timestamp: new Date().toISOString() });
+    }
+    let query = supabase.from('products_with').select('id, name').eq('barcode', barcode);
+    if (excludeId) query = query.neq('id', excludeId);
+    const { data, error } = await query.maybeSingle();
+    if (error) throw error;
+    res.json({ success: true, data: { available: !data, existing: data || null }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error checking barcode:', err);
+    res.status(500).json({ error: 'Failed to check barcode', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 app.post('/api/products', authenticate, async (req, res) => {
   try {
-    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, vendor_id, subscription_available, barcode } = req.body;
+    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, vendor_id, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount } = req.body;
 
     if (!name || !price || !category) {
       return res.status(400).json({
@@ -4119,6 +4220,7 @@ app.post('/api/products', authenticate, async (req, res) => {
       });
     }
 
+    const vatSplit = computeVatSplit(price, supply_amount, vat_amount);
     const initialStock = stock ? parseInt(stock, 10) : 0;
     const { data, error } = await supabase
       .from('products_with')
@@ -4132,6 +4234,10 @@ app.post('/api/products', authenticate, async (req, res) => {
         category,
         stock: 0,
         barcode: barcode ? String(barcode).trim() : null,
+        expiry_date: expiry_date || null,
+        spec: spec ? String(spec).trim() : null,
+        supply_amount: vatSplit.supply_amount,
+        vat_amount: vatSplit.vat_amount,
         images_urls: images_urls || [],
         detail_sections: sanitizeDetailSections(detail_sections),
         supplier_id: req.user.id,
@@ -4145,6 +4251,9 @@ app.post('/api/products', authenticate, async (req, res) => {
     if (error) {
       if (error.code === '23503') {
         return res.status(400).json({ error: 'Bad Request', message: '존재하지 않는 공급자입니다', timestamp: new Date().toISOString() });
+      }
+      if (error.code === '23505') {
+        return res.status(409).json({ error: 'Conflict', message: '이미 사용 중인 바코드/상품코드입니다. 다른 코드를 입력하거나 자동생성을 이용해주세요', timestamp: new Date().toISOString() });
       }
       throw error;
     }
@@ -4179,7 +4288,7 @@ app.post('/api/products', authenticate, async (req, res) => {
 app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, status, vendor_id, subscription_available, barcode } = req.body;
+    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, status, vendor_id, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount } = req.body;
 
     const { data: existing, error: findErr } = await supabase
       .from('products_with')
@@ -4208,6 +4317,13 @@ app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'su
     if (vendor_id !== undefined) updates.vendor_id = vendor_id || null;
     if (subscription_available !== undefined) updates.subscription_available = !!subscription_available;
     if (barcode !== undefined) updates.barcode = barcode ? String(barcode).trim() : null;
+    if (expiry_date !== undefined) updates.expiry_date = expiry_date || null;
+    if (spec !== undefined) updates.spec = spec ? String(spec).trim() : null;
+    if (supply_amount !== undefined || vat_amount !== undefined) {
+      const vatSplit = computeVatSplit(price !== undefined ? price : undefined, supply_amount, vat_amount);
+      if (vatSplit.supply_amount !== null) updates.supply_amount = vatSplit.supply_amount;
+      if (vatSplit.vat_amount !== null) updates.vat_amount = vatSplit.vat_amount;
+    }
 
     // 옵션(사이즈/색상 등)이 등록된 상품은 재고가 "옵션별 재고의 합"으로 자동 관리되므로,
     // 여기로 직접 들어온 재고값은 무시한다 (옵션 재고는 /api/admin/product-variants/:id 로 조정).
@@ -4248,6 +4364,9 @@ app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'su
       if (error) {
         if (error.code === '23503') {
           return res.status(400).json({ error: 'Bad Request', message: '존재하지 않는 공급자입니다', timestamp: new Date().toISOString() });
+        }
+        if (error.code === '23505') {
+          return res.status(409).json({ error: 'Conflict', message: '이미 사용 중인 바코드/상품코드입니다. 다른 코드를 입력하거나 자동생성을 이용해주세요', timestamp: new Date().toISOString() });
         }
         throw error;
       }
@@ -4303,6 +4422,41 @@ app.delete('/api/products/:id', authenticate, requireRole(['provider', 'admin', 
   }
 });
 
+// 상품 소유 계정(supplier_id) 재배정 — 관리자 전용.
+// 쇼핑몰이 상품을 직접 등록해 자체재고로 운영하다가 나중에 특정 공급자에게 위탁하거나, 반대로
+// 공급자 상품을 쇼핑몰이 직접 사입/자체재고로 전환하고 싶을 때 사용한다(둘 다 같은 products_with 테이블을
+// 쓰고 supplier_id만 다르므로, 상품을 새로 만들지 않고도 소유를 옮길 수 있다).
+app.patch('/api/products/:id/supplier', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { supplier_id, supplier_email } = req.body;
+    if (!supplier_id && !supplier_email) {
+      return res.status(400).json({ error: 'Bad Request', message: 'supplier_id 또는 supplier_email 중 하나는 필수입니다', timestamp: new Date().toISOString() });
+    }
+    const lookupQuery = supabase.from('profiles').select('id, role, full_name, email');
+    const { data: targetProfile, error: profErr } = supplier_id
+      ? await lookupQuery.eq('id', supplier_id).maybeSingle()
+      : await lookupQuery.eq('email', String(supplier_email).trim().toLowerCase()).maybeSingle();
+    if (profErr) throw profErr;
+    if (!targetProfile) {
+      return res.status(400).json({ error: 'Bad Request', message: '존재하지 않는 계정입니다', timestamp: new Date().toISOString() });
+    }
+    if (!['provider', 'admin', 'super_admin'].includes(targetProfile.role)) {
+      return res.status(400).json({ error: 'Bad Request', message: '상품 소유 계정은 공급자(provider) 또는 관리자 계정이어야 합니다', timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase.from('products_with').update({ supplier_id: targetProfile.id }).eq('id', req.params.id).select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '상품을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({
+      success: true, data,
+      message: `상품 소유가 "${targetProfile.full_name || targetProfile.email}" 계정(${targetProfile.role === 'provider' ? '공급자' : '관리자/자체재고'})으로 변경되었습니다`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error reassigning product supplier:', err);
+    res.status(500).json({ error: 'Failed to reassign product supplier', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 // 관리자/공급자용 상품 목록 (상태 무관 전체 조회 - 관리자는 전체, 공급자는 본인 상품만)
 app.get('/api/admin/products', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
@@ -4315,7 +4469,25 @@ app.get('/api/admin/products', authenticate, requireRole(['provider', 'admin', '
     const { data, error } = await query;
     if (error) throw error;
 
-    res.json({ success: true, data: data || [], count: data?.length || 0, timestamp: new Date().toISOString() });
+    // 관리자 화면에서 "자체재고(쇼핑몰 직접 등록)" 상품과 "공급자 위탁" 상품을 한눈에 구분할 수 있도록
+    // 소유 계정의 role/이름을 함께 내려준다(공급자 정산 로직과 동일한 기준: role='provider'만 "공급자").
+    const supplierIds = [...new Set((data || []).map(p => p.supplier_id).filter(Boolean))];
+    const { data: ownerProfiles } = supplierIds.length
+      ? await supabase.from('profiles').select('id, role, full_name, email').in('id', supplierIds)
+      : { data: [] };
+    const ownerMap = {};
+    (ownerProfiles || []).forEach(p => { ownerMap[p.id] = p; });
+    const enriched = (data || []).map(p => {
+      const owner = ownerMap[p.supplier_id];
+      return {
+        ...p,
+        owner_role: owner ? owner.role : null,
+        owner_name: owner ? (owner.full_name || owner.email) : null,
+        is_self_stocked: !owner || owner.role !== 'provider' // 소유 계정이 provider가 아니면(관리자 등) 쇼핑몰 자체재고로 간주
+      };
+    });
+
+    res.json({ success: true, data: enriched, count: enriched.length, timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error fetching admin products:', err);
     res.status(500).json({ error: 'Failed to fetch products', message: err.message, timestamp: new Date().toISOString() });
@@ -4743,7 +4915,457 @@ app.post('/api/admin/inventory/scan', authenticate, requireRole(['provider', 'ad
   }
 });
 
+// ---- 기타이동(창고이동/자가사용/불량처리/재고조정) ----
+// 실제 운영 중인 여러 물리 창고(A1/A2/B1/B2/C 등, warehouses_with) 사이의 재고 이동과,
+// 판매 외 사유로 재고가 줄어드는 상황(자가사용/불량)을 이력에 명확히 남기기 위한 카테고리형 처리.
+// 모두 stock_adjustments_with 원장(adjust_stock_with RPC)을 그대로 사용하므로 기존 재고 집계/판매 로직과 완전히 호환된다.
+const WMS_WRITE_OFF_REASONS = { self_use: '자가사용', defect: '불량처리' };
+
+// 창고(로케이션) 간 재고 이동 — 순증감 0이 되도록 출발지에 -수량, 도착지에 +수량 두 건의 이력을 남긴다.
+app.post('/api/admin/inventory/transfer', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { product_id, variant_id, from_location_id, to_location_id, quantity, note } = req.body;
+    if (!product_id || !from_location_id || !to_location_id || quantity === undefined || quantity === null) {
+      return res.status(400).json({ error: 'Bad Request', message: 'product_id, from_location_id, to_location_id, quantity는 필수입니다', timestamp: new Date().toISOString() });
+    }
+    if (String(from_location_id) === String(to_location_id)) {
+      return res.status(400).json({ error: 'Bad Request', message: '출발 로케이션과 도착 로케이션이 같습니다', timestamp: new Date().toISOString() });
+    }
+    const qtyNum = parseInt(quantity, 10);
+    if (!Number.isFinite(qtyNum) || qtyNum <= 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'quantity는 1 이상의 정수여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const access = await assertProductAccess(product_id, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+    const noteSuffix = note ? ` (${String(note).trim()})` : '';
+
+    const { error: outErr } = await supabase.rpc('adjust_stock_with', {
+      p_product_id: product_id, p_variant_id: variant_id || null, p_delta: -qtyNum,
+      p_reason: `창고이동 - 출고${noteSuffix}`, p_order_id: null, p_created_by: req.user.id,
+      p_location_id: from_location_id, p_scan_source: 'admin_manual'
+    });
+    if (outErr) {
+      if (outErr.message && outErr.message.includes('INSUFFICIENT_STOCK')) {
+        return res.status(400).json({ error: 'Bad Request', message: '출발 로케이션의 재고보다 많이 이동할 수 없습니다', timestamp: new Date().toISOString() });
+      }
+      throw outErr;
+    }
+    const { data: newStock, error: inErr } = await supabase.rpc('adjust_stock_with', {
+      p_product_id: product_id, p_variant_id: variant_id || null, p_delta: qtyNum,
+      p_reason: `창고이동 - 입고${noteSuffix}`, p_order_id: null, p_created_by: req.user.id,
+      p_location_id: to_location_id, p_scan_source: 'admin_manual'
+    });
+    if (inErr) throw inErr; // 입고 실패 시 총 재고량은 이미 -qtyNum 만큼 줄어든 상태이므로 이력을 보고 수동 보정 필요 (극히 드문 DB 오류 상황)
+
+    if (variant_id) await syncProductStockFromVariants(product_id);
+    res.json({ success: true, data: { stock: newStock }, message: '창고 간 재고 이동이 완료되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error transferring stock:', err);
+    res.status(500).json({ error: 'Failed to transfer stock', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 판매 외 사유(자가사용/불량처리)로 인한 재고 차감 — 사유를 카테고리로 강제해 이력을 명확히 남긴다.
+app.post('/api/admin/inventory/write-off', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { product_id, variant_id, quantity, category, location_id, note } = req.body;
+    if (!product_id || quantity === undefined || quantity === null || !category) {
+      return res.status(400).json({ error: 'Bad Request', message: 'product_id, quantity, category는 필수입니다', timestamp: new Date().toISOString() });
+    }
+    if (!WMS_WRITE_OFF_REASONS[category]) {
+      return res.status(400).json({ error: 'Bad Request', message: `category는 ${Object.keys(WMS_WRITE_OFF_REASONS).join('/')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+    }
+    const qtyNum = parseInt(quantity, 10);
+    if (!Number.isFinite(qtyNum) || qtyNum <= 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'quantity는 1 이상의 정수여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const access = await assertProductAccess(product_id, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+    const reasonLabel = WMS_WRITE_OFF_REASONS[category] + (note ? ` (${String(note).trim()})` : '');
+
+    const { data: newStock, error } = await supabase.rpc('adjust_stock_with', {
+      p_product_id: product_id, p_variant_id: variant_id || null, p_delta: -qtyNum,
+      p_reason: reasonLabel, p_order_id: null, p_created_by: req.user.id,
+      p_location_id: location_id || null, p_scan_source: 'admin_manual'
+    });
+    if (error) {
+      if (error.message && error.message.includes('INSUFFICIENT_STOCK')) {
+        return res.status(400).json({ error: 'Bad Request', message: '재고보다 많이 처리할 수 없습니다', timestamp: new Date().toISOString() });
+      }
+      throw error;
+    }
+    if (variant_id) await syncProductStockFromVariants(product_id);
+    res.json({ success: true, data: { stock: newStock }, message: `${WMS_WRITE_OFF_REASONS[category]} 처리가 완료되었습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error processing write-off:', err);
+    res.status(500).json({ error: 'Failed to process write-off', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 재고실사(현물 카운트) 차이 자동 보정 — 관리자가 실사로 센 실제 수량을 입력하면 현재 시스템 재고와의 차이만큼 자동으로 +/- 이력을 남긴다.
+app.post('/api/admin/inventory/stocktake', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { product_id, variant_id, counted_quantity, location_id, note } = req.body;
+    if (!product_id || counted_quantity === undefined || counted_quantity === null) {
+      return res.status(400).json({ error: 'Bad Request', message: 'product_id와 counted_quantity는 필수입니다', timestamp: new Date().toISOString() });
+    }
+    const countedNum = parseInt(counted_quantity, 10);
+    if (!Number.isFinite(countedNum) || countedNum < 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'counted_quantity는 0 이상의 정수여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const access = await assertProductAccess(product_id, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+
+    let currentStock;
+    if (variant_id) {
+      const { data: variant, error: vErr } = await supabase.from('product_variants_with').select('stock').eq('id', variant_id).maybeSingle();
+      if (vErr) throw vErr;
+      if (!variant) return res.status(404).json({ error: 'Not Found', message: '옵션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+      currentStock = variant.stock;
+    } else {
+      const { data: product, error: pErr } = await supabase.from('products_with').select('stock').eq('id', product_id).maybeSingle();
+      if (pErr) throw pErr;
+      if (!product) return res.status(404).json({ error: 'Not Found', message: '상품을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+      currentStock = product.stock;
+    }
+
+    const delta = countedNum - Number(currentStock || 0);
+    if (delta === 0) {
+      return res.json({ success: true, data: { stock: currentStock, delta: 0 }, message: '실사 수량이 시스템 재고와 일치합니다 (변경 없음)', timestamp: new Date().toISOString() });
+    }
+    const reasonLabel = `재고실사 차이 보정(${delta > 0 ? '+' : ''}${delta})` + (note ? ` - ${String(note).trim()}` : '');
+
+    const { data: newStock, error } = await supabase.rpc('adjust_stock_with', {
+      p_product_id: product_id, p_variant_id: variant_id || null, p_delta: delta,
+      p_reason: reasonLabel, p_order_id: null, p_created_by: req.user.id,
+      p_location_id: location_id || null, p_scan_source: 'admin_manual'
+    });
+    if (error) {
+      if (error.message && error.message.includes('INSUFFICIENT_STOCK')) {
+        return res.status(400).json({ error: 'Bad Request', message: '재고 보정 처리 중 오류가 발생했습니다', timestamp: new Date().toISOString() });
+      }
+      throw error;
+    }
+    if (variant_id) await syncProductStockFromVariants(product_id);
+    res.json({ success: true, data: { stock: newStock, delta }, message: `재고실사 차이(${delta > 0 ? '+' : ''}${delta})가 보정되었습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error processing stocktake:', err);
+    res.status(500).json({ error: 'Failed to process stocktake', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ---- 다채널 판매(쇼핑몰/라이브방송/오프라인) ----
+// 쇼핑몰(온라인) 매출은 기존 주문(orders_with) 플로우를 그대로 사용한다.
+// 라이브방송/오프라인 매장은 회원가입 없는 손님도 많고 결제도 그 자리에서 즉시 끝나는 경우가 대부분이라
+// 장바구니/배송/마일리지가 딸린 무거운 주문 플로우 대신, 여기서 가볍게 "판매 기록"만 남기고
+// 재고 차감은 온라인 주문과 완전히 동일한 adjust_stock_with()로 처리해 재고 풀을 하나로 공유한다.
+// → 온라인에서 막 팔린 상품을 모르고 오프라인/라이브에서 또 파는 초과판매를 원천적으로 방지한다.
+const WMS_CHANNEL_LABEL = { offline: '오프라인 매장', live: '라이브방송' };
+const WMS_CHANNEL_SCAN_SOURCE = { offline: 'offline_pos', live: 'live_commerce' };
+
+app.post('/api/admin/inventory/channel-sales', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { product_id, variant_id, channel, quantity, unit_price, channel_ref, memo } = req.body;
+    if (!product_id || !WMS_CHANNEL_LABEL[channel]) {
+      return res.status(400).json({ error: 'Bad Request', message: `product_id와 channel(${Object.keys(WMS_CHANNEL_LABEL).join('/')})은 필수입니다`, timestamp: new Date().toISOString() });
+    }
+    const qty = parseInt(quantity, 10);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'quantity는 1 이상의 정수여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const unitPriceNum = Number.isFinite(Number(unit_price)) && Number(unit_price) >= 0 ? Number(unit_price) : 0;
+    const totalAmount = qty * unitPriceNum; // 매출 금액은 서버가 직접 계산(클라이언트 값을 신뢰하지 않음)
+
+    const access = await assertProductAccess(product_id, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+
+    const { data: sale, error: saleErr } = await supabase
+      .from('channel_sales_with')
+      .insert([{
+        product_id, variant_id: variant_id || null, channel,
+        quantity: qty, unit_price: unitPriceNum, total_amount: totalAmount,
+        channel_ref: channel_ref ? String(channel_ref).trim() : null,
+        memo: memo ? String(memo).trim() : null,
+        created_by: req.user.id
+      }])
+      .select()
+      .single();
+    if (saleErr) throw saleErr;
+
+    const { error: stockErr } = await supabase.rpc('adjust_stock_with', {
+      p_product_id: product_id, p_variant_id: variant_id || null, p_delta: -qty,
+      p_reason: `${WMS_CHANNEL_LABEL[channel]} 판매`, p_order_id: null, p_created_by: req.user.id,
+      p_scan_source: WMS_CHANNEL_SCAN_SOURCE[channel], p_channel_sale_id: sale.id
+    });
+    if (stockErr) {
+      // 재고 부족 등으로 차감이 실패하면 방금 만든 판매 기록도 되돌려 남기지 않는다(부분 실패 방지)
+      await supabase.from('channel_sales_with').delete().eq('id', sale.id);
+      if (stockErr.message && stockErr.message.includes('INSUFFICIENT_STOCK')) {
+        return res.status(400).json({ error: 'Bad Request', message: '재고보다 많이 판매할 수 없습니다', timestamp: new Date().toISOString() });
+      }
+      throw stockErr;
+    }
+    if (variant_id) await syncProductStockFromVariants(product_id);
+
+    res.status(201).json({ success: true, data: sale, message: `${WMS_CHANNEL_LABEL[channel]} 판매가 등록되고 재고가 차감되었습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating channel sale:', err);
+    res.status(500).json({ error: 'Failed to create channel sale', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/inventory/channel-sales', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, parseInt(req.query.pageSize, 10) || 30));
+    const from = (page - 1) * pageSize;
+    const to = from + pageSize - 1;
+
+    let query = supabase
+      .from('channel_sales_with')
+      .select('*, products_with(name, supplier_id), product_variants_with(name)', { count: 'exact' })
+      .order('created_at', { ascending: false });
+
+    if (!isAdminRole(req.userRole)) {
+      const { data: myProducts } = await supabase.from('products_with').select('id').eq('supplier_id', req.user.id);
+      const ids = (myProducts || []).map(p => p.id);
+      if (ids.length === 0) {
+        return res.json({ success: true, data: [], pagination: { page, pageSize, total: 0, totalPages: 0 }, timestamp: new Date().toISOString() });
+      }
+      query = query.in('product_id', ids);
+    }
+    if (req.query.channel) query = query.eq('channel', req.query.channel);
+    if (req.query.status) query = query.eq('status', req.query.status);
+    if (req.query.productId) query = query.eq('product_id', req.query.productId);
+    if (req.query.dateFrom) query = query.gte('created_at', req.query.dateFrom);
+    if (req.query.dateTo) query = query.lte('created_at', req.query.dateTo);
+
+    const { data, error, count } = await query.range(from, to);
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      data: (data || []).map(row => ({
+        ...row,
+        product_name: row.products_with ? row.products_with.name : null,
+        variant_name: row.product_variants_with ? row.product_variants_with.name : null,
+        products_with: undefined, product_variants_with: undefined
+      })),
+      pagination: { page, pageSize, total: count || 0, totalPages: Math.ceil((count || 0) / pageSize) },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching channel sales:', err);
+    res.status(500).json({ error: 'Failed to fetch channel sales', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 채널별(오늘/기간) 매출 요약 — 쇼핑몰(orders_with) + 라이브방송/오프라인(channel_sales_with)을 한 화면에서 비교
+app.get('/api/admin/inventory/channel-sales/summary', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const dateFrom = req.query.dateFrom || new Date(new Date().setHours(0, 0, 0, 0)).toISOString();
+    const dateTo = req.query.dateTo || new Date().toISOString();
+
+    const { data: onlineOrders, error: onlineErr } = await supabase
+      .from('orders_with')
+      .select('final_price, status')
+      .gte('created_at', dateFrom)
+      .lte('created_at', dateTo);
+    if (onlineErr) throw onlineErr;
+    const onlineValid = (onlineOrders || []).filter(o => o.status !== 'cancelled' && o.status !== 'refunded');
+    const onlineRevenue = onlineValid.reduce((s, o) => s + Number(o.final_price || 0), 0);
+
+    const { data: channelSales, error: chErr } = await supabase
+      .from('channel_sales_with')
+      .select('channel, total_amount, status')
+      .gte('created_at', dateFrom)
+      .lte('created_at', dateTo);
+    if (chErr) throw chErr;
+    const validChannelSales = (channelSales || []).filter(s => s.status !== 'cancelled');
+    const sumBy = (ch) => validChannelSales.filter(s => s.channel === ch).reduce((s, r) => s + Number(r.total_amount || 0), 0);
+    const countBy = (ch) => validChannelSales.filter(s => s.channel === ch).length;
+
+    const offlineRevenue = sumBy('offline');
+    const liveRevenue = sumBy('live');
+
+    res.json({
+      success: true,
+      data: {
+        dateFrom, dateTo,
+        online: { revenue: onlineRevenue, count: onlineValid.length },
+        offline: { revenue: offlineRevenue, count: countBy('offline') },
+        live: { revenue: liveRevenue, count: countBy('live') },
+        total: onlineRevenue + offlineRevenue + liveRevenue
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching channel sales summary:', err);
+    res.status(500).json({ error: 'Failed to fetch channel sales summary', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.patch('/api/admin/inventory/channel-sales/:id/cancel', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: sale, error: findErr } = await supabase.from('channel_sales_with').select('*').eq('id', req.params.id).maybeSingle();
+    if (findErr) throw findErr;
+    if (!sale) return res.status(404).json({ error: 'Not Found', message: '판매 기록을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (sale.status === 'cancelled') {
+      return res.status(400).json({ error: 'Bad Request', message: '이미 취소된 판매입니다', timestamp: new Date().toISOString() });
+    }
+    const access = await assertProductAccess(sale.product_id, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+
+    const { error: stockErr } = await supabase.rpc('adjust_stock_with', {
+      p_product_id: sale.product_id, p_variant_id: sale.variant_id, p_delta: sale.quantity,
+      p_reason: `${WMS_CHANNEL_LABEL[sale.channel] || sale.channel} 판매 취소(재고 복원)`, p_order_id: null, p_created_by: req.user.id,
+      p_scan_source: 'channel_sale_cancel', p_channel_sale_id: sale.id
+    });
+    if (stockErr) throw stockErr;
+    if (sale.variant_id) await syncProductStockFromVariants(sale.product_id);
+
+    const { data, error } = await supabase
+      .from('channel_sales_with')
+      .update({ status: 'cancelled', cancelled_at: new Date().toISOString(), cancelled_by: req.user.id })
+      .eq('id', sale.id)
+      .select()
+      .single();
+    if (error) throw error;
+
+    res.json({ success: true, data, message: '판매가 취소되고 재고가 복원되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error cancelling channel sale:', err);
+    res.status(500).json({ error: 'Failed to cancel channel sale', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ---- 창고(Warehouse) 마스터 ----
+// warehouses_with: 실제 물리적으로 분리된 건물/동 단위의 창고 목록(예: A1/A2/B1/B2/C 등).
+// warehouse_locations_with(Zone-Rack-Bin 로케이션)는 선택적으로 warehouse_code FK를 통해 이 마스터에 연결된다.
+app.get('/api/admin/inventory/warehouses', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('warehouses_with').select('*').order('code', { ascending: true });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching warehouses:', err);
+    res.status(500).json({ error: 'Failed to fetch warehouses', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 창고 코드 자동채번 — 'WH' + 2자리 순번(기존 A1/B1/C 같은 수기 코드와 겹치지 않는 새 접두사 사용)
+app.get('/api/admin/inventory/warehouses/suggest-code', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('warehouses_with').select('code').like('code', 'WH%').order('code', { ascending: false });
+    if (error) throw error;
+    let maxSeq = 0;
+    (data || []).forEach(row => {
+      const m = String(row.code || '').match(/^WH(\d{2,})$/);
+      if (m) maxSeq = Math.max(maxSeq, parseInt(m[1], 10));
+    });
+    let seq = maxSeq + 1;
+    let candidate = 'WH' + String(seq).padStart(2, '0');
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const { data: exists } = await supabase.from('warehouses_with').select('code').eq('code', candidate).maybeSingle();
+      if (!exists) break;
+      seq++;
+      candidate = 'WH' + String(seq).padStart(2, '0');
+    }
+    res.json({ success: true, data: { code: candidate }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error suggesting warehouse code:', err);
+    res.status(500).json({ error: 'Failed to suggest warehouse code', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 창고 코드 중복 확인
+app.get('/api/admin/inventory/warehouses/check-code', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const code = String(req.query.code || '').trim();
+    if (!code) return res.status(400).json({ error: 'Bad Request', message: '확인할 코드를 입력해주세요', timestamp: new Date().toISOString() });
+    const { data, error } = await supabase.from('warehouses_with').select('code, name').eq('code', code).maybeSingle();
+    if (error) throw error;
+    res.json({ success: true, data: { available: !data, existing: data || null }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error checking warehouse code:', err);
+    res.status(500).json({ error: 'Failed to check warehouse code', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/inventory/warehouses', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { code, name, address, is_active } = req.body;
+    if (!code || !String(code).trim() || !name || !String(name).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: 'code와 name은 필수입니다', timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase
+      .from('warehouses_with')
+      .insert([{
+        code: String(code).trim(),
+        name: String(name).trim(),
+        address: address ? String(address).trim() : null,
+        is_active: is_active === undefined ? true : !!is_active
+      }])
+      .select()
+      .single();
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Conflict', message: '이미 존재하는 창고 코드입니다', timestamp: new Date().toISOString() });
+      throw error;
+    }
+    res.status(201).json({ success: true, data, message: '창고가 등록되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating warehouse:', err);
+    res.status(500).json({ error: 'Failed to create warehouse', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/inventory/warehouses/:code', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { name, address, is_active } = req.body;
+    const updates = { updated_at: new Date().toISOString() };
+    if (name !== undefined) updates.name = String(name).trim();
+    if (address !== undefined) updates.address = address ? String(address).trim() : null;
+    if (is_active !== undefined) updates.is_active = !!is_active;
+    const { data, error } = await supabase.from('warehouses_with').update(updates).eq('code', req.params.code).select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '창고를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, message: '창고 정보가 수정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating warehouse:', err);
+    res.status(500).json({ error: 'Failed to update warehouse', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.delete('/api/admin/inventory/warehouses/:code', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: linked, error: linkErr } = await supabase.from('warehouse_locations_with').select('id').eq('warehouse_code', req.params.code).limit(1);
+    if (linkErr) throw linkErr;
+    if (linked && linked.length > 0) {
+      return res.status(409).json({ error: 'Conflict', message: '이 창고에 연결된 로케이션이 있어 삭제할 수 없습니다. 먼저 로케이션 연결을 해제하세요.', timestamp: new Date().toISOString() });
+    }
+    const { error } = await supabase.from('warehouses_with').delete().eq('code', req.params.code);
+    if (error) throw error;
+    res.json({ success: true, message: '창고가 삭제되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting warehouse:', err);
+    res.status(500).json({ error: 'Failed to delete warehouse', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 // ---- 창고 로케이션(Zone-Rack-Bin, 2D 좌표) ----
+// CM_PER_CELL: 2D 디지털트윈 평면도의 1칸(grid cell)이 실제로 몇 cm에 해당하는지의 환산 기준.
+// 관리자는 랙의 실제 가로/세로/높이를 cm 단위로 직접 입력하고, 평면도에 그려지는 칸 크기(width/height)는 이 값으로 자동 환산된다.
+const WMS_CM_PER_CELL = 100; // 1칸 = 100cm(1m)
 app.get('/api/admin/inventory/locations', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
     const { data, error } = await supabase.from('warehouse_locations_with').select('*').order('code', { ascending: true });
@@ -4755,9 +5377,58 @@ app.get('/api/admin/inventory/locations', authenticate, requireRole(['provider',
   }
 });
 
+// 로케이션 코드 자동채번 — 구역(zone)+층+단을 넣으면 그 안에서 아직 안 쓰인 다음 번호를 제안한다 (예: zone=A, floor=1, sub_level=1 → "A-11-01")
+app.get('/api/admin/inventory/locations/suggest-code', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const zone = String(req.query.zone || '').trim().toUpperCase();
+    if (!zone) {
+      return res.status(400).json({ error: 'Bad Request', message: '구역(zone)을 먼저 입력해주세요', timestamp: new Date().toISOString() });
+    }
+    const floor = Number.isFinite(Number(req.query.floor)) && Number(req.query.floor) > 0 ? Math.floor(Number(req.query.floor)) : 1;
+    const subLevel = Number.isFinite(Number(req.query.sub_level)) && Number(req.query.sub_level) >= 1 && Number(req.query.sub_level) <= 5 ? Math.floor(Number(req.query.sub_level)) : 1;
+    const prefix = `${zone}-${floor}${subLevel}-`;
+    const { data: existingCodes, error } = await supabase.from('warehouse_locations_with').select('code').like('code', prefix + '%');
+    if (error) throw error;
+    let maxSeq = 0;
+    (existingCodes || []).forEach(row => {
+      const m = String(row.code || '').match(new RegExp('^' + prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(\\d+)$'));
+      if (m) maxSeq = Math.max(maxSeq, parseInt(m[1], 10));
+    });
+    let seq = maxSeq + 1;
+    let candidate = prefix + String(seq).padStart(2, '0');
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const { data: exists } = await supabase.from('warehouse_locations_with').select('id').eq('code', candidate).maybeSingle();
+      if (!exists) break;
+      seq++;
+      candidate = prefix + String(seq).padStart(2, '0');
+    }
+    res.json({ success: true, data: { code: candidate }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error suggesting location code:', err);
+    res.status(500).json({ error: 'Failed to suggest location code', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 로케이션 코드 중복 확인
+app.get('/api/admin/inventory/locations/check-code', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const code = String(req.query.code || '').trim();
+    const excludeId = req.query.exclude_id ? String(req.query.exclude_id) : null;
+    if (!code) return res.status(400).json({ error: 'Bad Request', message: '확인할 코드를 입력해주세요', timestamp: new Date().toISOString() });
+    let query = supabase.from('warehouse_locations_with').select('id, label').eq('code', code);
+    if (excludeId) query = query.neq('id', excludeId);
+    const { data, error } = await query.maybeSingle();
+    if (error) throw error;
+    res.json({ success: true, data: { available: !data, existing: data || null }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error checking location code:', err);
+    res.status(500).json({ error: 'Failed to check location code', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 app.post('/api/admin/inventory/locations', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { code, zone, rack, bin, label, grid_x, grid_y, width, height, is_obstacle, floor, shape } = req.body;
+    const { code, zone, rack, bin, label, grid_x, grid_y, width, height, is_obstacle, floor, shape, sub_level, width_cm, depth_cm, height_cm, warehouse_code } = req.body;
     if (!code || !String(code).trim() || !zone || !String(zone).trim()) {
       return res.status(400).json({ error: 'Bad Request', message: 'code와 zone은 필수입니다', timestamp: new Date().toISOString() });
     }
@@ -4765,6 +5436,12 @@ app.post('/api/admin/inventory/locations', authenticate, requireRole(['admin', '
     if (shape !== undefined && !VALID_SHAPES.includes(shape)) {
       return res.status(400).json({ error: 'Bad Request', message: `shape는 ${VALID_SHAPES.join('/')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
     }
+    // 실측 치수(cm)가 오면 그것을 기준으로 삼고, 없으면 과거 방식(width/height 칸 수)을 cm로 환산해 채운다.
+    const widthCmVal = Number.isFinite(Number(width_cm)) && Number(width_cm) > 0 ? Number(width_cm)
+      : (Number.isFinite(Number(width)) && Number(width) > 0 ? Number(width) * WMS_CM_PER_CELL : 100);
+    const depthCmVal = Number.isFinite(Number(depth_cm)) && Number(depth_cm) > 0 ? Number(depth_cm)
+      : (Number.isFinite(Number(height)) && Number(height) > 0 ? Number(height) * WMS_CM_PER_CELL : 100);
+    const heightCmVal = Number.isFinite(Number(height_cm)) && Number(height_cm) > 0 ? Number(height_cm) : 200;
     const { data, error } = await supabase
       .from('warehouse_locations_with')
       .insert([{
@@ -4772,11 +5449,17 @@ app.post('/api/admin/inventory/locations', authenticate, requireRole(['admin', '
         label: label ? String(label).trim() : null,
         grid_x: Number.isFinite(Number(grid_x)) ? Number(grid_x) : 0,
         grid_y: Number.isFinite(Number(grid_y)) ? Number(grid_y) : 0,
-        width: Number.isFinite(Number(width)) && Number(width) > 0 ? Number(width) : 1,
-        height: Number.isFinite(Number(height)) && Number(height) > 0 ? Number(height) : 1,
+        width: widthCmVal / WMS_CM_PER_CELL,
+        height: depthCmVal / WMS_CM_PER_CELL,
+        width_cm: widthCmVal,
+        depth_cm: depthCmVal,
+        height_cm: heightCmVal,
         is_obstacle: !!is_obstacle,
         floor: Number.isFinite(Number(floor)) && Number(floor) > 0 ? Number(floor) : 1,
-        shape: shape || 'rect'
+        // sub_level: 한 층(floor) 안에서 다시 나뉘는 단/중층(복층랙) 번호. 1(기본)~5까지 지원, 범위 밖이면 1로 처리.
+        sub_level: Number.isFinite(Number(sub_level)) && Number(sub_level) >= 1 && Number(sub_level) <= 5 ? Math.floor(Number(sub_level)) : 1,
+        shape: shape || 'rect',
+        warehouse_code: warehouse_code ? String(warehouse_code).trim() : null
       }])
       .select()
       .single();
@@ -4793,7 +5476,7 @@ app.post('/api/admin/inventory/locations', authenticate, requireRole(['admin', '
 
 app.put('/api/admin/inventory/locations/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { code, zone, rack, bin, label, grid_x, grid_y, width, height, is_obstacle, is_active, floor, shape } = req.body;
+    const { code, zone, rack, bin, label, grid_x, grid_y, width, height, is_obstacle, is_active, floor, shape, sub_level, width_cm, depth_cm, height_cm, warehouse_code } = req.body;
     const VALID_SHAPES = ['rect', 'vertical', 'square', 'conveyor'];
     if (shape !== undefined && !VALID_SHAPES.includes(shape)) {
       return res.status(400).json({ error: 'Bad Request', message: `shape는 ${VALID_SHAPES.join('/')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
@@ -4806,15 +5489,38 @@ app.put('/api/admin/inventory/locations/:id', authenticate, requireRole(['admin'
     if (label !== undefined) updates.label = label ? String(label).trim() : null;
     if (grid_x !== undefined) updates.grid_x = Number(grid_x) || 0;
     if (grid_y !== undefined) updates.grid_y = Number(grid_y) || 0;
-    if (width !== undefined) updates.width = Number(width) || 1;
-    if (height !== undefined) updates.height = Number(height) || 1;
+    // 실측 치수(cm)가 오면 그 값을 기준으로 width/height(칸 수)까지 함께 갱신하고,
+    // 없고 과거 방식(width/height 칸 수)만 오면 그 값을 그대로 반영하면서 width_cm/depth_cm도 맞춰 갱신한다.
+    if (width_cm !== undefined && Number.isFinite(Number(width_cm)) && Number(width_cm) > 0) {
+      updates.width_cm = Number(width_cm);
+      updates.width = Number(width_cm) / WMS_CM_PER_CELL;
+    } else if (width !== undefined) {
+      updates.width = Number(width) || 1;
+      updates.width_cm = updates.width * WMS_CM_PER_CELL;
+    }
+    if (depth_cm !== undefined && Number.isFinite(Number(depth_cm)) && Number(depth_cm) > 0) {
+      updates.depth_cm = Number(depth_cm);
+      updates.height = Number(depth_cm) / WMS_CM_PER_CELL;
+    } else if (height !== undefined) {
+      updates.height = Number(height) || 1;
+      updates.depth_cm = updates.height * WMS_CM_PER_CELL;
+    }
+    if (height_cm !== undefined && Number.isFinite(Number(height_cm)) && Number(height_cm) > 0) {
+      updates.height_cm = Number(height_cm);
+    }
     if (is_obstacle !== undefined) updates.is_obstacle = !!is_obstacle;
     if (is_active !== undefined) updates.is_active = !!is_active;
     if (floor !== undefined) updates.floor = Number.isFinite(Number(floor)) && Number(floor) > 0 ? Number(floor) : 1;
+    // sub_level: 한 층 안의 단/중층(복층랙) 번호. 1~5 범위 밖이면 1로 처리.
+    if (sub_level !== undefined) updates.sub_level = Number.isFinite(Number(sub_level)) && Number(sub_level) >= 1 && Number(sub_level) <= 5 ? Math.floor(Number(sub_level)) : 1;
     if (shape !== undefined) updates.shape = shape;
+    if (warehouse_code !== undefined) updates.warehouse_code = warehouse_code ? String(warehouse_code).trim() : null;
 
     const { data, error } = await supabase.from('warehouse_locations_with').update(updates).eq('id', req.params.id).select().maybeSingle();
-    if (error) throw error;
+    if (error) {
+      if (error.code === '23505') return res.status(409).json({ error: 'Conflict', message: '이미 존재하는 로케이션 코드입니다', timestamp: new Date().toISOString() });
+      throw error;
+    }
     if (!data) return res.status(404).json({ error: 'Not Found', message: '로케이션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
     res.json({ success: true, data, message: '로케이션이 수정되었습니다', timestamp: new Date().toISOString() });
   } catch (err) {
@@ -4877,21 +5583,37 @@ app.get('/api/admin/inventory/product-locations/:productId', authenticate, requi
 });
 
 // ---- 2D 디지털트윈: 평면도(로케이션 좌표+장애물) 전체 스냅샷 ----
+// 건물은 여러 층(floor)으로 이루어지고, 한 층은 다시 여러 단/중층(sub_level, 복층랙 등)으로 나뉠 수 있다.
+// floor만 지정하고 subLevel을 지정하지 않으면 그 층의 1단(기본값)만 보여준다(다른 단 로케이션과 좌표가 겹쳐 보이는 것을 방지).
 app.get('/api/admin/inventory/floorplan', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
     let query = supabase.from('warehouse_locations_with').select('*').eq('is_active', true).order('code');
     const floorParam = req.query.floor;
-    if (floorParam !== undefined && floorParam !== '' && Number.isFinite(Number(floorParam))) {
-      query = query.eq('floor', Number(floorParam));
-    }
+    const subLevelParam = req.query.subLevel;
+    const hasFloor = floorParam !== undefined && floorParam !== '' && Number.isFinite(Number(floorParam));
+    const hasSubLevel = subLevelParam !== undefined && subLevelParam !== '' && Number.isFinite(Number(subLevelParam));
+    if (hasFloor) query = query.eq('floor', Number(floorParam));
+    if (hasSubLevel) query = query.eq('sub_level', Number(subLevelParam));
+    else if (hasFloor) query = query.eq('sub_level', 1);
     const { data: locations, error } = await query;
     if (error) throw error;
-    const { data: allFloorsRaw } = await supabase.from('warehouse_locations_with').select('floor').eq('is_active', true);
-    const floors = Array.from(new Set((allFloorsRaw || []).map(r => r.floor))).sort((a, b) => a - b);
-    const { data: equipment } = await supabase.from('equipment_with').select('*');
+
+    const { data: allFloorsRaw } = await supabase.from('warehouse_locations_with').select('floor, sub_level').eq('is_active', true);
+    const floorMap = new Map();
+    (allFloorsRaw || []).forEach(r => {
+      const f = r.floor;
+      if (!floorMap.has(f)) floorMap.set(f, new Set());
+      floorMap.get(f).add(r.sub_level || 1);
+    });
+    let floors = Array.from(floorMap.entries())
+      .map(([floor, subSet]) => ({ floor, subLevels: Array.from(subSet).sort((a, b) => a - b) }))
+      .sort((a, b) => a.floor - b.floor);
+    if (!floors.length) floors = [{ floor: 1, subLevels: [1] }];
+
+    const { data: equipment } = await supabase.from('equipment_with').select('*, warehouse_locations_with(code, grid_x, grid_y, floor, sub_level)');
     res.json({
       success: true,
-      data: { locations: locations || [], equipment: equipment || [], floors: floors.length ? floors : [1] },
+      data: { locations: locations || [], equipment: equipment || [], floors },
       timestamp: new Date().toISOString()
     });
   } catch (err) {
@@ -5206,6 +5928,28 @@ app.get('/api/admin/coupons', authenticate, requireRole(['admin', 'super_admin']
 });
 
 // 관리자: 쿠폰 생성
+// 쿠폰 코드 자동채번 — 알아보기 쉬운 8자리 랜덤 코드(혼동되는 0/O, 1/I 제외)를 생성하되, 서버에서 실제 중복 여부를 확인해 미사용 값만 돌려준다
+app.get('/api/admin/coupons/suggest-code', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    function randomCode() {
+      let code = '';
+      for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
+      return code;
+    }
+    let candidate = randomCode();
+    for (let attempt = 0; attempt < 50; attempt++) {
+      const { data: exists } = await supabase.from('coupons').select('id').eq('code', candidate).maybeSingle();
+      if (!exists) break;
+      candidate = randomCode();
+    }
+    res.json({ success: true, data: { code: candidate }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error suggesting coupon code:', err);
+    res.status(500).json({ error: 'Failed to suggest coupon code', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 app.post('/api/admin/coupons', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { code, label, discount_type, discount_value, max_discount_amount, min_order_amount, usage_limit, per_user_limit, valid_from, valid_until } = req.body;
@@ -6591,7 +7335,7 @@ const LANDING_TEMPLATES = ['classic', 'modern', 'warm'];
 
 app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { name, slug, description, image_url, logo_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, admin_email, personal_point_rate, community_point_rate, landing_template } = req.body;
+    const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, admin_email, personal_point_rate, community_point_rate, landing_template, business_number } = req.body;
     if (!name || !slug) {
       return res.status(400).json({ error: 'Bad Request', message: 'Required fields: name, slug', timestamp: new Date().toISOString() });
     }
@@ -6619,6 +7363,14 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
       return res.status(400).json({ error: 'Bad Request', message: '적립율은 0% ~ 50% 사이여야 합니다', timestamp: new Date().toISOString() });
     }
 
+    // 사업자등록번호(있으면 국세청 상태조회로 검증) - 분양조직 현금 정산을 받으려면 사실상 필수지만,
+    // 등록 자체를 막지는 않는다 (나중에 정산 기능을 켤 때/정산 생성 시점에 없으면 자동으로 걸러진다)
+    const bizUpdates = {};
+    const bizResult = await applyBusinessNumberVerification(bizUpdates, business_number, undefined);
+    if (bizResult.error) {
+      return res.status(bizResult.error.status).json({ error: 'Bad Request', message: bizResult.error.message, timestamp: new Date().toISOString() });
+    }
+
     const { data, error } = await supabase
       .from('communities')
       .insert([{
@@ -6626,7 +7378,12 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
         slug: cleanSlug,
         description: description || '',
         image_url: image_url || null,
+        business_number: bizUpdates.business_number,
+        business_number_verified: bizUpdates.business_number_verified || false,
+        business_number_verified_at: bizUpdates.business_number_verified_at || null,
+        business_number_status: bizUpdates.business_number_status || null,
         logo_url: logo_url || null,
+        stamp_url: stamp_url || null,
         primary_color: primary_color || null,
         hero_title: hero_title || null,
         hero_subtitle: hero_subtitle || null,
@@ -6660,7 +7417,8 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
       }
     }
 
-    res.status(201).json({ success: true, data, warning: adminAssignWarning, message: '분양 조직(커뮤니티)이 추가되었습니다', timestamp: new Date().toISOString() });
+    const combinedWarning = [bizResult.warning, adminAssignWarning].filter(Boolean).join(' / ') || null;
+    res.status(201).json({ success: true, data, warning: combinedWarning, message: '분양 조직(커뮤니티)이 추가되었습니다', timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error creating community:', err);
     res.status(500).json({ error: 'Failed to create community', message: err.message, timestamp: new Date().toISOString() });
@@ -6669,8 +7427,17 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
 
 app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { name, slug, description, image_url, logo_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, status, admin_email, personal_point_rate, community_point_rate, landing_template } = req.body;
+    const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, status, admin_email, personal_point_rate, community_point_rate, landing_template, settlement_commission_rate, business_number, settlement_tax_method } = req.body;
     const updates = { updated_at: new Date().toISOString() };
+    let bizWarning = null;
+    if (business_number !== undefined) {
+      const { data: existingCommunity } = await supabase.from('communities').select('business_number').eq('id', req.params.id).maybeSingle();
+      const bizResult = await applyBusinessNumberVerification(updates, business_number, existingCommunity ? existingCommunity.business_number : undefined);
+      if (bizResult.error) {
+        return res.status(bizResult.error.status).json({ error: 'Bad Request', message: bizResult.error.message, timestamp: new Date().toISOString() });
+      }
+      bizWarning = bizResult.warning || null;
+    }
     if (name !== undefined) updates.name = String(name).trim();
     if (slug !== undefined) {
       const cleanSlug = String(slug).trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
@@ -6688,6 +7455,7 @@ app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super
     if (description !== undefined) updates.description = description;
     if (image_url !== undefined) updates.image_url = image_url || null;
     if (logo_url !== undefined) updates.logo_url = logo_url || null;
+    if (stamp_url !== undefined) updates.stamp_url = stamp_url || null;
     if (primary_color !== undefined) updates.primary_color = primary_color || null;
     if (hero_title !== undefined) updates.hero_title = hero_title || null;
     if (hero_subtitle !== undefined) updates.hero_subtitle = hero_subtitle || null;
@@ -6729,6 +7497,26 @@ app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super
       if (personalRate.present) updates.personal_point_rate = personalRate.value;
       if (communityRate.present) updates.community_point_rate = communityRate.value;
     }
+    // 이 조직의 현금 정산 수수료율(%) 변경/해제 - 분양조직 현금 정산 기능이 켜져 있을 때만 의미가 있지만,
+    // 꺼져 있어도 미리 설정해둘 수 있도록 값 자체는 언제든 받아준다
+    if (settlement_commission_rate !== undefined) {
+      if (settlement_commission_rate === null || settlement_commission_rate === '') {
+        updates.settlement_commission_rate = null;
+      } else {
+        const rate = Number(settlement_commission_rate);
+        if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+          return res.status(400).json({ error: 'Bad Request', message: '현금 정산 수수료율은 0~100 사이의 숫자여야 합니다', timestamp: new Date().toISOString() });
+        }
+        updates.settlement_commission_rate = rate;
+      }
+    }
+    // 이 조직의 정산 지급 시 세무처리 방식(원천징수 3.3% / 세금계산서 발행 / 해당없음)
+    if (settlement_tax_method !== undefined) {
+      if (!SETTLEMENT_TAX_METHODS.includes(settlement_tax_method)) {
+        return res.status(400).json({ error: 'Bad Request', message: `settlement_tax_method는 ${SETTLEMENT_TAX_METHODS.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+      }
+      updates.settlement_tax_method = settlement_tax_method;
+    }
 
     const { data, error } = await supabase
       .from('communities')
@@ -6746,7 +7534,8 @@ app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super
     if (!data) {
       return res.status(404).json({ error: 'Not Found', message: 'Community not found', timestamp: new Date().toISOString() });
     }
-    res.json({ success: true, data, warning: putAdminAssignWarning, message: '커뮤니티 정보가 수정되었습니다', timestamp: new Date().toISOString() });
+    const combinedPutWarning = [bizWarning, putAdminAssignWarning].filter(Boolean).join(' / ') || null;
+    res.json({ success: true, data, warning: combinedPutWarning, message: '커뮤니티 정보가 수정되었습니다', timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error updating community:', err);
     res.status(500).json({ error: 'Failed to update community', message: err.message, timestamp: new Date().toISOString() });
@@ -7720,6 +8509,16 @@ app.get('/api/admin/dashboard', authenticate, requireRole(['admin', 'super_admin
 // products_with.supplier_id)을 뜻한다 — 위의 /api/admin/suppliers(거래처 마스터데이터)와는 다른 개념.
 // 주문에 실제 상품 라인아이템 테이블이 없어(orders_with.items가 JSON 배열) 서버에서 직접 집계한다.
 // ============================================
+// products_with.supplier_id는 "누가 이 상품을 등록했는가"를 가리킬 뿐, 그 계정이 실제 공급자(provider role)인지
+// 아니면 관리자가 쇼핑몰 자체 재고로 직접 등록한 것인지는 구분해주지 않는다. 공급자 정산/판매리포트는
+// 반드시 role='provider'인 계정만 대상으로 삼아야 한다 — 그렇지 않으면 쇼핑몰이 직접 파는 자체재고 상품의 매출까지
+// "공급자 매출"로 잡혀서 존재하지도 않는 제3자에게 수수료를 떼어주는 것처럼 정산이 생성되는 문제가 생긴다.
+async function getProviderIdSet() {
+  const { data, error } = await supabase.from('profiles').select('id').eq('role', 'provider');
+  if (error) throw error;
+  return new Set((data || []).map(p => p.id));
+}
+
 app.get('/api/admin/supplier-sales-report', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
@@ -7737,15 +8536,18 @@ app.get('/api/admin/supplier-sales-report', authenticate, requireRole(['provider
       ordersQuery = ordersQuery.lt('created_at', endExclusive);
     }
 
-    const [{ data: orders, error: ordersErr }, { data: allProducts, error: prodErr }] = await Promise.all([
+    const [{ data: orders, error: ordersErr }, { data: allProducts, error: prodErr }, providerIds] = await Promise.all([
       ordersQuery,
-      supabase.from('products_with').select('id, supplier_id, name')
+      supabase.from('products_with').select('id, supplier_id, name'),
+      getProviderIdSet()
     ]);
     if (ordersErr) throw ordersErr;
     if (prodErr) throw prodErr;
 
+    // role='provider'인 계정 소유 상품만 "공급자 상품"으로 집계한다. 관리자가 직접 등록한 자체재고 상품은
+    // 여기서 제외되어(=쇼핑몰 자체 매출이라 별도 통계는 관리자 통계 탭에서 확인), 공급자 리포트를 왜곡하지 않는다.
     const productSupplierMap = {};
-    (allProducts || []).forEach(p => { productSupplierMap[String(p.id)] = p.supplier_id; });
+    (allProducts || []).forEach(p => { if (p.supplier_id && providerIds.has(p.supplier_id)) productSupplierMap[String(p.id)] = p.supplier_id; });
 
     const onlyOwnSupplierId = isAdminRole(req.userRole) ? null : req.user.id;
 
@@ -7822,15 +8624,17 @@ async function computeProviderRevenueForPeriod(startDate, endDate) {
     ordersQuery = ordersQuery.lt('created_at', endExclusive);
   }
 
-  const [{ data: orders, error: ordersErr }, { data: allProducts, error: prodErr }] = await Promise.all([
+  const [{ data: orders, error: ordersErr }, { data: allProducts, error: prodErr }, providerIds] = await Promise.all([
     ordersQuery,
-    supabase.from('products_with').select('id, supplier_id')
+    supabase.from('products_with').select('id, supplier_id'),
+    getProviderIdSet()
   ]);
   if (ordersErr) throw ordersErr;
   if (prodErr) throw prodErr;
 
+  // role='provider'인 계정 소유 상품만 정산 대상. 관리자가 직접 등록한 자체재고 상품은 제외(자체 매출이라 정산/수수료 대상이 아님).
   const productSupplierMap = {};
-  (allProducts || []).forEach(p => { productSupplierMap[String(p.id)] = p.supplier_id; });
+  (allProducts || []).forEach(p => { if (p.supplier_id && providerIds.has(p.supplier_id)) productSupplierMap[String(p.id)] = p.supplier_id; });
 
   const agg = {}; // supplierId -> { revenue, orderIds: Set }
   (orders || []).forEach(o => {
@@ -7849,12 +8653,81 @@ async function computeProviderRevenueForPeriod(startDate, endDate) {
   return agg;
 }
 
+// ============================================
+// 🧾 정산 세무처리(원천징수 3.3% / 세금계산서 발행) - 공급자·분양조직 정산 공용
+// - "정산 지급완료" 처리와 직접 연결된 세무 의무: 개인/프리랜서 사업자에게 사업소득을 지급할 때는
+//   소득세 3% + 지방소득세 0.3% = 3.3%를 원천징수하고 원천징수영수증을 발급해야 하고,
+//   법인/일반과세 사업자에게 지급할 때는 세금계산서를 발행(수취)해야 한다.
+// - 실제 세금계산서 "자동 발행"은 홈택스/팝빌 등 외부 연동(공동인증서+API 계약)이 필요해 이 환경에는 연결돼
+//   있지 않으므로, 상태를 "발행대기"로 만들어두고 관리자가 외부에서 발행한 뒤 문서번호를 수동으로 입력하면
+//   "발행완료"로 전환하는 방식으로 동작한다 (사업자번호 검증에서 NTS_API_KEY가 없을 때 형식검증까지만
+//   자동 수행하고 나머지는 관리자 확인에 맡기는 것과 동일한 패턴).
+// ============================================
+
+const SETTLEMENT_TAX_METHODS = ['withholding', 'tax_invoice', 'none'];
+const WITHHOLDING_TAX_RATE = 3.3; // 사업소득 원천징수: 소득세 3% + 지방소득세 0.3%
+
+function computeSettlementTaxFields(commissionAmount, taxMethod) {
+  const method = SETTLEMENT_TAX_METHODS.includes(taxMethod) ? taxMethod : 'withholding';
+  const amount = Number(commissionAmount || 0);
+  if (method === 'withholding') {
+    const withholdingTaxAmount = Math.round(amount * WITHHOLDING_TAX_RATE / 100);
+    return {
+      tax_method: method,
+      withholding_tax_rate: WITHHOLDING_TAX_RATE,
+      withholding_tax_amount: withholdingTaxAmount,
+      net_payment_amount: amount - withholdingTaxAmount,
+      tax_invoice_status: 'not_required'
+    };
+  }
+  if (method === 'tax_invoice') {
+    return { tax_method: method, withholding_tax_rate: 0, withholding_tax_amount: 0, net_payment_amount: amount, tax_invoice_status: 'pending' };
+  }
+  // 'none' - 해당없음(세무처리 대상이 아닌 특수 케이스)
+  return { tax_method: method, withholding_tax_rate: 0, withholding_tax_amount: 0, net_payment_amount: amount, tax_invoice_status: 'not_required' };
+}
+
+// 원천징수영수증에 표시할 "원천징수의무자"(WITH+ 본사) 정보 - platform_settings(key='platform_business_info')에서 관리자가 직접 입력·관리
+async function getPlatformBusinessInfo() {
+  const { data } = await supabase.from('platform_settings').select('value').eq('key', 'platform_business_info').maybeSingle();
+  return (data && data.value) ? data.value : { company_name: null, ceo_name: null, business_number: null, address: null };
+}
+
+// 플랫폼(WITH+ 본사) 사업자 정보 조회 - 원천징수영수증의 "원천징수의무자" 란에 쓰인다
+app.get('/api/admin/settings/business-info', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const info = await getPlatformBusinessInfo();
+    res.json({ success: true, data: info, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching platform business info:', err);
+    res.status(500).json({ error: 'Failed to fetch business info', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/settings/business-info', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { company_name, ceo_name, business_number, address } = req.body || {};
+    const value = {
+      company_name: company_name ? String(company_name).trim() : null,
+      ceo_name: ceo_name ? String(ceo_name).trim() : null,
+      business_number: business_number ? String(business_number).trim() : null,
+      address: address ? String(address).trim() : null
+    };
+    const { error } = await supabase.from('platform_settings').upsert({ key: 'platform_business_info', value }, { onConflict: 'key' });
+    if (error) throw error;
+    res.json({ success: true, data: value, message: '사업자 정보가 저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error saving platform business info:', err);
+    res.status(500).json({ error: 'Failed to save business info', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 // 공급자(provider) 목록 + 현재 수수료율 조회 (정산 화면용)
 app.get('/api/admin/providers', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('profiles')
-      .select('id, full_name, email, commission_rate, is_active, created_at')
+      .select('id, full_name, email, commission_rate, settlement_tax_method, is_active, created_at')
       .eq('role', 'provider')
       .order('created_at', { ascending: false });
     if (error) throw error;
@@ -7878,7 +8751,15 @@ app.patch('/api/admin/providers/:id/commission-rate', authenticate, requireRole(
     if (!target || target.role !== 'provider') {
       return res.status(404).json({ error: 'Not Found', message: '공급자(provider) 계정을 찾을 수 없습니다', timestamp: new Date().toISOString() });
     }
-    const { data, error } = await supabase.from('profiles').update({ commission_rate: rate }).eq('id', id).select('id, full_name, commission_rate').single();
+    const updates = { commission_rate: rate };
+    // 정산 지급 시 세무처리 방식(원천징수 3.3% / 세금계산서 발행 / 해당없음) - 지급완료 처리 시점에 이 값을 스냅샷으로 사용한다
+    if (req.body?.settlement_tax_method !== undefined) {
+      if (!SETTLEMENT_TAX_METHODS.includes(req.body.settlement_tax_method)) {
+        return res.status(400).json({ error: 'Bad Request', message: `settlement_tax_method는 ${SETTLEMENT_TAX_METHODS.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+      }
+      updates.settlement_tax_method = req.body.settlement_tax_method;
+    }
+    const { data, error } = await supabase.from('profiles').update(updates).eq('id', id).select('id, full_name, commission_rate, settlement_tax_method').single();
     if (error) throw error;
     res.json({ success: true, data, timestamp: new Date().toISOString() });
   } catch (err) {
@@ -8007,8 +8888,17 @@ app.patch('/api/admin/settlements/:id/status', authenticate, requireRole(['admin
       return res.status(400).json({ error: 'Bad Request', message: "status는 'pending', 'paid', 'cancelled' 중 하나여야 합니다", timestamp: new Date().toISOString() });
     }
     const update = { status };
-    if (status === 'paid') update.paid_at = new Date().toISOString();
-    else update.paid_at = null;
+    if (status === 'paid') {
+      update.paid_at = new Date().toISOString();
+      // 지급완료 시점에 공급자의 세무처리 방식을 스냅샷으로 반영: 원천징수 3.3% 자동계산 또는 세금계산서 발행대기 표시
+      const { data: existing } = await supabase.from('supplier_settlements').select('supplier_id, commission_amount').eq('id', id).maybeSingle();
+      if (existing) {
+        const { data: supplierProfile } = await supabase.from('profiles').select('settlement_tax_method').eq('id', existing.supplier_id).maybeSingle();
+        Object.assign(update, computeSettlementTaxFields(existing.commission_amount, supplierProfile?.settlement_tax_method));
+      }
+    } else {
+      update.paid_at = null;
+    }
 
     const { data, error } = await supabase.from('supplier_settlements').update(update).eq('id', id).select().single();
     if (error) throw error;
@@ -8018,6 +8908,325 @@ app.patch('/api/admin/settlements/:id/status', authenticate, requireRole(['admin
   } catch (err) {
     console.error('Error updating settlement status:', err);
     res.status(500).json({ error: 'Failed to update settlement status', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 💵 분양조직(커뮤니티) 현금 정산 - 공급자 정산(supplier_settlements)과 동일한 구조를 분양조직에도 적용
+// - "정산관리도 공급자별/분양조직관리자별/관리자별로 분리되어 언제든 확인 가능한가"라는 질문에서 시작.
+//   기존에는 분양조직에는 매출/적립금을 보여주는 실시간 대시보드만 있고, 공급자처럼 기간별로
+//   "정산 생성 → 지급대기 → 지급완료" 흐름을 갖는 실제 현금 정산 기능은 없었다. 이번에 새로 추가하되,
+//   당장 필요 없을 수도 있어 관리자가 platform_settings(key='community_cash_settlement')로 언제든
+//   켜고 끌 수 있게 했다 (기본값은 꺼짐 - 켜기 전까지는 기존처럼 마일리지 대시보드만 동작).
+// ============================================
+
+async function isCommunityCashSettlementEnabled() {
+  const { data, error } = await supabase.from('platform_settings').select('value').eq('key', 'community_cash_settlement').maybeSingle();
+  if (error || !data) return false;
+  return !!(data.value && data.value.enabled);
+}
+
+// 기능 on/off 상태 조회 - 로그인한 사용자면 누구나(관리자 화면/분양조직 담당자 화면 모두 이 값으로 탭 노출 여부를 결정)
+app.get('/api/community-cash-settlement/status', authenticate, async (req, res) => {
+  try {
+    const enabled = await isCommunityCashSettlementEnabled();
+    res.json({ success: true, data: { enabled }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching community cash settlement status:', err);
+    res.status(500).json({ error: 'Failed to fetch status', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 기능 on/off 전환 - 관리자 전용
+app.patch('/api/admin/settings/community-cash-settlement', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const enabled = !!req.body?.enabled;
+    const { error } = await supabase.from('platform_settings').upsert({ key: 'community_cash_settlement', value: { enabled } }, { onConflict: 'key' });
+    if (error) throw error;
+    res.json({ success: true, data: { enabled }, message: enabled ? '분양조직 현금 정산 기능을 켰습니다' : '분양조직 현금 정산 기능을 껐습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error toggling community cash settlement:', err);
+    res.status(500).json({ error: 'Failed to toggle setting', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 특정 기간의 분양조직별 매출 집계 (orders_with.community_id 기준, 취소/환불 제외) - settlements 생성 시 재사용
+async function computeCommunityRevenueForPeriod(startDate, endDate) {
+  let ordersQuery = supabase
+    .from('orders_with')
+    .select('id, community_id, final_price, status, created_at')
+    .not('community_id', 'is', null)
+    .not('status', 'in', '(cancelled,refunded)');
+  if (startDate) ordersQuery = ordersQuery.gte('created_at', startDate);
+  if (endDate) {
+    const endExclusive = /^\d{4}-\d{2}-\d{2}$/.test(endDate)
+      ? new Date(new Date(endDate + 'T00:00:00Z').getTime() + 24 * 60 * 60 * 1000).toISOString()
+      : endDate;
+    ordersQuery = ordersQuery.lt('created_at', endExclusive);
+  }
+  const { data: orders, error } = await ordersQuery;
+  if (error) throw error;
+
+  const agg = {}; // communityId -> { revenue, orderCount }
+  (orders || []).forEach(o => {
+    if (!o.community_id) return;
+    if (!agg[o.community_id]) agg[o.community_id] = { revenue: 0, orderCount: 0 };
+    agg[o.community_id].revenue += Number(o.final_price || 0);
+    agg[o.community_id].orderCount += 1;
+  });
+  return agg;
+}
+
+// 기간을 지정해 분양조직별 정산 내역 생성(또는 재계산). 이미 'paid' 상태인 건은 건드리지 않는다. 관리자 전용.
+app.post('/api/admin/community-settlements/generate', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    if (!(await isCommunityCashSettlementEnabled())) {
+      return res.status(403).json({ error: 'Forbidden', message: '분양조직 현금 정산 기능이 꺼져 있습니다. 먼저 "분양조직 정산" 화면에서 기능을 켜주세요.', timestamp: new Date().toISOString() });
+    }
+    const { startDate, endDate } = req.body || {};
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Bad Request', message: 'startDate, endDate는 필수입니다 (예: 2026-08-01)', timestamp: new Date().toISOString() });
+    }
+
+    const agg = await computeCommunityRevenueForPeriod(startDate, endDate);
+    const communityIds = Object.keys(agg);
+    if (communityIds.length === 0) {
+      return res.json({ success: true, data: { created: 0, updated: 0, skippedPaid: 0, skippedNoBusinessNumber: [], rows: [] }, timestamp: new Date().toISOString() });
+    }
+
+    const { data: communities, error: commErr } = await supabase
+      .from('communities').select('id, name, settlement_commission_rate, business_number, business_number_verified').in('id', communityIds);
+    if (commErr) throw commErr;
+    const rateMap = {};
+    const bizVerifiedMap = {};
+    const nameMap = {};
+    (communities || []).forEach(c => {
+      rateMap[c.id] = c.settlement_commission_rate != null ? Number(c.settlement_commission_rate) : 5; // 기본 5%
+      bizVerifiedMap[c.id] = !!(c.business_number && c.business_number_verified);
+      nameMap[c.id] = c.name;
+    });
+
+    const { data: existingRows, error: existErr } = await supabase
+      .from('community_settlements_with')
+      .select('id, community_id, status')
+      .eq('period_start', startDate)
+      .eq('period_end', endDate)
+      .in('community_id', communityIds);
+    if (existErr) throw existErr;
+    const existingByCommunity = {};
+    (existingRows || []).forEach(r => { existingByCommunity[r.community_id] = r; });
+
+    let created = 0, updated = 0, skippedPaid = 0;
+    const skippedNoBusinessNumber = [];
+    const resultRows = [];
+
+    for (const communityId of communityIds) {
+      // 사업자등록번호가 없거나 국세청 검증을 통과하지 못한 조직은 현금 정산 대상에서 제외한다
+      // (개별 사업자가 아니면 본사가 현금으로 지급할 법적 근거가 없음) - "분양 조직 관리"에서 등록/검증 먼저 해야 한다
+      if (!bizVerifiedMap[communityId]) {
+        skippedNoBusinessNumber.push({ community_id: communityId, community_name: nameMap[communityId] || '(이름 없음)' });
+        continue;
+      }
+
+      const grossRevenue = agg[communityId].revenue;
+      const orderCount = agg[communityId].orderCount;
+      const commissionRate = rateMap[communityId] != null ? rateMap[communityId] : 5;
+      const commissionAmount = Math.round(grossRevenue * commissionRate / 100);
+
+      const existing = existingByCommunity[communityId];
+      if (existing && existing.status === 'paid') {
+        skippedPaid++;
+        continue;
+      }
+
+      if (existing) {
+        const { data, error } = await supabase.from('community_settlements_with').update({
+          order_count: orderCount, gross_revenue: grossRevenue, commission_rate: commissionRate,
+          commission_amount: commissionAmount, updated_at: new Date().toISOString()
+        }).eq('id', existing.id).select().single();
+        if (error) throw error;
+        updated++;
+        resultRows.push(data);
+      } else {
+        const { data, error } = await supabase.from('community_settlements_with').insert([{
+          community_id: communityId, period_start: startDate, period_end: endDate,
+          order_count: orderCount, gross_revenue: grossRevenue, commission_rate: commissionRate,
+          commission_amount: commissionAmount, status: 'pending', created_by: req.user.id
+        }]).select().single();
+        if (error) throw error;
+        created++;
+        resultRows.push(data);
+      }
+    }
+
+    res.json({ success: true, data: { created, updated, skippedPaid, skippedNoBusinessNumber, rows: resultRows }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error generating community settlements:', err);
+    res.status(500).json({ error: 'Failed to generate community settlements', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 정산 내역 조회 - 관리자는 전체(조직 필터 가능), 분양조직 담당자는 본인이 담당하는 조직 것만
+app.get('/api/admin/community-settlements', authenticate, async (req, res) => {
+  try {
+    const { status, communityId } = req.query;
+    let query = supabase.from('community_settlements_with').select('*').order('period_start', { ascending: false });
+
+    // 이 엔드포인트는 requireRole을 쓰지 않고(관리자·분양조직 담당자 모두 호출 가능해야 하므로) authenticate만
+    // 거치기 때문에 req.userRole이 채워지지 않는다(requireRole 미들웨어에서만 설정됨) - 직접 프로필을 조회한다.
+    const { data: callerProfile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
+    if (callerProfile && isAdminRole(callerProfile.role)) {
+      if (communityId) query = query.eq('community_id', communityId);
+    } else {
+      const myCommunity = await getMyManagedCommunity(req.user.id);
+      if (!myCommunity) {
+        return res.status(404).json({ error: 'Not Found', message: '담당하고 있는 분양 조직이 없습니다', timestamp: new Date().toISOString() });
+      }
+      query = query.eq('community_id', myCommunity.id);
+    }
+    if (status) query = query.eq('status', status);
+
+    const { data: rows, error } = await query;
+    if (error) throw error;
+
+    const communityIds = [...new Set((rows || []).map(r => r.community_id))];
+    const { data: communityRows } = communityIds.length
+      ? await supabase.from('communities').select('id, name').in('id', communityIds)
+      : { data: [] };
+    const nameMap = {};
+    (communityRows || []).forEach(c => { nameMap[c.id] = c.name; });
+
+    const result = (rows || []).map(r => ({ ...r, community_name: nameMap[r.community_id] || null }));
+
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching community settlements:', err);
+    res.status(500).json({ error: 'Failed to fetch community settlements', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 정산 상태 변경 (지급 완료 / 취소) - 관리자 전용
+app.patch('/api/admin/community-settlements/:id/status', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body || {};
+    if (!['pending', 'paid', 'cancelled'].includes(status)) {
+      return res.status(400).json({ error: 'Bad Request', message: "status는 'pending', 'paid', 'cancelled' 중 하나여야 합니다", timestamp: new Date().toISOString() });
+    }
+    const update = { status };
+    if (status === 'paid') {
+      update.paid_at = new Date().toISOString();
+      // 지급완료 시점에 분양조직의 세무처리 방식을 스냅샷으로 반영: 원천징수 3.3% 자동계산 또는 세금계산서 발행대기 표시
+      const { data: existing } = await supabase.from('community_settlements_with').select('community_id, commission_amount').eq('id', id).maybeSingle();
+      if (existing) {
+        const { data: community } = await supabase.from('communities').select('settlement_tax_method').eq('id', existing.community_id).maybeSingle();
+        Object.assign(update, computeSettlementTaxFields(existing.commission_amount, community?.settlement_tax_method));
+      }
+    } else {
+      update.paid_at = null;
+    }
+
+    const { data, error } = await supabase.from('community_settlements_with').update(update).eq('id', id).select().single();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '정산 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating community settlement status:', err);
+    res.status(500).json({ error: 'Failed to update community settlement status', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 원천징수영수증 데이터 조회 (지급완료 + 원천징수 대상 건만) - 관리자 전용
+// 본인(공급자) 또는 관리자만 조회 가능 - authenticate만 걸고 내부에서 판정한다(정산 내역 목록 조회와 동일한 패턴).
+// 원천징수영수증은 지급받은 당사자가 본인 세무신고에 써야 하는 문서라 관리자뿐 아니라 본인도 볼 수 있어야 한다.
+app.get('/api/admin/settlements/:id/withholding-receipt', authenticate, async (req, res) => {
+  try {
+    const { data: row, error } = await supabase.from('supplier_settlements').select('*').eq('id', req.params.id).maybeSingle();
+    if (error) throw error;
+    if (!row) return res.status(404).json({ error: 'Not Found', message: '정산 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const { data: callerProfile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
+    const isSelf = row.supplier_id === req.user.id;
+    if (!isSelf && !(callerProfile && isAdminRole(callerProfile.role))) {
+      return res.status(403).json({ error: 'Forbidden', message: '본인의 정산 건만 조회할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+    if (row.status !== 'paid' || row.tax_method !== 'withholding') {
+      return res.status(400).json({ error: 'Bad Request', message: '지급완료된 원천징수 대상 정산 건만 영수증을 조회할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+    // profiles(공급자 계정)에는 사업자등록번호 컬럼이 없다(별도 suppliers 마스터데이터 테이블 소관) - 영수증에는 이름/이메일만 표시
+    const { data: supplier } = await supabase.from('profiles').select('full_name, email').eq('id', row.supplier_id).maybeSingle();
+    const withholder = await getPlatformBusinessInfo();
+    res.json({ success: true, data: { settlement: row, payee: supplier || {}, withholder }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching withholding receipt:', err);
+    res.status(500).json({ error: 'Failed to fetch withholding receipt', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/community-settlements/:id/withholding-receipt', authenticate, async (req, res) => {
+  try {
+    const { data: row, error } = await supabase.from('community_settlements_with').select('*').eq('id', req.params.id).maybeSingle();
+    if (error) throw error;
+    if (!row) return res.status(404).json({ error: 'Not Found', message: '정산 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const { data: callerProfile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
+    let allowed = !!(callerProfile && isAdminRole(callerProfile.role));
+    if (!allowed) {
+      const myCommunity = await getMyManagedCommunity(req.user.id);
+      allowed = !!(myCommunity && myCommunity.id === row.community_id);
+    }
+    if (!allowed) {
+      return res.status(403).json({ error: 'Forbidden', message: '본인이 담당하는 조직의 정산 건만 조회할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+    if (row.status !== 'paid' || row.tax_method !== 'withholding') {
+      return res.status(400).json({ error: 'Bad Request', message: '지급완료된 원천징수 대상 정산 건만 영수증을 조회할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+    const { data: community } = await supabase.from('communities').select('name, business_number').eq('id', row.community_id).maybeSingle();
+    const withholder = await getPlatformBusinessInfo();
+    res.json({ success: true, data: { settlement: row, payee: community || {}, withholder }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching community withholding receipt:', err);
+    res.status(500).json({ error: 'Failed to fetch withholding receipt', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 세금계산서 발행완료 수동 처리 - 실제 발행은 홈택스/팝빌 등 외부에서 하고, 발행 후 문서번호를 여기에 입력해 상태를 전환한다
+app.patch('/api/admin/settlements/:id/tax-invoice', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const invoiceNumber = String(req.body?.tax_invoice_number || '').trim();
+    if (!invoiceNumber) return res.status(400).json({ error: 'Bad Request', message: 'tax_invoice_number는 필수입니다', timestamp: new Date().toISOString() });
+    const { data: existing } = await supabase.from('supplier_settlements').select('tax_invoice_status').eq('id', req.params.id).maybeSingle();
+    if (!existing) return res.status(404).json({ error: 'Not Found', message: '정산 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (existing.tax_invoice_status !== 'pending') {
+      return res.status(400).json({ error: 'Bad Request', message: '세금계산서 발행대기 상태인 건만 처리할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase.from('supplier_settlements').update({
+      tax_invoice_status: 'issued', tax_invoice_number: invoiceNumber, tax_invoice_issued_at: new Date().toISOString()
+    }).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ success: true, data, message: '세금계산서 발행완료로 처리되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error marking tax invoice issued:', err);
+    res.status(500).json({ error: 'Failed to update tax invoice status', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.patch('/api/admin/community-settlements/:id/tax-invoice', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const invoiceNumber = String(req.body?.tax_invoice_number || '').trim();
+    if (!invoiceNumber) return res.status(400).json({ error: 'Bad Request', message: 'tax_invoice_number는 필수입니다', timestamp: new Date().toISOString() });
+    const { data: existing } = await supabase.from('community_settlements_with').select('tax_invoice_status').eq('id', req.params.id).maybeSingle();
+    if (!existing) return res.status(404).json({ error: 'Not Found', message: '정산 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (existing.tax_invoice_status !== 'pending') {
+      return res.status(400).json({ error: 'Bad Request', message: '세금계산서 발행대기 상태인 건만 처리할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase.from('community_settlements_with').update({
+      tax_invoice_status: 'issued', tax_invoice_number: invoiceNumber, tax_invoice_issued_at: new Date().toISOString()
+    }).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ success: true, data, message: '세금계산서 발행완료로 처리되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error marking community tax invoice issued:', err);
+    res.status(500).json({ error: 'Failed to update tax invoice status', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 

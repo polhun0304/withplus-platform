@@ -28,7 +28,7 @@ async function loginAs(email, password) {
 async function main() {
   const ts = Date.now();
   const password = 'TestPass123!';
-  let superAdminId, providerId, productId, locationId, location2Id, floor2LocId, equipmentId, agvTaskId;
+  let superAdminId, providerId, productId, locationId, location2Id, floor2LocId, subLevel2LocId, invalidSubLevelLocId, cmLocId, cmDefaultLocId, equipmentId, agvTaskId;
 
   try {
     // ============================================
@@ -162,7 +162,7 @@ async function main() {
     const floor2Res = await fetch(`${API}/api/admin/inventory/floorplan?floor=2`, { headers: { Authorization: `Bearer ${superAdminToken}` } });
     const floor2Json = await floor2Res.json();
     assert(floor2Json.data.locations.some(l => l.id === floor2LocId) && !floor2Json.data.locations.some(l => l.id === locationId), '?floor=2 필터링 시 2층 로케이션만 반환됨');
-    assert(Array.isArray(floor2Json.data.floors) && floor2Json.data.floors.includes(1) && floor2Json.data.floors.includes(2), '평면도 응답에 존재하는 층 목록(floors)이 포함됨');
+    assert(Array.isArray(floor2Json.data.floors) && floor2Json.data.floors.some(f => f.floor === 1) && floor2Json.data.floors.some(f => f.floor === 2), '평면도 응답에 존재하는 층 목록(floors)이 포함됨');
 
     const moveRes = await fetch(`${API}/api/admin/inventory/locations/${floor2LocId}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${superAdminToken}` },
@@ -170,6 +170,79 @@ async function main() {
     });
     const moveJson = await moveRes.json();
     assert(moveRes.status === 200 && moveJson.data.grid_x === 3 && moveJson.data.width === 2, `드래그 이동/크기조절(PUT) 정상 반영 (실제: x=${moveJson.data && moveJson.data.grid_x}, width=${moveJson.data && moveJson.data.width})`);
+
+    // ============================================
+    // 5-2) 디지털트윈: 한 층 내 여러 단(sub_level, 복층/중층) 지원
+    // ============================================
+    const subLevel2LocRes = await fetch(`${API}/api/admin/inventory/locations`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${superAdminToken}` },
+      body: JSON.stringify({ code: `B-02-${ts}`, zone: 'B', grid_x: 0, grid_y: 0, floor: 2, sub_level: 2 })
+    });
+    const subLevel2LocJson = await subLevel2LocRes.json();
+    assert(subLevel2LocRes.status === 201 && subLevel2LocJson.data.sub_level === 2, `2층-2단 로케이션 생성 성공 (실제: sub_level=${subLevel2LocJson.data && subLevel2LocJson.data.sub_level})`);
+    subLevel2LocId = subLevel2LocJson.data.id;
+
+    const invalidSubLevelRes = await fetch(`${API}/api/admin/inventory/locations`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${superAdminToken}` },
+      body: JSON.stringify({ code: `B-03-${ts}`, zone: 'B', floor: 2, sub_level: 99 })
+    });
+    const invalidSubLevelJson = await invalidSubLevelRes.json();
+    assert(invalidSubLevelRes.status === 201 && invalidSubLevelJson.data.sub_level === 1, `범위 밖 sub_level(99)은 1단으로 기본 처리됨 (실제: sub_level=${invalidSubLevelJson.data && invalidSubLevelJson.data.sub_level})`);
+    invalidSubLevelLocId = invalidSubLevelJson.data.id;
+
+    const f2s1Res = await fetch(`${API}/api/admin/inventory/floorplan?floor=2&subLevel=1`, { headers: { Authorization: `Bearer ${superAdminToken}` } });
+    const f2s1Json = await f2s1Res.json();
+    assert(f2s1Json.data.locations.some(l => l.id === floor2LocId) && !f2s1Json.data.locations.some(l => l.id === subLevel2LocId), '?floor=2&subLevel=1 필터링 시 2층-1단 로케이션만 반환됨');
+
+    const f2s2Res = await fetch(`${API}/api/admin/inventory/floorplan?floor=2&subLevel=2`, { headers: { Authorization: `Bearer ${superAdminToken}` } });
+    const f2s2Json = await f2s2Res.json();
+    assert(f2s2Json.data.locations.some(l => l.id === subLevel2LocId) && !f2s2Json.data.locations.some(l => l.id === floor2LocId), '?floor=2&subLevel=2 필터링 시 2층-2단 로케이션만 반환됨');
+
+    const floor2FloorsEntry = f2s2Json.data.floors.find(f => f.floor === 2);
+    assert(!!floor2FloorsEntry && floor2FloorsEntry.subLevels.includes(1) && floor2FloorsEntry.subLevels.includes(2), '평면도 응답의 floors 목록에 2층의 단(subLevels) 정보가 [1,2]로 포함됨');
+
+    const subLevelMoveRes = await fetch(`${API}/api/admin/inventory/locations/${subLevel2LocId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${superAdminToken}` },
+      body: JSON.stringify({ sub_level: 3 })
+    });
+    const subLevelMoveJson = await subLevelMoveRes.json();
+    assert(subLevelMoveRes.status === 200 && subLevelMoveJson.data.sub_level === 3, `단(sub_level) 수정(PUT)도 정상 반영됨 (실제: sub_level=${subLevelMoveJson.data && subLevelMoveJson.data.sub_level})`);
+
+    // ============================================
+    // 5-3) 디지털트윈: 랙 실측 치수(cm)를 직접 입력 — 평면도 칸 크기(width/height)는 100cm=1칸로 자동 환산
+    // ============================================
+    const cmLocRes = await fetch(`${API}/api/admin/inventory/locations`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${superAdminToken}` },
+      body: JSON.stringify({ code: `CM-01-${ts}`, zone: 'C', grid_x: 0, grid_y: 0, floor: 1, width_cm: 150, depth_cm: 80, height_cm: 220 })
+    });
+    const cmLocJson = await cmLocRes.json();
+    assert(
+      cmLocRes.status === 201 && cmLocJson.data.width_cm === 150 && cmLocJson.data.depth_cm === 80 && cmLocJson.data.height_cm === 220 &&
+      cmLocJson.data.width === 1.5 && cmLocJson.data.height === 0.8,
+      `실측 치수(cm) 입력 시 그대로 저장되고 평면도 칸 크기가 100cm=1칸 기준으로 자동 환산됨 (실제: ${cmLocJson.data && cmLocJson.data.width_cm}×${cmLocJson.data && cmLocJson.data.depth_cm}cm → 칸 ${cmLocJson.data && cmLocJson.data.width}×${cmLocJson.data && cmLocJson.data.height})`
+    );
+    cmLocId = cmLocJson.data.id;
+
+    const cmUpdateRes = await fetch(`${API}/api/admin/inventory/locations/${cmLocId}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${superAdminToken}` },
+      body: JSON.stringify({ width_cm: 300, depth_cm: 120, height_cm: 240 })
+    });
+    const cmUpdateJson = await cmUpdateRes.json();
+    assert(
+      cmUpdateRes.status === 200 && cmUpdateJson.data.width_cm === 300 && cmUpdateJson.data.width === 3 && cmUpdateJson.data.depth_cm === 120 && cmUpdateJson.data.height === 1.2,
+      `실측 치수(cm) 수정(PUT) 시 칸 크기도 함께 갱신됨 (실제: width_cm=${cmUpdateJson.data && cmUpdateJson.data.width_cm}, width칸=${cmUpdateJson.data && cmUpdateJson.data.width})`
+    );
+
+    const cmDefaultRes = await fetch(`${API}/api/admin/inventory/locations`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${superAdminToken}` },
+      body: JSON.stringify({ code: `CM-02-${ts}`, zone: 'C', floor: 1 })
+    });
+    const cmDefaultJson = await cmDefaultRes.json();
+    assert(
+      cmDefaultRes.status === 201 && cmDefaultJson.data.width_cm === 100 && cmDefaultJson.data.depth_cm === 100 && cmDefaultJson.data.height_cm === 200,
+      `치수를 입력하지 않으면 기본값(100×100×200cm)이 적용됨 (실제: ${cmDefaultJson.data && cmDefaultJson.data.width_cm}×${cmDefaultJson.data && cmDefaultJson.data.depth_cm}×${cmDefaultJson.data && cmDefaultJson.data.height_cm})`
+    );
+    cmDefaultLocId = cmDefaultJson.data.id;
 
     // ============================================
     // 6) 장비(PDA/AGV) 등록 — 모두 is_simulated=true (실제 하드웨어 아님)
@@ -238,6 +311,10 @@ async function main() {
       if (locationId) await admin.from('warehouse_locations_with').delete().eq('id', locationId);
       if (location2Id) await admin.from('warehouse_locations_with').delete().eq('id', location2Id);
       if (floor2LocId) await admin.from('warehouse_locations_with').delete().eq('id', floor2LocId);
+      if (subLevel2LocId) await admin.from('warehouse_locations_with').delete().eq('id', subLevel2LocId);
+      if (invalidSubLevelLocId) await admin.from('warehouse_locations_with').delete().eq('id', invalidSubLevelLocId);
+      if (cmLocId) await admin.from('warehouse_locations_with').delete().eq('id', cmLocId);
+      if (cmDefaultLocId) await admin.from('warehouse_locations_with').delete().eq('id', cmDefaultLocId);
       if (productId) await admin.from('stock_adjustments_with').delete().eq('product_id', productId);
       if (productId) await admin.from('products_with').delete().eq('id', productId);
       if (superAdminId) await admin.auth.admin.deleteUser(superAdminId);

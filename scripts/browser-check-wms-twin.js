@@ -68,8 +68,8 @@ const API = 'http://localhost:3003';
     await page.waitForSelector('#wms-twin-control-panel[style*="display: block"]', { timeout: 8000 }).catch(() => {});
     const controlPanelVisible = await page.locator('#wms-twin-control-panel').isVisible();
     console.log('랙 추가 후 속성 컨트롤 패널 표시:', controlPanelVisible);
-    const widthInputVal = await page.locator('#wms-twin-ctl-width').inputValue().catch(() => null);
-    console.log('컨트롤 패널 width 입력값:', widthInputVal);
+    const widthCmInputVal = await page.locator('#wms-twin-ctl-width-cm').inputValue().catch(() => null);
+    console.log('컨트롤 패널 가로(cm) 입력값:', widthCmInputVal);
 
     // + 층 추가 → 새 층 탭이 늘어나는지
     const floorTabCountBefore = await page.locator('#wms-twin-floor-tabs .wms-floor-tab-btn').count();
@@ -81,6 +81,18 @@ const API = 'http://localhost:3003';
     ).catch(() => {});
     const floorTabCountAfter = await page.locator('#wms-twin-floor-tabs .wms-floor-tab-btn').count();
     console.log(`층 추가 전/후 탭 개수: ${floorTabCountBefore} -> ${floorTabCountAfter}`);
+
+    // + 단 추가 → 같은 층 안에 새 단(복층/중층) 탭이 늘어나는지
+    console.log('단(sub_level) 탭 렌더링:', await page.locator('#wms-twin-sublevel-tabs .wms-sublevel-tab-btn').count() > 0);
+    const subLevelTabCountBefore = await page.locator('#wms-twin-sublevel-tabs .wms-sublevel-tab-btn').count();
+    await page.locator('#wms-twin-add-sublevel-btn').click();
+    await page.waitForFunction(
+      (before) => document.querySelectorAll('#wms-twin-sublevel-tabs .wms-sublevel-tab-btn').length > before,
+      subLevelTabCountBefore,
+      { timeout: 8000 }
+    ).catch(() => {});
+    const subLevelTabCountAfter = await page.locator('#wms-twin-sublevel-tabs .wms-sublevel-tab-btn').count();
+    console.log(`단 추가 전/후 탭 개수: ${subLevelTabCountBefore} -> ${subLevelTabCountAfter}`);
 
     await page.screenshot({ path: '/tmp/wms_twin_screenshot.png', fullPage: true });
 

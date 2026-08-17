@@ -24,9 +24,10 @@
         .wrap { max-width: 1200px; margin: 30px auto 80px; padding: 0 20px; }
         h1.page-title { font-size: 1.5em; margin-bottom: 20px; }
 
-        .tabs { display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 2px solid var(--border-color); }
-        .tab-btn { background: none; border: none; padding: 12px 20px; font-size: 1em; font-weight: 600; color: var(--text-gray); cursor: pointer; border-bottom: 3px solid transparent; margin-bottom: -2px; }
-        .tab-btn.active { color: var(--primary-color); border-bottom-color: var(--primary-color); }
+        .tabs { display: flex; flex-wrap: wrap; gap: 4px 6px; margin-bottom: 20px; padding-bottom: 8px; border-bottom: 2px solid var(--border-color); }
+        .tab-btn { background: none; border: none; padding: 9px 14px; font-size: 0.88em; font-weight: 600; color: var(--text-gray); cursor: pointer; border-bottom: 3px solid transparent; border-radius: 6px 6px 0 0; white-space: nowrap; flex-shrink: 0; transition: background 0.15s, color 0.15s; }
+        .tab-btn:hover { background: var(--bg-light); color: var(--text-dark); }
+        .tab-btn.active { color: var(--primary-color); border-bottom-color: var(--primary-color); background: rgba(211,47,91,0.06); }
         .tab-panel { display: none; }
         .tab-panel.active { display: block; }
         .wms-subtab-panel { display: none; }
@@ -281,6 +282,17 @@
                 <div class="field"><label>정가 (원) *</label><input type="number" id="pf-price" min="0" required></div>
                 <div class="field"><label>할인가 (원, 선택)</label><input type="number" id="pf-discount-price" min="0"></div>
                 <div class="field"><label>재고 수량 *</label><input type="number" id="pf-stock" min="0" required></div>
+                <div class="field"><label>바코드/상품코드 (선택 — 비워두고 저장하면 자동으로 채번됩니다)</label>
+                    <div style="display:flex; gap:6px;">
+                        <input type="text" id="pf-barcode" placeholder="자동생성 버튼을 누르거나 직접 입력">
+                        <button type="button" class="btn btn-secondary" id="pf-barcode-generate-btn" style="white-space:nowrap;">🔢 자동생성</button>
+                    </div>
+                    <p class="msg" id="pf-barcode-msg" style="margin-top:4px;"></p>
+                </div>
+                <div class="field"><label>유통기한 (선택)</label><input type="date" id="pf-expiry-date"></div>
+                <div class="field"><label>규격 (선택, 예: 500ml / 30정 / 1box)</label><input type="text" id="pf-spec" placeholder="예: 500ml"></div>
+                <div class="field"><label>공급가액 (원, 선택 — 비워두면 판매가 기준 자동계산)</label><input type="number" id="pf-supply-amount" min="0"></div>
+                <div class="field"><label>부가세 (원, 선택 — 비워두면 판매가 기준 자동계산)</label><input type="number" id="pf-vat-amount" min="0"></div>
                 <div class="field"><label>상품 이미지 URL (여러 장은 줄바꿈으로 구분, 첫 줄이 대표 이미지)</label><textarea id="pf-images" placeholder="https://.../image1.jpg&#10;https://.../image2.jpg"></textarea></div>
                 <div class="field"><label>상세 설명 (상세페이지 상단, 선택)</label><textarea id="pf-long-description" placeholder="상품에 대한 자세한 설명을 입력해주세요"></textarea></div>
                 <div class="field">
@@ -350,6 +362,74 @@
             </form>
             <div class="msg" id="stock-adjust-msg"></div>
 
+            <div class="subsection-title">판매 외 사유 처리(자가사용 / 불량처리)</div>
+            <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:8px;">판매가 아닌 사유로 재고가 빠질 때 사유를 카테고리로 남겨 이력을 명확히 구분합니다.</p>
+            <form id="write-off-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+                <div class="field" style="width:120px; margin-bottom:0;">
+                    <label>사유</label>
+                    <select id="wof-category" class="small-input" style="width:100%;">
+                        <option value="self_use">자가사용</option>
+                        <option value="defect">불량처리</option>
+                    </select>
+                </div>
+                <div class="field" style="width:90px; margin-bottom:0;">
+                    <label>수량</label>
+                    <input type="number" id="wof-quantity" min="1" value="1" required class="small-input" style="width:100%;">
+                </div>
+                <div class="field" style="width:140px; margin-bottom:0;">
+                    <label>로케이션(선택)</label>
+                    <select id="wof-location" class="small-input" style="width:100%;"><option value="">선택 안 함</option></select>
+                </div>
+                <div class="field" style="flex:1; min-width:120px; margin-bottom:0;">
+                    <label>메모(선택)</label>
+                    <input type="text" id="wof-note" class="small-input" style="width:100%;">
+                </div>
+                <button type="submit" class="btn btn-secondary" style="height:34px; padding:0 16px;">처리</button>
+            </form>
+            <div class="msg" id="write-off-msg"></div>
+
+            <div class="subsection-title">재고실사(현물 카운트 반영)</div>
+            <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:8px;">직접 세어본 실제 수량을 입력하면 현재 시스템 재고와의 차이만큼 자동으로 보정 이력이 남습니다.</p>
+            <form id="stocktake-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+                <div class="field" style="width:110px; margin-bottom:0;">
+                    <label>실사 수량</label>
+                    <input type="number" id="stf-counted" min="0" required class="small-input" style="width:100%;">
+                </div>
+                <div class="field" style="width:140px; margin-bottom:0;">
+                    <label>로케이션(선택)</label>
+                    <select id="stf-location" class="small-input" style="width:100%;"><option value="">선택 안 함</option></select>
+                </div>
+                <div class="field" style="flex:1; min-width:120px; margin-bottom:0;">
+                    <label>메모(선택)</label>
+                    <input type="text" id="stf-note" class="small-input" style="width:100%;">
+                </div>
+                <button type="submit" class="btn btn-secondary" style="height:34px; padding:0 16px;">실사 반영</button>
+            </form>
+            <div class="msg" id="stocktake-msg"></div>
+
+            <div class="subsection-title">창고 간 재고 이동</div>
+            <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:8px;">등록된 로케이션 사이에 재고를 이동합니다(순증감 없음). "로케이션 관리"에서 먼저 로케이션을 등록해야 선택할 수 있습니다.</p>
+            <form id="transfer-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+                <div class="field" style="width:140px; margin-bottom:0;">
+                    <label>출발 로케이션</label>
+                    <select id="trf-from" required class="small-input" style="width:100%;"><option value="">선택</option></select>
+                </div>
+                <div class="field" style="width:140px; margin-bottom:0;">
+                    <label>도착 로케이션</label>
+                    <select id="trf-to" required class="small-input" style="width:100%;"><option value="">선택</option></select>
+                </div>
+                <div class="field" style="width:90px; margin-bottom:0;">
+                    <label>수량</label>
+                    <input type="number" id="trf-quantity" min="1" value="1" required class="small-input" style="width:100%;">
+                </div>
+                <div class="field" style="flex:1; min-width:120px; margin-bottom:0;">
+                    <label>메모(선택)</label>
+                    <input type="text" id="trf-note" class="small-input" style="width:100%;">
+                </div>
+                <button type="submit" class="btn btn-secondary" style="height:34px; padding:0 16px;">이동</button>
+            </form>
+            <div class="msg" id="transfer-msg"></div>
+
             <div class="subsection-title">최근 입출고 이력</div>
             <div id="stock-history-area" style="max-height:180px; overflow-y:auto;"></div>
 
@@ -376,6 +456,51 @@
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" id="cf-cancel">취소</button>
                     <button type="submit" class="btn btn-primary" id="cf-submit">저장</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 창고 로케이션 수정 모달 -->
+    <div class="modal-overlay" id="location-edit-modal">
+        <div class="modal-box">
+            <h3>📍 로케이션 수정</h3>
+            <form id="location-edit-form">
+                <input type="hidden" id="lef-id">
+                <div class="field"><label>코드 *</label><input type="text" id="lef-code" required></div>
+                <div class="field"><label>구역(Zone) *</label><input type="text" id="lef-zone" required></div>
+                <div class="field"><label>랙(Rack)</label><input type="text" id="lef-rack"></div>
+                <div class="field"><label>빈(Bin)</label><input type="text" id="lef-bin"></div>
+                <div class="field"><label>라벨(메모)</label><input type="text" id="lef-label"></div>
+                <div class="field"><label>소속 창고</label><select id="lef-warehouse-code"><option value="">미지정</option></select></div>
+                <div class="field" style="display:flex; gap:10px;">
+                    <div style="flex:1;"><label>층</label><input type="number" id="lef-floor" min="1" value="1"></div>
+                    <div style="flex:1;"><label>단(복층, 1~5)</label><input type="number" id="lef-sub-level" min="1" max="5" value="1"></div>
+                </div>
+                <div class="field" style="display:flex; gap:10px;">
+                    <div style="flex:1;"><label>평면도 X좌표</label><input type="number" id="lef-grid-x" value="0"></div>
+                    <div style="flex:1;"><label>평면도 Y좌표</label><input type="number" id="lef-grid-y" value="0"></div>
+                </div>
+                <div class="field" style="display:flex; gap:10px;">
+                    <div style="flex:1;"><label>가로 폭(cm)</label><input type="number" id="lef-width-cm" min="1" value="100"></div>
+                    <div style="flex:1;"><label>세로 깊이(cm)</label><input type="number" id="lef-depth-cm" min="1" value="100"></div>
+                    <div style="flex:1;"><label>높이(cm)</label><input type="number" id="lef-height-cm" min="1" value="200"></div>
+                </div>
+                <div class="field">
+                    <label>모양</label>
+                    <select id="lef-shape">
+                        <option value="rect">사각랙</option>
+                        <option value="vertical">세로랙</option>
+                        <option value="square">정사각랙</option>
+                        <option value="conveyor">컨베이어벨트</option>
+                    </select>
+                </div>
+                <div class="field"><label><input type="checkbox" id="lef-is-obstacle" style="width:auto; margin-right:6px;">통과 불가(장애물)</label></div>
+                <div class="field"><label><input type="checkbox" id="lef-is-active" checked style="width:auto; margin-right:6px;">사용중(체크 해제 시 비활성)</label></div>
+                <div class="msg" id="lef-msg"></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="lef-cancel">취소</button>
+                    <button type="submit" class="btn btn-primary" id="lef-submit">저장</button>
                 </div>
             </form>
         </div>
@@ -481,6 +606,11 @@
                     <label>로고 이미지 URL</label>
                     <input type="text" id="cmf-logo-url" placeholder="https://... (선택)">
                     <div class="hint">랜딩페이지 상단 헤더와 커뮤니티 목록에 표시되는 조직 로고입니다. 정사각형/가로형 이미지를 권장합니다. 비워두면 기본 아이콘이 표시됩니다.</div>
+                </div>
+                <div class="field">
+                    <label>회사 도장(직인) 이미지 URL</label>
+                    <input type="text" id="cmf-stamp-url" placeholder="https://... (선택)">
+                    <div class="hint">정산 영수증 등 서류에 사용되는 조직 직인/도장 이미지입니다. 투명 배경 PNG를 권장합니다.</div>
                 </div>
                 <div class="field"><label>대표 이미지(배너) URL</label><input type="text" id="cmf-image-url" placeholder="https://... (선택)"></div>
                 <div class="field"><label>브랜드 색상</label><input type="color" id="cmf-primary-color" value="#E91E63" style="width:70px; height:38px; padding:2px; cursor:pointer;"></div>
@@ -715,6 +845,13 @@
                     return { ok: res.ok, json };
                 }
 
+                // 본사가 분양조직 현금 정산 기능을 켜뒀을 때만 "정산" 탭을 보여준다
+                let cashSettlementEnabled = false;
+                try {
+                    const { ok, json } = await caFetch('/api/community-cash-settlement/status');
+                    cashSettlementEnabled = ok && json.success && json.data.enabled;
+                } catch (e) { /* 상태 조회 실패 시 안전하게 탭을 숨김 */ }
+
                 area.innerHTML = `
                     <div style="background:white; border-radius:12px; padding:20px; margin-bottom:20px;">
                         <div style="font-size:0.85em; color:var(--text-gray); margin-bottom:4px;">🏢 분양 조직 전용 관리자 화면</div>
@@ -731,6 +868,7 @@
                         <button class="tab-btn active" data-tab="ca-members">👥 회원 목록</button>
                         <button class="tab-btn" data-tab="ca-orders">🧾 주문 내역</button>
                         <button class="tab-btn" data-tab="ca-rates">💰 적립율 설정</button>
+                        ${cashSettlementEnabled ? '<button class="tab-btn" data-tab="ca-settlements">💵 현금 정산</button>' : ''}
                     </div>
                     <div class="tab-panel active" id="tab-ca-members">
                         <div id="ca-members-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
@@ -741,6 +879,11 @@
                     <div class="tab-panel" id="tab-ca-rates">
                         <div id="ca-rates-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                     </div>
+                    ${cashSettlementEnabled ? `
+                    <div class="tab-panel" id="tab-ca-settlements">
+                        <p style="color:var(--text-gray); font-size:0.85em; margin-bottom:10px;">사업자등록번호가 등록·검증되어 있어야 정산 내역이 생성됩니다. 등록/검증은 본사 관리자에게 문의해주세요.</p>
+                        <div id="ca-settlements-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                    </div>` : ''}
                     <p style="color:var(--text-gray); font-size:0.82em; margin-top:14px;">※ 이 화면에는 "${WithPlus.escapeHtml(c.name)}" 소속 데이터만 표시됩니다. 다른 분양 조직의 정보는 조회할 수 없습니다.</p>`;
 
                 document.querySelectorAll('.tab-btn').forEach(btn => {
@@ -897,9 +1040,92 @@
                     }
                 }
 
+                const CA_SETTLEMENT_STATUS_LABEL = { pending: '정산대기', paid: '지급완료', cancelled: '취소' };
+                const CA_SETTLEMENT_STATUS_CLASS = { pending: '', paid: 'active', cancelled: 'inactive' };
+
+                async function loadCaSettlements() {
+                    const el = document.getElementById('ca-settlements-area');
+                    if (!el) return;
+                    try {
+                        const { ok, json } = await caFetch('/api/admin/community-settlements');
+                        if (!ok || !json.success) throw new Error(json.message || '정산 내역을 불러오지 못했습니다');
+                        if (json.data.length === 0) {
+                            el.innerHTML = `<div class="state-box"><div class="emoji">💵</div><h3>아직 정산 내역이 없습니다</h3></div>`;
+                            return;
+                        }
+                        const caTaxLabel = { withholding: '원천징수 3.3%', tax_invoice: '세금계산서 발행', none: '해당없음' };
+                        el.innerHTML = `
+                            <table>
+                                <thead><tr><th>기간</th><th>매출액</th><th>수수료율</th><th>정산액</th><th>주문건수</th><th>상태</th><th>세무처리</th></tr></thead>
+                                <tbody>
+                                    ${json.data.map((r, i) => `
+                                    <tr>
+                                        <td data-label="기간">${r.period_start} ~ ${r.period_end}</td>
+                                        <td data-label="매출액">${Number(r.gross_revenue).toLocaleString()}원</td>
+                                        <td data-label="수수료율">${r.commission_rate}%</td>
+                                        <td data-label="정산액"><strong>${Number(r.commission_amount).toLocaleString()}원</strong></td>
+                                        <td data-label="주문건수">${r.order_count.toLocaleString()}건</td>
+                                        <td data-label="상태"><span class="badge ${CA_SETTLEMENT_STATUS_CLASS[r.status] || ''}">${CA_SETTLEMENT_STATUS_LABEL[r.status] || r.status}</span></td>
+                                        <td data-label="세무처리">
+                                            ${r.status === 'paid' && r.tax_method ? `<div style="font-size:0.85em;">${caTaxLabel[r.tax_method] || r.tax_method}</div>` : ''}
+                                            ${r.status === 'paid' && r.tax_method === 'withholding' ? `<div style="font-size:0.8em; color:var(--text-gray);">원천징수 ${Number(r.withholding_tax_amount || 0).toLocaleString()}원 · 실지급 ${Number(r.net_payment_amount || 0).toLocaleString()}원</div><button type="button" class="btn btn-secondary ca-receipt-btn" data-idx="${i}" style="padding:5px 8px; font-size:0.78em; margin-top:4px;">원천징수영수증 보기</button>` : ''}
+                                            ${r.status === 'paid' && r.tax_method === 'tax_invoice' ? `<div style="font-size:0.8em; color:${r.tax_invoice_status === 'issued' ? 'var(--text-gray)' : '#C62828'};">🧾 세금계산서 ${r.tax_invoice_status === 'issued' ? '발행완료' : '발행대기'}</div>` : ''}
+                                        </td>
+                                    </tr>`).join('')}
+                                </tbody>
+                            </table>`;
+
+                        el.querySelectorAll('.ca-receipt-btn').forEach(btn => {
+                            btn.addEventListener('click', async () => {
+                                const row = json.data[Number(btn.dataset.idx)];
+                                const { ok, json: receiptJson } = await caFetch(`/api/admin/community-settlements/${row.id}/withholding-receipt`);
+                                if (!ok || !receiptJson.success) { alert(receiptJson.message || '원천징수영수증을 불러오지 못했습니다'); return; }
+                                const { settlement: s, payee, withholder } = receiptJson.data;
+                                const win = window.open('', '_blank', 'width=640,height=800');
+                                if (!win) { alert('팝업이 차단되었습니다. 팝업 차단을 해제한 뒤 다시 시도해주세요.'); return; }
+                                win.document.write(`<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>원천징수영수증</title>
+                                    <style>body{font-family:'Malgun Gothic',sans-serif; padding:32px; color:#222;} h1{font-size:1.3em; text-align:center; margin-bottom:24px;} table{width:100%; border-collapse:collapse; margin-bottom:20px;} th,td{border:1px solid #ccc; padding:8px 10px; font-size:0.92em; text-align:left;} th{background:#f5f5f5; width:32%;} .amt{text-align:right;} .note{font-size:0.8em; color:#777; margin-top:20px;} @media print{ button{display:none;} }</style>
+                                    </head><body>
+                                    <h1>원천징수영수증 (사업소득)</h1>
+                                    <table>
+                                        <tr><th>귀속연도</th><td>${new Date(s.paid_at || s.updated_at).getFullYear()}년</td></tr>
+                                        <tr><th>정산기간</th><td>${s.period_start} ~ ${s.period_end}</td></tr>
+                                        <tr><th>지급일</th><td>${s.paid_at ? new Date(s.paid_at).toLocaleDateString('ko-KR') : '-'}</td></tr>
+                                    </table>
+                                    <table>
+                                        <tr><th colspan="2" style="background:#eef;">원천징수의무자 (지급자)</th></tr>
+                                        <tr><th>상호</th><td>${WithPlus.escapeHtml(withholder.company_name || '(본사 관리자가 입력 필요)')}</td></tr>
+                                        <tr><th>대표자</th><td>${WithPlus.escapeHtml(withholder.ceo_name || '-')}</td></tr>
+                                        <tr><th>사업자등록번호</th><td>${WithPlus.escapeHtml(withholder.business_number || '-')}</td></tr>
+                                        <tr><th>주소</th><td>${WithPlus.escapeHtml(withholder.address || '-')}</td></tr>
+                                    </table>
+                                    <table>
+                                        <tr><th colspan="2" style="background:#eef;">소득자 (지급받는 자)</th></tr>
+                                        <tr><th>조직명</th><td>${WithPlus.escapeHtml(payee.name || '(이름 없음)')}</td></tr>
+                                        <tr><th>사업자등록번호</th><td>${WithPlus.escapeHtml(payee.business_number || '-')}</td></tr>
+                                    </table>
+                                    <table>
+                                        <tr><th colspan="2" style="background:#eef;">지급 내역</th></tr>
+                                        <tr><th>지급총액</th><td class="amt">${Number(s.commission_amount).toLocaleString()}원</td></tr>
+                                        <tr><th>세율</th><td class="amt">${Number(s.withholding_tax_rate).toFixed(1)}% (소득세 3% + 지방소득세 0.3%)</td></tr>
+                                        <tr><th>원천징수세액</th><td class="amt">${Number(s.withholding_tax_amount).toLocaleString()}원</td></tr>
+                                        <tr><th><strong>차인지급액</strong></th><td class="amt"><strong>${Number(s.net_payment_amount).toLocaleString()}원</strong></td></tr>
+                                    </table>
+                                    <p class="note">본 영수증은 WITH+ 플랫폼에서 자동 생성되었습니다. 실제 국세청 신고는 별도로 진행해야 합니다.</p>
+                                    <button onclick="window.print()" style="padding:10px 18px; font-size:0.9em; cursor:pointer;">인쇄</button>
+                                    </body></html>`);
+                                win.document.close();
+                            });
+                        });
+                    } catch (err) {
+                        el.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>정산 내역을 불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                    }
+                }
+
                 loadCaMembers();
                 loadCaOrders();
                 loadCaRates();
+                if (cashSettlementEnabled) loadCaSettlements();
             }
 
             // ===== 탭 구조 렌더 =====
@@ -919,6 +1145,7 @@
                     ${isAdmin ? '<button class="tab-btn" data-tab="categories">🏷️ 카테고리 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="suppliers">🏭 공급자 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="communities">🏢 분양 조직 관리</button>' : ''}
+                    ${isAdmin ? '<button class="tab-btn" data-tab="community-settlements">💵 분양조직 정산</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="boards">📝 게시판 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="returns">↩️ 취소/반품/교환 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="reviews">⭐ 리뷰 관리</button>' : ''}
@@ -1088,6 +1315,9 @@
                     </div>
                     <div id="communities-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                 </div>
+                <div class="tab-panel" id="tab-community-settlements">
+                    <div id="community-settlements-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                </div>
                 <div class="tab-panel" id="tab-boards">
                     <div class="panel-toolbar">
                         <div class="status-filter" id="board-type-filter">
@@ -1160,6 +1390,7 @@
                     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;">
                         <button class="btn btn-secondary wms-subtab-btn active" data-wms-tab="ledger">📒 재고원장</button>
                         <button class="btn btn-secondary wms-subtab-btn" data-wms-tab="scan">📷 바코드 스캔 터미널</button>
+                        ${isAdmin ? '<button class="btn btn-secondary wms-subtab-btn" data-wms-tab="warehouses">🏭 창고 마스터</button>' : ''}
                         ${isAdmin ? '<button class="btn btn-secondary wms-subtab-btn" data-wms-tab="locations">📍 로케이션 관리</button>' : ''}
                         ${isAdmin ? '<button class="btn btn-secondary wms-subtab-btn" data-wms-tab="twin">🗺️ 2D 디지털트윈</button>' : ''}
                         ${isAdmin ? '<button class="btn btn-secondary wms-subtab-btn" data-wms-tab="agv">🤖 AGV 시뮬레이션</button>' : ''}
@@ -1203,6 +1434,24 @@
                     </div>
 
                     ${isAdmin ? `
+                    <div class="wms-subtab-panel" id="wms-tab-warehouses">
+                        <p style="color:var(--text-gray); font-size:0.88em; margin-bottom:12px;">실제로 물리적으로 분리된 건물/동 단위의 창고 목록입니다. 로케이션(Zone-Rack-Bin) 등록 시 어느 창고에 속하는지 연결할 수 있습니다.</p>
+                        <div class="panel-toolbar">
+                            <form id="wh-add-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
+                                <div class="field" style="width:150px; margin-bottom:0;"><label>코드 *</label>
+                                    <div style="display:flex; gap:4px;">
+                                        <input type="text" id="whf-code" required class="small-input" style="width:100%;" placeholder="예: D1 (또는 자동생성)">
+                                        <button type="button" class="btn btn-secondary" id="whf-code-generate-btn" style="padding:0 8px; height:34px; white-space:nowrap;">🔢</button>
+                                    </div>
+                                </div>
+                                <div class="field" style="width:200px; margin-bottom:0;"><label>이름 *</label><input type="text" id="whf-name" required class="small-input" style="width:100%;" placeholder="예: D동1층 창고"></div>
+                                <div class="field" style="flex:1; min-width:160px; margin-bottom:0;"><label>주소(선택)</label><input type="text" id="whf-address" class="small-input" style="width:100%;"></div>
+                                <button type="submit" class="btn btn-primary" style="height:34px; padding:0 16px;">+ 창고 등록</button>
+                            </form>
+                        </div>
+                        <div class="msg" id="wh-add-msg"></div>
+                        <div id="wh-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                    </div>
                     <div class="wms-subtab-panel" id="wms-tab-locations">
                         <div class="panel-toolbar">
                             <button class="btn btn-primary" id="wms-btn-new-location">+ 새 로케이션 등록</button>
@@ -1210,12 +1459,17 @@
                         <div id="wms-locations-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                     </div>
                     <div class="wms-subtab-panel" id="wms-tab-twin">
-                        <p style="color:var(--text-gray); font-size:0.88em; margin-bottom:12px;">로케이션 관리에서 등록한 좌표(grid_x, grid_y)를 기준으로 창고를 2D 평면도로 시각화합니다. 회색 칸은 통과 불가(벽/기둥) 구역입니다.</p>
+                        <p style="color:var(--text-gray); font-size:0.88em; margin-bottom:12px;">로케이션 관리에서 등록한 좌표(grid_x, grid_y)를 기준으로 창고를 2D 평면도로 시각화합니다. 회색 칸은 통과 불가(벽/기둥) 구역입니다. 건물은 여러 층으로, 각 층은 다시 최대 5단(복층/중층)까지 나눌 수 있습니다. 랙을 선택하면 가로·세로·높이를 실제 cm 단위로 직접 입력할 수 있어 평면도가 실제 창고 규격에 가깝게 표시됩니다.</p>
                         <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
                             <div id="wms-twin-floor-tabs" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
                             <button class="btn btn-secondary" id="wms-twin-add-floor-btn" style="padding:6px 12px; font-size:0.85em;">+ 층 추가</button>
                             <span style="flex:1;"></span>
                             <button class="btn btn-secondary" id="wms-twin-edit-toggle" style="padding:6px 14px; font-size:0.85em;">✏️ 편집 모드 켜기</button>
+                        </div>
+                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+                            <span style="font-size:0.82em; color:var(--text-gray);">이 층의 단(복층/중층):</span>
+                            <div id="wms-twin-sublevel-tabs" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
+                            <button class="btn btn-secondary" id="wms-twin-add-sublevel-btn" style="padding:5px 10px; font-size:0.8em;">+ 단 추가</button>
                         </div>
                         <div id="wms-twin-toolbox" style="display:none; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; padding:10px; background:#F5F5F7; border-radius:8px;">
                             <span style="font-size:0.85em; color:var(--text-gray);">새 랙 추가:</span>
@@ -1455,11 +1709,12 @@
 
                     tableArea.innerHTML = `
                         <table>
-                            <thead><tr><th>상품명</th><th>카테고리</th><th>가격</th><th>재고</th><th>평점</th><th>상태</th><th>관리</th></tr></thead>
+                            <thead><tr><th>상품명</th>${isAdmin ? '<th>소유(재고 방식)</th>' : ''}<th>카테고리</th><th>가격</th><th>재고</th><th>평점</th><th>상태</th><th>관리</th></tr></thead>
                             <tbody>
                                 ${products.map(p => `
                                 <tr data-id="${p.id}">
                                     <td class="cell-name" data-label="상품명">${WithPlus.escapeHtml(p.name)}</td>
+                                    ${isAdmin ? `<td data-label="소유">${p.is_self_stocked ? '<span class="badge active">🏬 자체재고</span>' : `<span class="badge">🤝 공급자: ${WithPlus.escapeHtml(p.owner_name || '알 수 없음')}</span>`}</td>` : ''}
                                     <td data-label="카테고리">${WithPlus.escapeHtml(p.category)}</td>
                                     <td data-label="가격">${WithPlus.formatPrice(p.discount_price || p.price)}</td>
                                     <td data-label="재고">${Number(p.stock) <= 0 ? '<span class="badge out-of-stock">품절</span>' : p.stock + '개'}</td>
@@ -1469,6 +1724,7 @@
                                         <div class="cell-actions">
                                             <button class="btn btn-secondary btn-sm act-edit">수정</button>
                                             <button class="btn btn-secondary btn-sm act-variants">🎨 옵션/재고</button>
+                                            ${isAdmin ? '<button class="btn btn-secondary btn-sm act-reassign-owner">🔀 소유 변경</button>' : ''}
                                             ${p.status === 'active' ? '<button class="btn btn-danger btn-sm act-discontinue">단종처리</button>' : ''}
                                         </div>
                                     </td>
@@ -1496,6 +1752,21 @@
                             if (!confirm('이 상품을 단종 처리하시겠습니까? (판매 목록에서 숨겨지며, 주문 이력은 보존됩니다)')) return;
                             const { ok, json } = await authedFetch('/api/products/' + id, { method: 'DELETE' });
                             if (!ok) { alert(json.message || '처리에 실패했습니다'); return; }
+                            loadProducts();
+                        });
+                    });
+                    tableArea.querySelectorAll('.act-reassign-owner').forEach(btn => {
+                        btn.addEventListener('click', async () => {
+                            const id = btn.closest('tr').dataset.id;
+                            const p = products.find(x => x.id === id);
+                            const cur = p.is_self_stocked ? '현재: 🏬 쇼핑몰 자체재고' : `현재: 🤝 공급자(${p.owner_name || '알 수 없음'})`;
+                            const email = prompt(`"${p.name}" 상품의 소유를 옮길 계정 이메일을 입력하세요.\n${cur}\n\n※ 쇼핑몰 자체재고로 되돌리려면 관리자 본인 계정 이메일을 입력하세요.`);
+                            if (!email) return;
+                            const { ok, json } = await authedFetch(`/api/products/${id}/supplier`, {
+                                method: 'PATCH', body: JSON.stringify({ supplier_email: email.trim() })
+                            });
+                            if (!ok) { alert(json.message || '소유 변경 실패'); return; }
+                            alert(json.message || '소유가 변경되었습니다');
                             loadProducts();
                         });
                     });
@@ -1538,8 +1809,11 @@
                 document.getElementById('saf-delta').value = '';
                 document.getElementById('saf-reason').value = '';
                 document.getElementById('stock-adjust-msg').className = 'msg';
+                document.getElementById('write-off-msg').className = 'msg';
+                document.getElementById('stocktake-msg').className = 'msg';
+                document.getElementById('transfer-msg').className = 'msg';
                 variantModal.classList.add('open');
-                await Promise.all([loadVariantList(), loadStockHistory()]);
+                await Promise.all([loadVariantList(), loadStockHistory(), loadIoLocations()]);
             }
 
             async function loadVariantList() {
@@ -1674,6 +1948,109 @@
                 }
             });
 
+            // 판매 외 처리(자가사용/불량처리) / 재고실사 / 창고이동에서 쓸 로케이션 목록 - 변형 모달을 열 때마다 새로 불러온다
+            let ioLocationsCache = [];
+            async function loadIoLocations() {
+                try {
+                    const { ok, json } = await authedFetch('/api/admin/inventory/locations');
+                    if (!ok || !json.success) return;
+                    ioLocationsCache = json.data || [];
+                    const opts = ioLocationsCache.map(l => `<option value="${l.id}">${WithPlus.escapeHtml(l.code)}${l.label ? ' - ' + WithPlus.escapeHtml(l.label) : ''}</option>`).join('');
+                    ['wof-location', 'stf-location'].forEach(id => {
+                        const sel = document.getElementById(id);
+                        if (sel) sel.innerHTML = '<option value="">선택 안 함</option>' + opts;
+                    });
+                    ['trf-from', 'trf-to'].forEach(id => {
+                        const sel = document.getElementById(id);
+                        if (sel) sel.innerHTML = '<option value="">선택</option>' + opts;
+                    });
+                } catch (err) { /* 조용히 무시 - 선택 사항이므로 로케이션 없이도 다른 기능은 계속 동작해야 함 */ }
+            }
+
+            document.getElementById('write-off-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const msg = document.getElementById('write-off-msg');
+                msg.className = 'msg';
+                try {
+                    const { ok, json } = await authedFetch('/api/admin/inventory/write-off', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            product_id: variantModalProduct.id,
+                            category: document.getElementById('wof-category').value,
+                            quantity: document.getElementById('wof-quantity').value,
+                            location_id: document.getElementById('wof-location').value || undefined,
+                            note: document.getElementById('wof-note').value.trim() || undefined
+                        })
+                    });
+                    if (!ok) throw new Error(json.message || '처리에 실패했습니다');
+                    document.getElementById('wof-note').value = '';
+                    msg.textContent = `처리되었습니다 (현재 ${json.data.stock}개)`;
+                    msg.className = 'msg success';
+                    await loadStockHistory();
+                    loadProducts();
+                } catch (err) {
+                    msg.textContent = err.message;
+                    msg.className = 'msg error';
+                }
+            });
+
+            document.getElementById('stocktake-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const msg = document.getElementById('stocktake-msg');
+                msg.className = 'msg';
+                try {
+                    const { ok, json } = await authedFetch('/api/admin/inventory/stocktake', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            product_id: variantModalProduct.id,
+                            counted_quantity: document.getElementById('stf-counted').value,
+                            location_id: document.getElementById('stf-location').value || undefined,
+                            note: document.getElementById('stf-note').value.trim() || undefined
+                        })
+                    });
+                    if (!ok) throw new Error(json.message || '실사 반영에 실패했습니다');
+                    document.getElementById('stf-note').value = '';
+                    msg.textContent = json.data.delta === 0 ? '실사 수량이 일치합니다 (변경 없음)' : `차이(${json.data.delta > 0 ? '+' : ''}${json.data.delta})가 보정되었습니다 (현재 ${json.data.stock}개)`;
+                    msg.className = 'msg success';
+                    await loadStockHistory();
+                    loadProducts();
+                } catch (err) {
+                    msg.textContent = err.message;
+                    msg.className = 'msg error';
+                }
+            });
+
+            document.getElementById('transfer-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const msg = document.getElementById('transfer-msg');
+                msg.className = 'msg';
+                const fromLoc = document.getElementById('trf-from').value;
+                const toLoc = document.getElementById('trf-to').value;
+                if (!fromLoc || !toLoc) { msg.textContent = '출발/도착 로케이션을 선택해주세요'; msg.className = 'msg error'; return; }
+                if (fromLoc === toLoc) { msg.textContent = '출발과 도착 로케이션이 같습니다'; msg.className = 'msg error'; return; }
+                try {
+                    const { ok, json } = await authedFetch('/api/admin/inventory/transfer', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            product_id: variantModalProduct.id,
+                            from_location_id: fromLoc,
+                            to_location_id: toLoc,
+                            quantity: document.getElementById('trf-quantity').value,
+                            note: document.getElementById('trf-note').value.trim() || undefined
+                        })
+                    });
+                    if (!ok) throw new Error(json.message || '이동에 실패했습니다');
+                    document.getElementById('trf-note').value = '';
+                    msg.textContent = `이동되었습니다 (현재 총 재고 ${json.data.stock}개)`;
+                    msg.className = 'msg success';
+                    await loadStockHistory();
+                    loadProducts();
+                } catch (err) {
+                    msg.textContent = err.message;
+                    msg.className = 'msg error';
+                }
+            });
+
             document.getElementById('variant-modal-close').addEventListener('click', () => variantModal.classList.remove('open'));
 
             const modal = document.getElementById('product-modal');
@@ -1767,6 +2144,8 @@
             function openProductModal(product) {
                 pfMsg.className = 'msg';
                 pfForm.reset();
+                const pfBarcodeMsgReset = document.getElementById('pf-barcode-msg');
+                pfBarcodeMsgReset.className = 'msg'; pfBarcodeMsgReset.textContent = '';
                 document.getElementById('pf-ai-features').value = '';
                 const aiMsgReset = document.getElementById('pf-ai-msg');
                 aiMsgReset.className = 'msg'; aiMsgReset.textContent = '';
@@ -1784,6 +2163,11 @@
                     document.getElementById('pf-long-description').value = product.long_description || '';
                     document.getElementById('pf-vendor').value = product.vendor_id || '';
                     document.getElementById('pf-subscribable').checked = !!product.subscription_available;
+                    document.getElementById('pf-barcode').value = product.barcode || '';
+                    document.getElementById('pf-expiry-date').value = product.expiry_date ? String(product.expiry_date).slice(0, 10) : '';
+                    document.getElementById('pf-spec').value = product.spec || '';
+                    document.getElementById('pf-supply-amount').value = (product.supply_amount === null || product.supply_amount === undefined) ? '' : product.supply_amount;
+                    document.getElementById('pf-vat-amount').value = (product.vat_amount === null || product.vat_amount === undefined) ? '' : product.vat_amount;
                     renderAllSections(product.detail_sections);
                 } else {
                     document.getElementById('product-modal-title').textContent = '새 상품 등록';
@@ -1791,12 +2175,61 @@
                     document.getElementById('pf-status').value = 'active';
                     document.getElementById('pf-vendor').value = '';
                     document.getElementById('pf-subscribable').checked = false;
+                    document.getElementById('pf-barcode').value = '';
+                    document.getElementById('pf-expiry-date').value = '';
+                    document.getElementById('pf-spec').value = '';
+                    document.getElementById('pf-supply-amount').value = '';
+                    document.getElementById('pf-vat-amount').value = '';
                     renderAllSections([]);
                 }
                 modal.classList.add('open');
             }
             document.getElementById('btn-new-product').addEventListener('click', () => openProductModal(null));
             document.getElementById('pf-cancel').addEventListener('click', () => modal.classList.remove('open'));
+            // 바코드 자동채번: 서버가 실제 DB를 확인해 아무도 안 쓰고 있는 값만 추천한다(추천 자체가 중복일 수 없음)
+            document.getElementById('pf-barcode-generate-btn').addEventListener('click', async () => {
+                const btn = document.getElementById('pf-barcode-generate-btn');
+                const msgEl = document.getElementById('pf-barcode-msg');
+                btn.disabled = true;
+                try {
+                    const { ok, json } = await authedFetch('/api/admin/products/suggest-barcode');
+                    if (!ok) throw new Error(json.message || '자동생성에 실패했습니다');
+                    document.getElementById('pf-barcode').value = json.data.barcode;
+                    msgEl.className = 'msg success';
+                    msgEl.textContent = '✅ 사용 가능한 코드입니다: ' + json.data.barcode;
+                } catch (err) {
+                    msgEl.className = 'msg error';
+                    msgEl.textContent = '❌ ' + err.message;
+                } finally {
+                    btn.disabled = false;
+                }
+            });
+            // 직접 입력한 값도 저장 전에 서버에서 중복 여부를 바로 확인해준다
+            let pfBarcodeCheckTimer = null;
+            document.getElementById('pf-barcode').addEventListener('input', () => {
+                const msgEl = document.getElementById('pf-barcode-msg');
+                const val = document.getElementById('pf-barcode').value.trim();
+                clearTimeout(pfBarcodeCheckTimer);
+                if (!val) { msgEl.className = 'msg'; msgEl.textContent = ''; return; }
+                pfBarcodeCheckTimer = setTimeout(async () => {
+                    try {
+                        const excludeId = document.getElementById('pf-id').value;
+                        const qs = new URLSearchParams({ barcode: val });
+                        if (excludeId) qs.set('exclude_id', excludeId);
+                        const { ok, json } = await authedFetch('/api/admin/products/check-barcode?' + qs.toString());
+                        if (!ok) throw new Error(json.message || '확인 실패');
+                        if (json.data.available) {
+                            msgEl.className = 'msg success';
+                            msgEl.textContent = '✅ 사용 가능한 코드입니다';
+                        } else {
+                            msgEl.className = 'msg error';
+                            msgEl.textContent = `❌ 이미 사용 중인 코드입니다 (상품: ${json.data.existing.name})`;
+                        }
+                    } catch (err) {
+                        msgEl.className = 'msg'; msgEl.textContent = '';
+                    }
+                }, 400);
+            });
 
             pfForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
@@ -1817,14 +2250,30 @@
                     long_description: document.getElementById('pf-long-description').value.trim(),
                     detail_sections: collectDetailSections(),
                     vendor_id: document.getElementById('pf-vendor').value || null,
-                    subscription_available: document.getElementById('pf-subscribable').checked
+                    subscription_available: document.getElementById('pf-subscribable').checked,
+                    barcode: document.getElementById('pf-barcode').value.trim() || null,
+                    expiry_date: document.getElementById('pf-expiry-date').value || null,
+                    spec: document.getElementById('pf-spec').value.trim() || null
                 };
+                // 공급가액/부가세는 값을 직접 입력했을 때만 전송한다 — 비워두면 서버가 판매가 기준 10%로 자동계산하게 둔다
+                // (빈 문자열을 그대로 보내면 서버가 "명시적으로 null로 지정"한 것으로 오해해 자동계산을 건너뛴다)
+                const supplyAmountVal = document.getElementById('pf-supply-amount').value;
+                const vatAmountVal = document.getElementById('pf-vat-amount').value;
+                if (supplyAmountVal !== '') payload.supply_amount = supplyAmountVal;
+                if (vatAmountVal !== '') payload.vat_amount = vatAmountVal;
 
                 const submitBtn = document.getElementById('pf-submit');
                 submitBtn.disabled = true;
                 submitBtn.textContent = '저장 중...';
 
                 try {
+                    // 신규 상품인데 바코드를 안 넣고 저장하는 경우, 비워둔 채 등록되지 않도록 서버에 자동채번을 요청해 채워준다
+                    if (!id && !payload.barcode) {
+                        try {
+                            const suggestRes = await authedFetch('/api/admin/products/suggest-barcode');
+                            if (suggestRes.ok) payload.barcode = suggestRes.json.data.barcode;
+                        } catch (e) { /* 자동채번 실패해도 저장 자체는 계속 진행(바코드 없이 등록) */ }
+                    }
                     const { ok, json } = id
                         ? await authedFetch('/api/products/' + id, { method: 'PUT', body: JSON.stringify(payload) })
                         : await authedFetch('/api/products', { method: 'POST', body: JSON.stringify(payload) });
@@ -2022,6 +2471,91 @@
                 const SETTLEMENT_STATUS_LABEL = { pending: '정산대기', paid: '지급완료', cancelled: '취소' };
                 const SETTLEMENT_STATUS_CLASS = { pending: '', paid: 'active', cancelled: 'inactive' };
 
+                // 🧾 정산 세무처리(원천징수 3.3% / 세금계산서 발행) - 공급자·분양조직 정산 공용 UI 헬퍼
+                const TAX_METHOD_LABEL = { withholding: '원천징수 3.3%', tax_invoice: '세금계산서 발행', none: '해당없음' };
+                function TAX_METHOD_SELECT_HTML(cls, id, current) {
+                    const value = current || 'withholding';
+                    return `<select class="${cls}" data-id="${id}" style="padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; font-size:0.85em;">
+                        ${Object.keys(TAX_METHOD_LABEL).map(k => `<option value="${k}" ${value === k ? 'selected' : ''}>${TAX_METHOD_LABEL[k]}</option>`).join('')}
+                    </select>`;
+                }
+                // 정산 표에서 "처리" 열에 넣을 원천징수/세금계산서 부가 정보 HTML (지급완료 건에만 표시)
+                function settlementTaxInfoHTML(r) {
+                    if (r.status !== 'paid' || !r.tax_method) return '';
+                    if (r.tax_method === 'withholding') {
+                        return `<div style="margin-top:4px; font-size:0.8em; color:var(--text-gray);">원천징수 ${Number(r.withholding_tax_amount || 0).toLocaleString()}원 · 실지급 ${Number(r.net_payment_amount || 0).toLocaleString()}원</div>`;
+                    }
+                    if (r.tax_method === 'tax_invoice') {
+                        if (r.tax_invoice_status === 'issued') {
+                            return `<div style="margin-top:4px; font-size:0.8em; color:var(--text-gray);">🧾 세금계산서 발행완료 (${WithPlus.escapeHtml(r.tax_invoice_number || '')})</div>`;
+                        }
+                        return `<div style="margin-top:4px; font-size:0.8em; color:#C62828;">🧾 세금계산서 발행대기</div>`;
+                    }
+                    return '';
+                }
+                // 세무처리 관련 버튼(원천징수영수증 보기 / 세금계산서 발행완료 처리) HTML - 지급완료 건에만 노출
+                function settlementTaxActionHTML(r, kind) {
+                    if (r.status !== 'paid' || !r.tax_method) return '';
+                    if (r.tax_method === 'withholding') {
+                        return `<button type="button" class="btn btn-secondary tax-receipt-btn" data-kind="${kind}" data-id="${r.id}" style="padding:5px 8px; font-size:0.78em; margin-top:4px;">원천징수영수증 보기</button>`;
+                    }
+                    if (r.tax_method === 'tax_invoice' && r.tax_invoice_status === 'pending') {
+                        return `<button type="button" class="btn btn-secondary tax-invoice-btn" data-kind="${kind}" data-id="${r.id}" style="padding:5px 8px; font-size:0.78em; margin-top:4px;">세금계산서 발행완료 처리</button>`;
+                    }
+                    return '';
+                }
+                // 새 창에 원천징수영수증을 인쇄 친화적으로 렌더링
+                async function openWithholdingReceipt(kind, id) {
+                    const path = kind === 'supplier' ? `/api/admin/settlements/${id}/withholding-receipt` : `/api/admin/community-settlements/${id}/withholding-receipt`;
+                    const { ok, json } = await authedFetch(path);
+                    if (!ok || !json.success) { alert(json.message || '원천징수영수증을 불러오지 못했습니다'); return; }
+                    const { settlement: s, payee, withholder } = json.data;
+                    const payeeName = kind === 'supplier' ? (payee.full_name || '(이름 없음)') : (payee.name || '(이름 없음)');
+                    const win = window.open('', '_blank', 'width=640,height=800');
+                    if (!win) { alert('팝업이 차단되었습니다. 팝업 차단을 해제한 뒤 다시 시도해주세요.'); return; }
+                    win.document.write(`<!DOCTYPE html><html lang="ko"><head><meta charset="utf-8"><title>원천징수영수증</title>
+                        <style>body{font-family:'Malgun Gothic',sans-serif; padding:32px; color:#222;} h1{font-size:1.3em; text-align:center; margin-bottom:24px;} table{width:100%; border-collapse:collapse; margin-bottom:20px;} th,td{border:1px solid #ccc; padding:8px 10px; font-size:0.92em; text-align:left;} th{background:#f5f5f5; width:32%;} .amt{text-align:right;} .note{font-size:0.8em; color:#777; margin-top:20px;} @media print{ button{display:none;} }</style>
+                        </head><body>
+                        <h1>원천징수영수증 (사업소득)</h1>
+                        <table>
+                            <tr><th>귀속연도</th><td>${new Date(s.paid_at || s.updated_at).getFullYear()}년</td></tr>
+                            <tr><th>정산기간</th><td>${s.period_start} ~ ${s.period_end}</td></tr>
+                            <tr><th>지급일</th><td>${s.paid_at ? new Date(s.paid_at).toLocaleDateString('ko-KR') : '-'}</td></tr>
+                        </table>
+                        <table>
+                            <tr><th colspan="2" style="background:#eef;">원천징수의무자 (지급자)</th></tr>
+                            <tr><th>상호</th><td>${WithPlus.escapeHtml(withholder.company_name || '(관리자 화면 &gt; 설정에서 입력 필요)')}</td></tr>
+                            <tr><th>대표자</th><td>${WithPlus.escapeHtml(withholder.ceo_name || '-')}</td></tr>
+                            <tr><th>사업자등록번호</th><td>${WithPlus.escapeHtml(withholder.business_number || '-')}</td></tr>
+                            <tr><th>주소</th><td>${WithPlus.escapeHtml(withholder.address || '-')}</td></tr>
+                        </table>
+                        <table>
+                            <tr><th colspan="2" style="background:#eef;">소득자 (지급받는 자)</th></tr>
+                            <tr><th>성명/상호</th><td>${WithPlus.escapeHtml(payeeName)}</td></tr>
+                            <tr><th>사업자등록번호</th><td>${WithPlus.escapeHtml(payee.business_number || '-')}</td></tr>
+                        </table>
+                        <table>
+                            <tr><th colspan="2" style="background:#eef;">지급 내역</th></tr>
+                            <tr><th>지급총액</th><td class="amt">${Number(s.commission_amount).toLocaleString()}원</td></tr>
+                            <tr><th>세율</th><td class="amt">${Number(s.withholding_tax_rate).toFixed(1)}% (소득세 3% + 지방소득세 0.3%)</td></tr>
+                            <tr><th>원천징수세액</th><td class="amt">${Number(s.withholding_tax_amount).toLocaleString()}원</td></tr>
+                            <tr><th><strong>차인지급액</strong></th><td class="amt"><strong>${Number(s.net_payment_amount).toLocaleString()}원</strong></td></tr>
+                        </table>
+                        <p class="note">본 영수증은 WITH+ 플랫폼에서 자동 생성되었습니다. 실제 국세청 신고(원천징수이행상황신고서 등)는 별도로 진행해야 합니다.</p>
+                        <button onclick="window.print()" style="padding:10px 18px; font-size:0.9em; cursor:pointer;">인쇄</button>
+                        </body></html>`);
+                    win.document.close();
+                }
+                // 세금계산서 발행완료 수동 처리 (실제 발행은 홈택스/팝빌 등 외부에서 진행 후 문서번호만 여기 입력)
+                async function markTaxInvoiceIssued(kind, id, reload) {
+                    const invoiceNumber = prompt('외부에서 발행한 세금계산서의 승인번호(또는 문서번호)를 입력해주세요:');
+                    if (!invoiceNumber || !invoiceNumber.trim()) return;
+                    const path = kind === 'supplier' ? `/api/admin/settlements/${id}/tax-invoice` : `/api/admin/community-settlements/${id}/tax-invoice`;
+                    const { ok, json } = await authedFetch(path, { method: 'PATCH', body: JSON.stringify({ tax_invoice_number: invoiceNumber.trim() }) });
+                    if (!ok || !json.success) { alert(json.message || '처리 중 오류가 발생했습니다'); return; }
+                    if (reload) reload();
+                }
+
                 async function loadSettlements() {
                     const tableArea = document.getElementById('settlements-table-area');
                     tableArea.innerHTML = `<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>`;
@@ -2043,7 +2577,7 @@
 
                         tableArea.innerHTML = `
                             <table>
-                                <thead><tr>${isAdmin ? '<th>공급자</th>' : ''}<th>기간</th><th>매출액</th><th>수수료율</th><th>수수료</th><th>정산액</th><th>주문건수</th><th>상태</th>${isAdmin ? '<th>처리</th>' : ''}</tr></thead>
+                                <thead><tr>${isAdmin ? '<th>공급자</th>' : ''}<th>기간</th><th>매출액</th><th>수수료율</th><th>수수료</th><th>정산액</th><th>주문건수</th><th>상태</th><th>${isAdmin ? '처리' : '세무처리'}</th></tr></thead>
                                 <tbody>
                                     ${rows.map(r => `
                                     <tr>
@@ -2058,12 +2592,23 @@
                                         ${isAdmin ? `<td data-label="처리">
                                             ${r.status === 'pending' ? `<button class="btn btn-secondary settlement-mark-paid" data-id="${r.id}" style="padding:6px 10px; font-size:0.82em;">지급완료 처리</button> <button class="btn btn-secondary settlement-cancel" data-id="${r.id}" style="padding:6px 10px; font-size:0.82em;">취소</button>` : ''}
                                             ${r.status === 'paid' ? `<span style="color:var(--text-gray); font-size:0.82em;">${r.paid_at ? new Date(r.paid_at).toLocaleDateString('ko-KR') + ' 지급' : ''}</span>` : ''}
-                                        </td>` : ''}
+                                            ${settlementTaxInfoHTML(r)}
+                                            ${settlementTaxActionHTML(r, 'supplier')}
+                                        </td>` : `<td data-label="세무처리">
+                                            ${settlementTaxInfoHTML(r)}
+                                            ${r.status === 'paid' && r.tax_method === 'withholding' ? `<button type="button" class="btn btn-secondary tax-receipt-btn" data-kind="supplier" data-id="${r.id}" style="padding:5px 8px; font-size:0.78em; margin-top:4px;">원천징수영수증 보기</button>` : ''}
+                                        </td>`}
                                     </tr>`).join('')}
                                 </tbody>
                             </table>`;
 
+                        tableArea.querySelectorAll('.tax-receipt-btn').forEach(btn => {
+                            btn.addEventListener('click', () => openWithholdingReceipt(btn.dataset.kind, btn.dataset.id));
+                        });
                         if (isAdmin) {
+                            tableArea.querySelectorAll('.tax-invoice-btn').forEach(btn => {
+                                btn.addEventListener('click', () => markTaxInvoiceIssued(btn.dataset.kind, btn.dataset.id, loadSettlements));
+                            });
                             tableArea.querySelectorAll('.settlement-mark-paid').forEach(btn => {
                                 btn.addEventListener('click', async () => {
                                     if (!confirm('이 건을 지급완료로 처리하시겠습니까?')) return;
@@ -2103,23 +2648,26 @@
                             }
                             area.innerHTML = `
                                 <table>
-                                    <thead><tr><th>공급자</th><th>이메일</th><th>수수료율</th><th></th></tr></thead>
+                                    <thead><tr><th>공급자</th><th>이메일</th><th>수수료율</th><th>정산 세무처리</th><th></th></tr></thead>
                                     <tbody>
                                         ${providers.map(p => `
                                         <tr>
                                             <td data-label="공급자">${WithPlus.escapeHtml(p.full_name || '(이름 없음)')}</td>
                                             <td data-label="이메일">${WithPlus.escapeHtml(p.email || '-')}</td>
                                             <td data-label="수수료율"><input type="number" class="rate-input" data-id="${p.id}" value="${p.commission_rate}" min="0" max="100" step="0.1" style="width:70px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px;">%</td>
+                                            <td data-label="정산 세무처리">${TAX_METHOD_SELECT_HTML('tax-method-input', p.id, p.settlement_tax_method)}</td>
                                             <td><button class="btn btn-secondary rate-save-btn" data-id="${p.id}" style="padding:6px 10px; font-size:0.82em;">저장</button></td>
                                         </tr>`).join('')}
                                     </tbody>
-                                </table>`;
+                                </table>
+                                <p style="color:var(--text-gray); font-size:0.8em; margin-top:8px;">🧾 <strong>원천징수(3.3%)</strong>: 개인·프리랜서 사업자에게 지급 시 소득세+지방소득세 3.3%를 자동 원천징수하고 원천징수영수증을 발급합니다. <strong>세금계산서 발행</strong>: 법인·일반과세 사업자는 정산금 전액을 지급하되 별도로 세금계산서를 받아야 하며, 발행 후 문서번호를 입력해 완료 처리합니다.</p>`;
                             area.querySelectorAll('.rate-save-btn').forEach(btn => {
                                 btn.addEventListener('click', async () => {
                                     const input = area.querySelector(`.rate-input[data-id="${btn.dataset.id}"]`);
+                                    const taxSelect = area.querySelector(`.tax-method-input[data-id="${btn.dataset.id}"]`);
                                     const rate = Number(input.value);
                                     const { ok, json } = await authedFetch(`/api/admin/providers/${btn.dataset.id}/commission-rate`, {
-                                        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ commission_rate: rate })
+                                        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ commission_rate: rate, settlement_tax_method: taxSelect.value })
                                     });
                                     if (!ok || !json.success) { alert(json.message || '수수료율 저장 중 오류가 발생했습니다'); return; }
                                     btn.textContent = '저장됨 ✓';
@@ -2162,6 +2710,208 @@
                         loadSettlements();
                     }
                 });
+
+                // ===== 💵 분양조직(커뮤니티) 현금 정산 (관리자 전용) =====
+                // 공급자 정산과 같은 SETTLEMENT_STATUS_LABEL/CLASS를 그대로 재사용한다.
+                if (isAdmin) {
+                    async function loadCsRates() {
+                        const area = document.getElementById('cs-rates-area');
+                        try {
+                            const { ok, json } = await authedFetch('/api/admin/communities');
+                            if (!ok || !json.success) throw new Error(json.message || '조직 목록을 불러오지 못했습니다');
+                            const communities = json.data;
+                            if (communities.length === 0) {
+                                area.innerHTML = `<div class="state-box"><div class="emoji">🏢</div><h3>등록된 분양 조직이 없습니다</h3></div>`;
+                                return;
+                            }
+                            area.innerHTML = `
+                                <table>
+                                    <thead><tr><th>조직명</th><th>사업자등록번호</th><th>검증 상태</th><th>수수료율</th><th>정산 세무처리</th><th></th></tr></thead>
+                                    <tbody>
+                                        ${communities.map(c => `
+                                        <tr>
+                                            <td data-label="조직명">${WithPlus.escapeHtml(c.name)}</td>
+                                            <td data-label="사업자등록번호"><input type="text" class="cs-biz-input" data-id="${c.id}" value="${WithPlus.escapeHtml(c.business_number || '')}" placeholder="000-00-00000" style="width:130px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px;"></td>
+                                            <td data-label="검증 상태">${c.business_number
+                                                ? (c.business_number_verified ? `<span class="badge active">✅ 확인됨${c.business_number_status ? ' · ' + WithPlus.escapeHtml(c.business_number_status) : ''}</span>` : `<span class="badge inactive">⚠️ 미확인</span>`)
+                                                : `<span class="badge inactive">미등록</span>`}</td>
+                                            <td data-label="수수료율"><input type="number" class="cs-rate-input" data-id="${c.id}" value="${c.settlement_commission_rate != null ? c.settlement_commission_rate : ''}" placeholder="5" min="0" max="100" step="0.1" style="width:70px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px;">%</td>
+                                            <td data-label="정산 세무처리">${TAX_METHOD_SELECT_HTML('cs-tax-method-input', c.id, c.settlement_tax_method)}</td>
+                                            <td><button class="btn btn-secondary cs-save-btn" data-id="${c.id}" style="padding:6px 10px; font-size:0.82em;">저장</button></td>
+                                        </tr>`).join('')}
+                                    </tbody>
+                                </table>
+                                <p style="color:var(--text-gray); font-size:0.8em; margin-top:8px;">사업자등록번호를 입력하고 저장하면 국세청 상태조회로 실시간 검증됩니다(폐업 상태면 저장이 거부됩니다). <strong>정산은 검증까지 완료된 조직만 대상이 됩니다.</strong> 수수료율을 비워두면 기본값 5%가 적용됩니다. 🧾 <strong>원천징수(3.3%)</strong>: 개인사업자 조직에 지급 시 자동 원천징수+영수증 발급. <strong>세금계산서 발행</strong>: 법인 조직은 전액 지급 후 별도로 세금계산서를 받습니다.</p>`;
+
+                            area.querySelectorAll('.cs-save-btn').forEach(btn => {
+                                btn.addEventListener('click', async () => {
+                                    const id = btn.dataset.id;
+                                    const bizInput = area.querySelector(`.cs-biz-input[data-id="${id}"]`);
+                                    const rateInput = area.querySelector(`.cs-rate-input[data-id="${id}"]`);
+                                    const taxSelect = area.querySelector(`.cs-tax-method-input[data-id="${id}"]`);
+                                    const body = { business_number: bizInput.value.trim() || null, settlement_commission_rate: rateInput.value === '' ? null : Number(rateInput.value), settlement_tax_method: taxSelect.value };
+                                    btn.disabled = true; btn.textContent = '저장 중...';
+                                    const { ok, json } = await authedFetch(`/api/admin/communities/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+                                    btn.disabled = false; btn.textContent = '저장';
+                                    if (!ok || !json.success) { alert(json.message || '저장 중 오류가 발생했습니다'); return; }
+                                    if (json.warning) alert(json.warning);
+                                    loadCsRates();
+                                });
+                            });
+                        } catch (err) {
+                            area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>조직별 설정을 불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                        }
+                    }
+
+                    async function loadCsTable() {
+                        const area = document.getElementById('cs-table-area');
+                        if (!area) return;
+                        area.innerHTML = `<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>`;
+                        try {
+                            const status = document.getElementById('cs-status-filter')?.value;
+                            const params = new URLSearchParams();
+                            if (status) params.set('status', status);
+                            const qs = params.toString();
+                            const { ok, json } = await authedFetch(`/api/admin/community-settlements${qs ? '?' + qs : ''}`);
+                            if (!ok || !json.success) throw new Error(json.message || '정산 내역을 불러오지 못했습니다');
+                            const rows = json.data;
+                            if (rows.length === 0) {
+                                area.innerHTML = `<div class="state-box"><div class="emoji">💵</div><h3>정산 내역이 없습니다</h3></div>`;
+                                return;
+                            }
+                            area.innerHTML = `
+                                <table>
+                                    <thead><tr><th>조직</th><th>기간</th><th>매출액</th><th>수수료율</th><th>정산액</th><th>주문건수</th><th>상태</th><th>처리</th></tr></thead>
+                                    <tbody>
+                                        ${rows.map(r => `
+                                        <tr>
+                                            <td data-label="조직">${WithPlus.escapeHtml(r.community_name || '(삭제된 조직)')}</td>
+                                            <td data-label="기간">${r.period_start} ~ ${r.period_end}</td>
+                                            <td data-label="매출액">${Number(r.gross_revenue).toLocaleString()}원</td>
+                                            <td data-label="수수료율">${r.commission_rate}%</td>
+                                            <td data-label="정산액"><strong>${Number(r.commission_amount).toLocaleString()}원</strong></td>
+                                            <td data-label="주문건수">${r.order_count.toLocaleString()}건</td>
+                                            <td data-label="상태"><span class="badge ${SETTLEMENT_STATUS_CLASS[r.status] || ''}">${SETTLEMENT_STATUS_LABEL[r.status] || r.status}</span></td>
+                                            <td data-label="처리">
+                                                ${r.status === 'pending' ? `<button class="btn btn-secondary cs-mark-paid" data-id="${r.id}" style="padding:6px 10px; font-size:0.82em;">지급완료 처리</button> <button class="btn btn-secondary cs-cancel" data-id="${r.id}" style="padding:6px 10px; font-size:0.82em;">취소</button>` : ''}
+                                                ${r.status === 'paid' ? `<span style="color:var(--text-gray); font-size:0.82em;">${r.paid_at ? new Date(r.paid_at).toLocaleDateString('ko-KR') + ' 지급' : ''}</span>` : ''}
+                                                ${settlementTaxInfoHTML(r)}
+                                                ${settlementTaxActionHTML(r, 'community')}
+                                            </td>
+                                        </tr>`).join('')}
+                                    </tbody>
+                                </table>`;
+
+                            area.querySelectorAll('.tax-receipt-btn').forEach(btn => {
+                                btn.addEventListener('click', () => openWithholdingReceipt(btn.dataset.kind, btn.dataset.id));
+                            });
+                            area.querySelectorAll('.tax-invoice-btn').forEach(btn => {
+                                btn.addEventListener('click', () => markTaxInvoiceIssued(btn.dataset.kind, btn.dataset.id, loadCsTable));
+                            });
+                            area.querySelectorAll('.cs-mark-paid').forEach(btn => {
+                                btn.addEventListener('click', async () => {
+                                    if (!confirm('이 건을 지급완료로 처리하시겠습니까?')) return;
+                                    const { ok, json } = await authedFetch(`/api/admin/community-settlements/${btn.dataset.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'paid' }) });
+                                    if (!ok || !json.success) { alert(json.message || '처리 중 오류가 발생했습니다'); return; }
+                                    loadCsTable();
+                                });
+                            });
+                            area.querySelectorAll('.cs-cancel').forEach(btn => {
+                                btn.addEventListener('click', async () => {
+                                    if (!confirm('이 정산 건을 취소하시겠습니까?')) return;
+                                    const { ok, json } = await authedFetch(`/api/admin/community-settlements/${btn.dataset.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'cancelled' }) });
+                                    if (!ok || !json.success) { alert(json.message || '처리 중 오류가 발생했습니다'); return; }
+                                    loadCsTable();
+                                });
+                            });
+                        } catch (err) {
+                            area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>정산 내역을 불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                        }
+                    }
+
+                    async function loadCommunitySettlementsTab() {
+                        const area = document.getElementById('community-settlements-area');
+                        area.innerHTML = `<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>`;
+                        try {
+                            const { ok, json } = await authedFetch('/api/community-cash-settlement/status');
+                            if (!ok || !json.success) throw new Error(json.message || '상태를 불러오지 못했습니다');
+                            const enabled = json.data.enabled;
+
+                            area.innerHTML = `
+                                <div class="settings-card" style="max-width:900px; margin-bottom:20px;">
+                                    <h3>💵 분양조직 현금 정산 기능</h3>
+                                    <p class="desc">사업자등록이 되어 있고 검증까지 마친 분양조직에 한해, 기간별로 매출에서 정해둔 수수료율만큼 현금 정산을 생성하고 지급 처리할 수 있습니다. 필요 없으면 언제든 꺼둘 수 있고, 꺼져 있는 동안은 기존처럼 조직별 매출·적립금 대시보드만 동작합니다.</p>
+                                    <label style="display:flex; align-items:center; gap:10px; cursor:pointer; margin-top:10px;">
+                                        <input type="checkbox" id="cs-enabled-toggle" ${enabled ? 'checked' : ''} style="width:20px; height:20px;">
+                                        <span style="font-weight:600;">${enabled ? '✅ 켜짐 — 정산을 생성/지급할 수 있습니다' : '⭕ 꺼짐 — 매출/적립금 대시보드만 동작합니다'}</span>
+                                    </label>
+                                </div>
+                                ${enabled ? `
+                                <div class="settings-card" style="max-width:900px; margin-bottom:20px;">
+                                    <h3>🏢 조직별 사업자등록 · 수수료율</h3>
+                                    <div id="cs-rates-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                                </div>
+                                <div class="panel-toolbar">
+                                    <div class="search-box" style="display:flex; gap:8px; align-items:center;">
+                                        <label style="font-size:0.85em; color:var(--text-gray);">시작일 <input type="date" id="cs-gen-start" style="padding:8px 10px; border:1px solid var(--border-color); border-radius:8px; font-size:0.88em;"></label>
+                                        <label style="font-size:0.85em; color:var(--text-gray);">종료일 <input type="date" id="cs-gen-end" style="padding:8px 10px; border:1px solid var(--border-color); border-radius:8px; font-size:0.88em;"></label>
+                                        <button class="btn btn-primary" id="cs-generate-btn">해당 기간 정산 생성/재계산</button>
+                                    </div>
+                                </div>
+                                <div id="cs-generate-msg"></div>
+                                <div class="panel-toolbar">
+                                    <select id="cs-status-filter" style="padding:9px 12px; border:1px solid var(--border-color); border-radius:8px; font-size:0.88em;">
+                                        <option value="">전체 상태</option>
+                                        <option value="pending">정산대기</option>
+                                        <option value="paid">지급완료</option>
+                                        <option value="cancelled">취소</option>
+                                    </select>
+                                </div>
+                                <div id="cs-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                                ` : ''}`;
+
+                            document.getElementById('cs-enabled-toggle').addEventListener('change', async (e) => {
+                                const next = e.target.checked;
+                                e.target.disabled = true;
+                                const { ok, json } = await authedFetch('/api/admin/settings/community-cash-settlement', { method: 'PATCH', body: JSON.stringify({ enabled: next }) });
+                                if (!ok || !json.success) { alert(json.message || '변경 중 오류가 발생했습니다'); loadCommunitySettlementsTab(); return; }
+                                loadCommunitySettlementsTab();
+                            });
+
+                            if (!enabled) return;
+
+                            await loadCsRates();
+                            await loadCsTable();
+
+                            document.getElementById('cs-generate-btn').addEventListener('click', async () => {
+                                const start = document.getElementById('cs-gen-start').value;
+                                const end = document.getElementById('cs-gen-end').value;
+                                const msgArea = document.getElementById('cs-generate-msg');
+                                if (!start || !end) { alert('시작일과 종료일을 모두 입력해주세요'); return; }
+                                msgArea.innerHTML = `<div style="margin-top:10px; font-size:0.88em; padding:10px 12px; border-radius:8px; background:#f8f9fb;">생성 중...</div>`;
+                                const { ok, json } = await authedFetch('/api/admin/community-settlements/generate', { method: 'POST', body: JSON.stringify({ startDate: start, endDate: end }) });
+                                if (!ok || !json.success) { msgArea.innerHTML = `<div style="margin-top:10px; font-size:0.88em; padding:10px 12px; border-radius:8px; background:#FDECEA; color:#C62828;">${WithPlus.escapeHtml(json.message || '정산 생성 중 오류가 발생했습니다')}</div>`; return; }
+                                const { created, updated, skippedPaid, skippedNoBusinessNumber } = json.data;
+                                const skipNote = (skippedNoBusinessNumber && skippedNoBusinessNumber.length)
+                                    ? `<br>⚠️ 사업자등록 미등록/미검증으로 제외됨: ${skippedNoBusinessNumber.map(s => WithPlus.escapeHtml(s.community_name)).join(', ')}`
+                                    : '';
+                                msgArea.innerHTML = `<div style="margin-top:10px; font-size:0.88em; padding:10px 12px; border-radius:8px; background:#E8F5E9; color:#2E7D32;">신규 ${created}건, 갱신 ${updated}건${skippedPaid ? `, 이미 지급완료되어 건드리지 않음 ${skippedPaid}건` : ''} 처리되었습니다.${skipNote}</div>`;
+                                loadCsTable();
+                            });
+
+                            document.getElementById('cs-status-filter').addEventListener('change', loadCsTable);
+                        } catch (err) {
+                            area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                        }
+                    }
+
+                    document.querySelector('[data-tab="community-settlements"]').addEventListener('click', () => {
+                        if (!document.getElementById('community-settlements-area').dataset.loaded) {
+                            document.getElementById('community-settlements-area').dataset.loaded = '1';
+                            loadCommunitySettlementsTab();
+                        }
+                    });
+                }
 
                 // ===== 🕵️ 감사로그 (super_admin 전용) =====
                 if (isSuperAdmin) {
@@ -2510,6 +3260,9 @@
                     let wmsLedgerPage = 1;
                     let wmsLocationsCache = [];
                     let wmsCurrentFloor = 1;
+                    let wmsCurrentSubLevel = 1; // 현재 층 안에서 보고 있는 단(복층/중층). 기본 1단.
+                    let wmsExtraSubLevels = []; // "+ 단 추가"로 만들었지만 아직 로케이션이 없는 단 번호 (층 전환 시 초기화)
+                    let wmsLastFloorsData = []; // 최근 floorplan 응답의 floors (건물 전체 층/단 목록)
                     let wmsEditMode = false;
                     let wmsSelectedLocationId = null;
                     let wmsTwinDrag = null; // { id, startX, startY, origGridX, origGridY, scale, cellSize, padding }
@@ -2660,6 +3413,86 @@
                     });
 
                     // ---- 3) 로케이션 관리 (admin 전용) ----
+                    async function loadWmsWarehouses() {
+                        const area = document.getElementById('wh-table-area');
+                        if (!area) return;
+                        area.innerHTML = `<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>`;
+                        try {
+                            const { ok, json } = await authedFetch('/api/admin/inventory/warehouses');
+                            if (!ok || !json.success) throw new Error(json.message || '창고 목록을 불러오지 못했습니다');
+                            const list = json.data || [];
+                            if (list.length === 0) {
+                                area.innerHTML = `<div class="state-box"><div class="emoji">🏭</div><h3>등록된 창고가 없습니다</h3></div>`;
+                                return;
+                            }
+                            area.innerHTML = `
+                                <table>
+                                    <thead><tr><th>코드</th><th>이름</th><th>주소</th><th>상태</th><th>관리</th></tr></thead>
+                                    <tbody>
+                                        ${list.map(w => `
+                                            <tr>
+                                                <td>${WithPlus.escapeHtml(w.code)}</td>
+                                                <td>${WithPlus.escapeHtml(w.name)}</td>
+                                                <td>${WithPlus.escapeHtml(w.address || '-')}</td>
+                                                <td>${w.is_active ? '<span class="badge active">사용중</span>' : '<span class="badge out-of-stock">비활성</span>'}</td>
+                                                <td>
+                                                    <button class="btn btn-secondary wh-toggle-btn" data-code="${w.code}" data-active="${w.is_active}" style="padding:6px 10px; font-size:0.82em;">${w.is_active ? '비활성화' : '활성화'}</button>
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>`;
+                            area.querySelectorAll('.wh-toggle-btn').forEach(btn => {
+                                btn.addEventListener('click', async () => {
+                                    const nowActive = btn.dataset.active === 'true';
+                                    const { ok, json } = await authedFetch(`/api/admin/inventory/warehouses/${encodeURIComponent(btn.dataset.code)}`, {
+                                        method: 'PUT', body: JSON.stringify({ is_active: !nowActive })
+                                    });
+                                    if (!ok) { alert(json.message || '처리 실패'); return; }
+                                    loadWmsWarehouses();
+                                });
+                            });
+                        } catch (err) {
+                            area.innerHTML = `<p style="color:#C62828; font-size:0.85em;">${WithPlus.escapeHtml(err.message)}</p>`;
+                        }
+                    }
+                    document.getElementById('whf-code-generate-btn')?.addEventListener('click', async () => {
+                        const btn = document.getElementById('whf-code-generate-btn');
+                        btn.disabled = true;
+                        try {
+                            const { ok, json } = await authedFetch('/api/admin/inventory/warehouses/suggest-code');
+                            if (!ok) throw new Error(json.message || '자동생성 실패');
+                            document.getElementById('whf-code').value = json.data.code;
+                        } catch (err) {
+                            alert(err.message);
+                        } finally {
+                            btn.disabled = false;
+                        }
+                    });
+                    document.getElementById('wh-add-form')?.addEventListener('submit', async (e) => {
+                        e.preventDefault();
+                        const msg = document.getElementById('wh-add-msg');
+                        msg.className = 'msg';
+                        try {
+                            const { ok, json } = await authedFetch('/api/admin/inventory/warehouses', {
+                                method: 'POST',
+                                body: JSON.stringify({
+                                    code: document.getElementById('whf-code').value.trim(),
+                                    name: document.getElementById('whf-name').value.trim(),
+                                    address: document.getElementById('whf-address').value.trim() || undefined
+                                })
+                            });
+                            if (!ok) throw new Error(json.message || '창고 등록에 실패했습니다');
+                            document.getElementById('wh-add-form').reset();
+                            msg.textContent = '창고가 등록되었습니다';
+                            msg.className = 'msg success';
+                            loadWmsWarehouses();
+                        } catch (err) {
+                            msg.textContent = err.message;
+                            msg.className = 'msg error';
+                        }
+                    });
+
                     async function loadWmsLocations() {
                         const area = document.getElementById('wms-locations-table-area');
                         if (!area) return;
@@ -2674,17 +3507,22 @@
                             }
                             area.innerHTML = `
                                 <table>
-                                    <thead><tr><th>코드</th><th>구역(Zone)</th><th>랙/빈</th><th>좌표(X,Y)</th><th>장애물</th><th>상태</th><th>관리</th></tr></thead>
+                                    <thead><tr><th>코드</th><th>층/단</th><th>실측 크기(cm)</th><th>구역(Zone)</th><th>랙/빈</th><th>좌표(X,Y)</th><th>장애물</th><th>상태</th><th>관리</th></tr></thead>
                                     <tbody>
                                         ${wmsLocationsCache.map(l => `
                                             <tr>
                                                 <td>${WithPlus.escapeHtml(l.code)}</td>
+                                                <td>${l.floor || 1}층 ${l.sub_level || 1}단</td>
+                                                <td>${Math.round(Number(l.width_cm) || Number(l.width || 1) * 100)}×${Math.round(Number(l.depth_cm) || Number(l.height || 1) * 100)}×${Math.round(Number(l.height_cm) || 200)}</td>
                                                 <td>${WithPlus.escapeHtml(l.zone)}</td>
                                                 <td>${WithPlus.escapeHtml(l.rack || '-')} / ${WithPlus.escapeHtml(l.bin || '-')}</td>
                                                 <td>${l.grid_x}, ${l.grid_y}</td>
                                                 <td>${l.is_obstacle ? '🧱 장애물' : '-'}</td>
                                                 <td>${l.is_active ? '<span class="badge active">사용중</span>' : '<span class="badge out-of-stock">비활성</span>'}</td>
-                                                <td><button class="btn btn-secondary wms-loc-delete-btn" data-id="${l.id}" style="padding:6px 10px; font-size:0.82em;">삭제</button></td>
+                                                <td>
+                                                    <button class="btn btn-secondary wms-loc-edit-btn" data-id="${l.id}" style="padding:6px 10px; font-size:0.82em;">수정</button>
+                                                    <button class="btn btn-secondary wms-loc-delete-btn" data-id="${l.id}" style="padding:6px 10px; font-size:0.82em;">삭제</button>
+                                                </td>
                                             </tr>
                                         `).join('')}
                                     </tbody>
@@ -2697,51 +3535,186 @@
                                     loadWmsLocations();
                                 });
                             });
+                            area.querySelectorAll('.wms-loc-edit-btn').forEach(btn => {
+                                btn.addEventListener('click', () => {
+                                    const loc = wmsLocationsCache.find(x => x.id === btn.dataset.id);
+                                    if (loc) openLocationEditModal(loc);
+                                });
+                            });
                         } catch (err) {
                             area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
                         }
                     }
 
+                    // ---- 로케이션 수정 모달 ----
+                    const locationEditModal = document.getElementById('location-edit-modal');
+                    async function openLocationEditModal(loc) {
+                        document.getElementById('lef-msg').className = 'msg';
+                        document.getElementById('lef-id').value = loc.id;
+                        document.getElementById('lef-code').value = loc.code || '';
+                        document.getElementById('lef-zone').value = loc.zone || '';
+                        document.getElementById('lef-rack').value = loc.rack || '';
+                        document.getElementById('lef-bin').value = loc.bin || '';
+                        document.getElementById('lef-label').value = loc.label || '';
+                        document.getElementById('lef-floor').value = loc.floor || 1;
+                        document.getElementById('lef-sub-level').value = loc.sub_level || 1;
+                        document.getElementById('lef-grid-x').value = loc.grid_x || 0;
+                        document.getElementById('lef-grid-y').value = loc.grid_y || 0;
+                        document.getElementById('lef-width-cm').value = Math.round(Number(loc.width_cm) || Number(loc.width || 1) * 100);
+                        document.getElementById('lef-depth-cm').value = Math.round(Number(loc.depth_cm) || Number(loc.height || 1) * 100);
+                        document.getElementById('lef-height-cm').value = Math.round(Number(loc.height_cm) || 200);
+                        document.getElementById('lef-shape').value = loc.shape || 'rect';
+                        document.getElementById('lef-is-obstacle').checked = !!loc.is_obstacle;
+                        document.getElementById('lef-is-active').checked = loc.is_active !== false;
+
+                        const whSelect = document.getElementById('lef-warehouse-code');
+                        whSelect.innerHTML = '<option value="">미지정</option>';
+                        try {
+                            const { ok, json } = await authedFetch('/api/admin/inventory/warehouses');
+                            if (ok && json.success) {
+                                (json.data || []).forEach(w => {
+                                    whSelect.innerHTML += `<option value="${WithPlus.escapeHtml(w.code)}">${WithPlus.escapeHtml(w.code)} - ${WithPlus.escapeHtml(w.name)}</option>`;
+                                });
+                            }
+                        } catch (err) { /* 창고 목록을 못 불러와도 나머지 수정은 계속 가능해야 하므로 조용히 무시 */ }
+                        whSelect.value = loc.warehouse_code || '';
+
+                        locationEditModal.classList.add('open');
+                    }
+                    document.getElementById('lef-cancel')?.addEventListener('click', () => locationEditModal.classList.remove('open'));
+                    document.getElementById('location-edit-form')?.addEventListener('submit', async (e) => {
+                        e.preventDefault();
+                        const msg = document.getElementById('lef-msg');
+                        msg.className = 'msg';
+                        const id = document.getElementById('lef-id').value;
+                        try {
+                            const { ok, json } = await authedFetch(`/api/admin/inventory/locations/${id}`, {
+                                method: 'PUT',
+                                body: JSON.stringify({
+                                    code: document.getElementById('lef-code').value.trim(),
+                                    zone: document.getElementById('lef-zone').value.trim(),
+                                    rack: document.getElementById('lef-rack').value.trim(),
+                                    bin: document.getElementById('lef-bin').value.trim(),
+                                    label: document.getElementById('lef-label').value.trim(),
+                                    warehouse_code: document.getElementById('lef-warehouse-code').value || null,
+                                    floor: document.getElementById('lef-floor').value,
+                                    sub_level: document.getElementById('lef-sub-level').value,
+                                    grid_x: document.getElementById('lef-grid-x').value,
+                                    grid_y: document.getElementById('lef-grid-y').value,
+                                    width_cm: document.getElementById('lef-width-cm').value,
+                                    depth_cm: document.getElementById('lef-depth-cm').value,
+                                    height_cm: document.getElementById('lef-height-cm').value,
+                                    shape: document.getElementById('lef-shape').value,
+                                    is_obstacle: document.getElementById('lef-is-obstacle').checked,
+                                    is_active: document.getElementById('lef-is-active').checked
+                                })
+                            });
+                            if (!ok) throw new Error(json.message || '수정에 실패했습니다');
+                            locationEditModal.classList.remove('open');
+                            loadWmsLocations();
+                        } catch (err) {
+                            msg.textContent = err.message;
+                            msg.className = 'msg error';
+                        }
+                    });
+
                     document.getElementById('wms-btn-new-location')?.addEventListener('click', async () => {
-                        const code = prompt('로케이션 코드 (예: A-01-03)');
-                        if (!code) return;
-                        const zone = prompt('구역(Zone) 이름 (예: A)') || code.split('-')[0];
+                        const zone = (prompt('구역(Zone) 이름 (예: A)') || '').trim();
+                        if (!zone) return;
+                        const floor = parseInt(prompt('층수 (숫자, 예: 1)') || '1', 10) || 1;
+                        const subLevel = Math.min(5, Math.max(1, parseInt(prompt('이 층 안의 몇 단(복층/중층)인가요? 보통은 1단입니다 (숫자, 1~5)') || '1', 10) || 1));
+
+                        // 코드는 서버에 문의해 이 구역/층/단 안에서 아직 안 쓰인 번호를 자동으로 제안받는다 (수정하고 싶으면 프롬프트에서 직접 고쳐도 됨)
+                        let suggestedCode = `${zone.toUpperCase()}-${floor}${subLevel}-01`;
+                        try {
+                            const qs = new URLSearchParams({ zone, floor: String(floor), sub_level: String(subLevel) });
+                            const suggestRes = await authedFetch('/api/admin/inventory/locations/suggest-code?' + qs.toString());
+                            if (suggestRes.ok) suggestedCode = suggestRes.json.data.code;
+                        } catch (e) { /* 자동채번 제안 실패 시 기본 형식으로 계속 진행 */ }
+
+                        let code = null;
+                        for (let attempt = 0; attempt < 5; attempt++) {
+                            const input = prompt('로케이션 코드 (자동 제안됨 — 그대로 쓰거나 직접 수정)', suggestedCode);
+                            if (!input) return; // 취소
+                            const trimmed = input.trim();
+                            if (!trimmed) return;
+                            try {
+                                const checkRes = await authedFetch('/api/admin/inventory/locations/check-code?code=' + encodeURIComponent(trimmed));
+                                if (checkRes.ok && !checkRes.json.data.available) {
+                                    alert(`❌ "${trimmed}" 코드는 이미 사용 중입니다(${checkRes.json.data.existing.label || checkRes.json.data.existing.id}). 다른 코드를 입력해주세요.`);
+                                    suggestedCode = trimmed; // 다음 프롬프트 기본값은 방금 시도한 값 유지(수정하기 편하도록)
+                                    continue;
+                                }
+                            } catch (e) { /* 중복확인 실패해도 등록 시도는 진행 - 서버가 최종적으로 다시 막아준다 */ }
+                            code = trimmed;
+                            break;
+                        }
+                        if (!code) { alert('사용 가능한 코드를 찾지 못해 등록을 취소했습니다.'); return; }
+
                         const rack = prompt('랙(Rack) 번호 (선택, 취소 가능)') || '';
                         const bin = prompt('빈(Bin) 번호 (선택, 취소 가능)') || '';
                         const gridX = parseFloat(prompt('평면도 X좌표 (숫자, 예: 0)') || '0') || 0;
                         const gridY = parseFloat(prompt('평면도 Y좌표 (숫자, 예: 0)') || '0') || 0;
-                        const floor = parseInt(prompt('층수 (숫자, 예: 1)') || '1', 10) || 1;
+                        const widthCm = parseFloat(prompt('랙의 실제 가로 폭 (cm, 예: 100)') || '100') || 100;
+                        const depthCm = parseFloat(prompt('랙의 실제 세로 깊이 (cm, 앞뒤 폭, 예: 100)') || '100') || 100;
+                        const heightCm = parseFloat(prompt('랙의 실제 높이 (cm, 예: 200)') || '200') || 200;
                         const isObstacle = confirm('이 위치는 통과 불가(벽/기둥)인가요? [확인=예 / 취소=아니오]');
+                        const warehouseCode = prompt('소속 창고 코드 (선택, 예: A1/A2/B1/B2/C - "창고 마스터" 탭에서 확인 가능. 비워두면 미지정)') || '';
                         const { ok, json } = await authedFetch('/api/admin/inventory/locations', {
-                            method: 'POST', body: JSON.stringify({ code, zone, rack, bin, grid_x: gridX, grid_y: gridY, floor, is_obstacle: isObstacle })
+                            method: 'POST', body: JSON.stringify({ code, zone, rack, bin, grid_x: gridX, grid_y: gridY, floor, sub_level: subLevel, width_cm: widthCm, depth_cm: depthCm, height_cm: heightCm, is_obstacle: isObstacle, warehouse_code: warehouseCode || undefined })
                         });
                         if (!ok) { alert(json.message || '등록 실패'); return; }
                         loadWmsLocations();
                     });
 
                     // ---- 4) 2D 디지털트윈 (admin 전용): 다층 + 편집(드래그/리사이즈) + 랙 프리셋 툴박스 ----
+                    // widthCm(가로)/depthCm(세로,앞뒤 깊이)/heightCm(랙 자체 높이) — 실제 랙 규격(cm) 기준 기본값.
+                    // 평면도 칸 크기는 서버에서 100cm=1칸으로 환산해 계산된다(서버의 WMS_CM_PER_CELL과 동일 기준).
                     const WMS_SHAPE_PRESET = {
-                        rect: { width: 2, height: 1, fill: '#FFE0EC', stroke: '#D32F5B', label: '사각랙' },
-                        vertical: { width: 1, height: 2, fill: '#E1F0FF', stroke: '#1565C0', label: '세로랙' },
-                        square: { width: 1, height: 1, fill: '#FFF3D6', stroke: '#B8860B', label: '정사각랙' },
-                        conveyor: { width: 3, height: 1, fill: '#E8F5E9', stroke: '#2E7D32', label: '컨베이어벨트' }
+                        rect: { widthCm: 200, depthCm: 100, heightCm: 200, fill: '#FFE0EC', stroke: '#D32F5B', label: '사각랙' },
+                        vertical: { widthCm: 100, depthCm: 200, heightCm: 200, fill: '#E1F0FF', stroke: '#1565C0', label: '세로랙' },
+                        square: { widthCm: 100, depthCm: 100, heightCm: 200, fill: '#FFF3D6', stroke: '#B8860B', label: '정사각랙' },
+                        conveyor: { widthCm: 300, depthCm: 100, heightCm: 80, fill: '#E8F5E9', stroke: '#2E7D32', label: '컨베이어벨트' }
                     };
                     let wmsExtraFloors = []; // "+ 층 추가"로 생성했지만 아직 로케이션이 없는 층 번호
                     let wmsTwinRenderState = null; // { cellSize, padding, scale, locations } - 마우스 좌표→그리드 변환용
 
-                    function renderWmsTwinFloorTabs(serverFloors) {
+                    function renderWmsTwinFloorTabs(floorsData) {
                         const tabsArea = document.getElementById('wms-twin-floor-tabs');
                         if (!tabsArea) return;
-                        const floors = Array.from(new Set([...(serverFloors || [1]), ...wmsExtraFloors, wmsCurrentFloor])).sort((a, b) => a - b);
+                        const serverFloorNums = (floorsData || []).map(f => f.floor);
+                        const floors = Array.from(new Set([...(serverFloorNums.length ? serverFloorNums : [1]), ...wmsExtraFloors, wmsCurrentFloor])).sort((a, b) => a - b);
                         tabsArea.innerHTML = floors.map(f => `<button class="btn ${f === wmsCurrentFloor ? 'btn-primary' : 'btn-secondary'} wms-floor-tab-btn" data-floor="${f}" style="padding:6px 14px; font-size:0.85em;">${f}층</button>`).join('');
                         tabsArea.querySelectorAll('.wms-floor-tab-btn').forEach(btn => {
                             btn.addEventListener('click', () => {
                                 wmsCurrentFloor = Number(btn.dataset.floor);
+                                wmsCurrentSubLevel = 1; // 층을 바꾸면 그 층의 1단부터 보여준다
+                                wmsExtraSubLevels = [];
                                 wmsSelectedLocationId = null;
                                 renderWmsTwinControlPanel(null);
                                 loadWmsTwin();
                             });
                         });
+                    }
+
+                    // 한 층 안의 단(sub_level, 복층/중층) 탭 — 최대 5단까지 지원
+                    function renderWmsTwinSubLevelTabs(floorsData) {
+                        const tabsArea = document.getElementById('wms-twin-sublevel-tabs');
+                        const addBtn = document.getElementById('wms-twin-add-sublevel-btn');
+                        if (!tabsArea) return;
+                        const currentFloorEntry = (floorsData || []).find(f => f.floor === wmsCurrentFloor);
+                        const serverSubLevels = currentFloorEntry ? currentFloorEntry.subLevels : [1];
+                        const subLevels = Array.from(new Set([...(serverSubLevels.length ? serverSubLevels : [1]), ...wmsExtraSubLevels, wmsCurrentSubLevel])).sort((a, b) => a - b);
+                        tabsArea.innerHTML = subLevels.map(s => `<button class="btn ${s === wmsCurrentSubLevel ? 'btn-primary' : 'btn-secondary'} wms-sublevel-tab-btn" data-sublevel="${s}" style="padding:5px 12px; font-size:0.8em;">${s}단</button>`).join('');
+                        tabsArea.querySelectorAll('.wms-sublevel-tab-btn').forEach(btn => {
+                            btn.addEventListener('click', () => {
+                                wmsCurrentSubLevel = Number(btn.dataset.sublevel);
+                                wmsSelectedLocationId = null;
+                                renderWmsTwinControlPanel(null);
+                                loadWmsTwin();
+                            });
+                        });
+                        if (addBtn) addBtn.disabled = subLevels.length >= 5;
                     }
 
                     function renderWmsTwinControlPanel(loc) {
@@ -2751,22 +3724,29 @@
                         if (!loc) { panel.style.display = 'none'; body.innerHTML = ''; return; }
                         panel.style.display = 'block';
                         const shapeLabel = (WMS_SHAPE_PRESET[loc.shape] || WMS_SHAPE_PRESET.rect).label;
+                        const curWidthCm = Math.round(Number(loc.width_cm) || Number(loc.width || 1) * 100);
+                        const curDepthCm = Math.round(Number(loc.depth_cm) || Number(loc.height || 1) * 100);
+                        const curHeightCm = Math.round(Number(loc.height_cm) || 200);
                         body.innerHTML = `
-                            <div style="font-size:0.85em; color:var(--text-gray);">코드: <strong>${WithPlus.escapeHtml(loc.code)}</strong> (${shapeLabel}, ${loc.floor || 1}층)</div>
-                            <label style="font-size:0.82em; color:var(--text-gray);">가로(너비, 칸)</label>
-                            <input type="number" id="wms-twin-ctl-width" min="1" step="0.5" value="${Number(loc.width || 1)}" style="padding:8px; border:1px solid var(--border-color); border-radius:6px;">
-                            <label style="font-size:0.82em; color:var(--text-gray);">세로(높이, 칸)</label>
-                            <input type="number" id="wms-twin-ctl-height" min="1" step="0.5" value="${Number(loc.height || 1)}" style="padding:8px; border:1px solid var(--border-color); border-radius:6px;">
+                            <div style="font-size:0.85em; color:var(--text-gray);">코드: <strong>${WithPlus.escapeHtml(loc.code)}</strong> (${shapeLabel}, ${loc.floor || 1}층 ${loc.sub_level || 1}단, ${curWidthCm}×${curDepthCm}×${curHeightCm}cm)</div>
+                            <label style="font-size:0.82em; color:var(--text-gray);">가로 폭 (cm)</label>
+                            <input type="number" id="wms-twin-ctl-width-cm" min="1" max="2000" step="1" value="${curWidthCm}" style="padding:8px; border:1px solid var(--border-color); border-radius:6px;">
+                            <label style="font-size:0.82em; color:var(--text-gray);">세로 깊이 (cm, 앞뒤 폭)</label>
+                            <input type="number" id="wms-twin-ctl-depth-cm" min="1" max="2000" step="1" value="${curDepthCm}" style="padding:8px; border:1px solid var(--border-color); border-radius:6px;">
+                            <label style="font-size:0.82em; color:var(--text-gray);">랙 높이 (cm, 수직 높이)</label>
+                            <input type="number" id="wms-twin-ctl-height-cm" min="1" max="2000" step="1" value="${curHeightCm}" style="padding:8px; border:1px solid var(--border-color); border-radius:6px;">
+                            <span style="font-size:0.78em; color:var(--text-gray);">※ 평면도(위에서 본 모습)의 칸 크기는 가로×세로 값을 100cm=1칸 기준으로 자동 환산합니다. 높이는 정보로만 저장됩니다.</span>
                             <label style="font-size:0.82em; color:var(--text-gray);"><input type="checkbox" id="wms-twin-ctl-obstacle" ${loc.is_obstacle ? 'checked' : ''}> 통과 불가(장애물)</label>
                             <button class="btn btn-primary" id="wms-twin-ctl-save" style="padding:8px; margin-top:4px;">저장</button>
                             <button class="btn btn-secondary" id="wms-twin-ctl-delete" style="padding:8px; color:#C62828;">이 로케이션 삭제</button>
                         `;
                         document.getElementById('wms-twin-ctl-save').addEventListener('click', async () => {
-                            const width = parseFloat(document.getElementById('wms-twin-ctl-width').value) || 1;
-                            const height = parseFloat(document.getElementById('wms-twin-ctl-height').value) || 1;
+                            const width_cm = parseFloat(document.getElementById('wms-twin-ctl-width-cm').value) || 100;
+                            const depth_cm = parseFloat(document.getElementById('wms-twin-ctl-depth-cm').value) || 100;
+                            const height_cm = parseFloat(document.getElementById('wms-twin-ctl-height-cm').value) || 200;
                             const is_obstacle = document.getElementById('wms-twin-ctl-obstacle').checked;
                             const { ok, json } = await authedFetch(`/api/admin/inventory/locations/${loc.id}`, {
-                                method: 'PUT', body: JSON.stringify({ width, height, is_obstacle })
+                                method: 'PUT', body: JSON.stringify({ width_cm, depth_cm, height_cm, is_obstacle })
                             });
                             if (!ok) { alert(json.message || '저장 실패'); return; }
                             loadWmsTwin();
@@ -2831,6 +3811,7 @@
                         (equipment || []).forEach(eq => {
                             if (!eq.warehouse_locations_with) return;
                             if ((eq.warehouse_locations_with.floor || 1) !== wmsCurrentFloor) return;
+                            if ((eq.warehouse_locations_with.sub_level || 1) !== wmsCurrentSubLevel) return;
                             const x = padding + Number(eq.warehouse_locations_with.grid_x) * cellSize * scale + (cellSize * scale) / 2;
                             const y = padding + Number(eq.warehouse_locations_with.grid_y) * cellSize * scale + (cellSize * scale) / 2;
                             ctx.beginPath();
@@ -2848,17 +3829,20 @@
                         const legend = document.getElementById('wms-twin-legend');
                         if (!canvas) return;
                         try {
-                            const { ok, json } = await authedFetch(`/api/admin/inventory/floorplan?floor=${wmsCurrentFloor}`);
+                            const { ok, json } = await authedFetch(`/api/admin/inventory/floorplan?floor=${wmsCurrentFloor}&subLevel=${wmsCurrentSubLevel}`);
                             if (!ok || !json.success) throw new Error(json.message || '평면도를 불러오지 못했습니다');
                             const { locations, equipment, floors } = json.data;
+                            wmsLastFloorsData = floors || [];
                             renderWmsTwinFloorTabs(floors);
+                            renderWmsTwinSubLevelTabs(floors);
                             wmsDrawTwinFrame(locations, equipment);
                             if (wmsSelectedLocationId) {
                                 const sel = locations.find(l => l.id === wmsSelectedLocationId);
                                 renderWmsTwinControlPanel(sel || null);
                                 if (!sel) wmsSelectedLocationId = null;
                             }
-                            legend.innerHTML = `분홍/파랑/노랑/초록 칸: 선반(랙) 종류별 표시 · 회색 칸: 장애물(벽/기둥) · 🔵 파란점: AGV 로봇 · 🟠 주황점: PDA 단말기 (${wmsCurrentFloor}층, 총 ${locations.length}개 로케이션, ${(equipment || []).length}개 장비)${wmsEditMode ? ' · ✏️ 편집 모드: 랙을 드래그해 이동하거나 클릭해 속성을 수정하세요.' : ''}`;
+                            const eqOnFloor = (equipment || []).filter(eq => eq.warehouse_locations_with && (eq.warehouse_locations_with.floor || 1) === wmsCurrentFloor && (eq.warehouse_locations_with.sub_level || 1) === wmsCurrentSubLevel);
+                            legend.innerHTML = `분홍/파랑/노랑/초록 칸: 선반(랙) 종류별 표시 · 회색 칸: 장애물(벽/기둥) · 🔵 파란점: AGV 로봇 · 🟠 주황점: PDA 단말기 (${wmsCurrentFloor}층 ${wmsCurrentSubLevel}단, 총 ${locations.length}개 로케이션, ${eqOnFloor.length}개 장비)${wmsEditMode ? ' · ✏️ 편집 모드: 랙을 드래그해 이동하거나 클릭해 속성을 수정하세요.' : ''}`;
                         } catch (err) {
                             legend.innerHTML = `<span style="color:#C62828;">⚠️ ${WithPlus.escapeHtml(err.message)}</span>`;
                         }
@@ -2883,10 +3867,25 @@
                         const next = Math.max(...known, 0) + 1;
                         wmsExtraFloors.push(next);
                         wmsCurrentFloor = next;
+                        wmsCurrentSubLevel = 1; // 새 층은 1단부터 시작
+                        wmsExtraSubLevels = [];
                         loadWmsTwin();
                     });
 
-                    // ---- 랙 프리셋 툴박스: 클릭하면 현재 층 (0,0) 위치에 새 랙 생성 ----
+                    // ---- + 단 추가: 현재 층 안에 새 단(복층/중층)을 만든다 (최대 5단) ----
+                    document.getElementById('wms-twin-add-sublevel-btn')?.addEventListener('click', () => {
+                        const currentFloorEntry = wmsLastFloorsData.find(f => f.floor === wmsCurrentFloor);
+                        const serverSubLevels = currentFloorEntry ? currentFloorEntry.subLevels : [1];
+                        const known = Array.from(new Set([...(serverSubLevels.length ? serverSubLevels : [1]), ...wmsExtraSubLevels, wmsCurrentSubLevel]));
+                        if (known.length >= 5) { alert('한 층에는 최대 5단까지만 만들 수 있습니다.'); return; }
+                        const next = Math.max(...known, 0) + 1;
+                        if (next > 5) { alert('한 층에는 최대 5단까지만 만들 수 있습니다.'); return; }
+                        wmsExtraSubLevels.push(next);
+                        wmsCurrentSubLevel = next;
+                        loadWmsTwin();
+                    });
+
+                    // ---- 랙 프리셋 툴박스: 클릭하면 현재 층(및 단) (0,0) 위치에 새 랙 생성 ----
                     document.querySelectorAll('.wms-shape-btn').forEach(btn => {
                         btn.addEventListener('click', async () => {
                             const shape = btn.dataset.shape;
@@ -2894,7 +3893,7 @@
                             const code = `${preset.label}-${Date.now().toString().slice(-6)}`;
                             const { ok, json } = await authedFetch('/api/admin/inventory/locations', {
                                 method: 'POST',
-                                body: JSON.stringify({ code, zone: 'NEW', grid_x: 0, grid_y: 0, width: preset.width, height: preset.height, shape, floor: wmsCurrentFloor, is_obstacle: false })
+                                body: JSON.stringify({ code, zone: 'NEW', grid_x: 0, grid_y: 0, width_cm: preset.widthCm, depth_cm: preset.depthCm, height_cm: preset.heightCm, shape, floor: wmsCurrentFloor, sub_level: wmsCurrentSubLevel, is_obstacle: false })
                             });
                             if (!ok) { alert(json.message || '랙 추가 실패'); return; }
                             wmsSelectedLocationId = json.data.id;
@@ -3034,6 +4033,7 @@
                             document.querySelectorAll('.wms-subtab-panel').forEach(p => p.classList.remove('active'));
                             btn.classList.add('active');
                             document.getElementById('wms-tab-' + btn.dataset.wmsTab).classList.add('active');
+                            if (btn.dataset.wmsTab === 'warehouses') loadWmsWarehouses();
                             if (btn.dataset.wmsTab === 'locations') loadWmsLocations();
                             if (btn.dataset.wmsTab === 'twin') loadWmsTwin();
                             if (btn.dataset.wmsTab === 'agv') { loadWmsEquipment(); loadWmsAgvTasks(); }
@@ -4259,6 +5259,7 @@
                         document.getElementById('cmf-slug').value = community.slug;
                         document.getElementById('cmf-description').value = community.description || '';
                         document.getElementById('cmf-logo-url').value = community.logo_url || '';
+                        document.getElementById('cmf-stamp-url').value = community.stamp_url || '';
                         document.getElementById('cmf-image-url').value = community.image_url || '';
                         document.getElementById('cmf-primary-color').value = community.primary_color || '#E91E63';
                         document.getElementById('cmf-hero-title').value = community.hero_title || '';
@@ -4301,6 +5302,7 @@
                         slug: document.getElementById('cmf-slug').value.trim(),
                         description: document.getElementById('cmf-description').value.trim(),
                         logo_url: document.getElementById('cmf-logo-url').value.trim(),
+                        stamp_url: document.getElementById('cmf-stamp-url').value.trim(),
                         image_url: document.getElementById('cmf-image-url').value.trim(),
                         primary_color: document.getElementById('cmf-primary-color').value,
                         hero_title: document.getElementById('cmf-hero-title').value.trim(),
@@ -4675,19 +5677,27 @@
                 const cpfMsg = document.getElementById('cpf-msg');
                 const cpfCodeInput = document.getElementById('cpf-code');
 
-                // 관리자가 매번 코드를 직접 고민하지 않도록, 신규 발급 시 알아보기 쉬운 랜덤 쿠폰 코드를 자동 생성한다
-                // (혼동되기 쉬운 문자 0/O, 1/I는 제외)
-                function generateCouponCode() {
+                // 관리자가 매번 코드를 직접 고민하지 않도록, 신규 발급 시 알아보기 쉬운 랜덤 쿠폰 코드를 자동 생성한다.
+                // 서버가 실제 DB에 없는 값인지 확인한 뒤 돌려주므로 추천 자체가 중복일 수 없다.
+                async function generateCouponCode() {
+                    try {
+                        const { ok, json } = await authedFetch('/api/admin/coupons/suggest-code');
+                        if (ok) return json.data.code;
+                    } catch (e) { /* 아래 폴백으로 진행 */ }
+                    // 서버 호출이 실패한 경우에만 클라이언트에서 임시로 만들고, 저장 시 서버가 최종 중복 검증을 한다
                     const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
                     let code = '';
                     for (let i = 0; i < 8; i++) code += chars[Math.floor(Math.random() * chars.length)];
                     return code;
                 }
-                document.getElementById('cpf-regen-code').addEventListener('click', () => {
-                    cpfCodeInput.value = generateCouponCode();
+                document.getElementById('cpf-regen-code').addEventListener('click', async () => {
+                    const btn = document.getElementById('cpf-regen-code');
+                    btn.disabled = true;
+                    cpfCodeInput.value = await generateCouponCode();
+                    btn.disabled = false;
                 });
 
-                function openCouponModal(coupon) {
+                async function openCouponModal(coupon) {
                     cpfMsg.className = 'msg';
                     cpfForm.reset();
                     if (coupon) {
@@ -4709,7 +5719,9 @@
                         document.getElementById('coupon-modal-title').textContent = '새 쿠폰 발급';
                         document.getElementById('cpf-id').value = '';
                         cpfCodeInput.disabled = false;
-                        cpfCodeInput.value = generateCouponCode();
+                        cpfCodeInput.value = '';
+                        cpfCodeInput.placeholder = '생성 중...';
+                        generateCouponCode().then(code => { cpfCodeInput.value = code; cpfCodeInput.placeholder = 'SUMMER10'; });
                         document.getElementById('cpf-regen-code').disabled = false;
                         document.getElementById('cpf-min-order').value = '0';
                         document.getElementById('cpf-per-user-limit').value = '1';
@@ -5231,7 +6243,7 @@
                 async function loadSettings() {
                     const settingsArea = document.getElementById('settings-area');
                     try {
-                        const [ratesRes, gradesRes, pageTemplatesRes, pgRes, kakaoPgRes, naverPgRes, aiRes, shippingRes, emailRes, cartReminderRes, referralRes, naverOauthRes] = await Promise.all([
+                        const [ratesRes, gradesRes, pageTemplatesRes, pgRes, kakaoPgRes, naverPgRes, aiRes, shippingRes, emailRes, cartReminderRes, referralRes, naverOauthRes, bizInfoRes] = await Promise.all([
                             authedFetch('/api/settings/mileage-rates'),
                             authedFetch('/api/settings/member-grades'),
                             authedFetch('/api/settings/page-templates'),
@@ -5243,7 +6255,8 @@
                             authedFetch('/api/admin/email-config'),
                             authedFetch('/api/admin/settings/cart-reminder'),
                             authedFetch('/api/admin/settings/referral-program'),
-                            authedFetch('/api/admin/oauth-config/naver')
+                            authedFetch('/api/admin/oauth-config/naver'),
+                            authedFetch('/api/admin/settings/business-info')
                         ]);
                         if (!ratesRes.ok || !ratesRes.json.success) throw new Error(ratesRes.json.message || '설정을 불러오지 못했습니다');
                         const rates = ratesRes.json.data;
@@ -5260,6 +6273,7 @@
                         const cartReminderPending = (cartReminderRes.ok && cartReminderRes.json.success) ? (cartReminderRes.json.pending_count || 0) : 0;
                         const referral = (referralRes.ok && referralRes.json.success) ? referralRes.json.data : { enabled: false, referrer_reward: 3000, referred_reward: 3000 };
                         const referralStats = (referralRes.ok && referralRes.json.stats) ? referralRes.json.stats : { total_referrals: 0, rewarded_referrals: 0, pending_referrals: 0 };
+                        const bizInfo = (bizInfoRes.ok && bizInfoRes.json.success) ? bizInfoRes.json.data : { company_name: null, ceo_name: null, business_number: null, address: null };
 
                         // 화면 구성요소(상품목록/장바구니/로그인/마이페이지)별 미니 미리보기 마크업 - 컴포넌트키-옵션값 조합별로 준비해둔 것만 사용
                         const GALLERY_PREVIEW_HTML = {
@@ -5285,6 +6299,18 @@
                         }).join('');
 
                         settingsArea.innerHTML = `
+                            <div class="settings-card" style="max-width:640px;">
+                                <h3>🏢 사업자 정보 (원천징수영수증 발급자 정보)</h3>
+                                <p class="desc">공급자·분양조직에 현금 정산을 지급하고 원천징수(3.3%)영수증을 발급할 때 "원천징수의무자"란에 표시되는 WITH+ 본사의 사업자 정보입니다.</p>
+                                <form id="biz-info-form">
+                                    <div class="field"><label>상호</label><input type="text" id="biz-company-name" value="${WithPlus.escapeHtml(bizInfo.company_name || '')}" placeholder="예: 주식회사 위드플러스"></div>
+                                    <div class="field"><label>대표자</label><input type="text" id="biz-ceo-name" value="${WithPlus.escapeHtml(bizInfo.ceo_name || '')}" placeholder="대표자 성명"></div>
+                                    <div class="field"><label>사업자등록번호</label><input type="text" id="biz-business-number" value="${WithPlus.escapeHtml(bizInfo.business_number || '')}" placeholder="000-00-00000"></div>
+                                    <div class="field"><label>사업장 주소</label><input type="text" id="biz-address" value="${WithPlus.escapeHtml(bizInfo.address || '')}" placeholder="사업장 소재지"></div>
+                                    <div class="settings-msg" id="biz-info-msg"></div>
+                                    <button type="submit" class="settings-save-btn" id="biz-info-save-btn">저장</button>
+                                </form>
+                            </div>
                             <div class="settings-card">
                                 <h3>💰 마일리지 적립율</h3>
                                 <p class="desc">상품 구매 시 적립되는 마일리지 비율입니다. 변경 즉시(최대 30초 이내) 전체 플랫폼에 반영됩니다.</p>
@@ -5592,6 +6618,35 @@
                                 <p class="desc">계정이 탈취돼도 비밀번호만으로는 로그인할 수 없도록, 인증 앱(Google Authenticator, Authy 등)의 6자리 코드를 추가로 요구합니다. 한 번 설정하면 그 다음 로그인부터 항상 코드 입력이 필요합니다.</p>
                                 <div id="mfa-area"><div class="settings-msg" style="display:block;">불러오는 중...</div></div>
                             </div>`;
+
+                        document.getElementById('biz-info-form').addEventListener('submit', async (e) => {
+                            e.preventDefault();
+                            const msg = document.getElementById('biz-info-msg');
+                            const btn = document.getElementById('biz-info-save-btn');
+                            msg.className = 'settings-msg';
+                            btn.disabled = true;
+                            btn.textContent = '저장 중...';
+                            try {
+                                const { ok, json } = await authedFetch('/api/admin/settings/business-info', {
+                                    method: 'PUT',
+                                    body: JSON.stringify({
+                                        company_name: document.getElementById('biz-company-name').value.trim(),
+                                        ceo_name: document.getElementById('biz-ceo-name').value.trim(),
+                                        business_number: document.getElementById('biz-business-number').value.trim(),
+                                        address: document.getElementById('biz-address').value.trim()
+                                    })
+                                });
+                                if (!ok) throw new Error(json.message || '저장에 실패했습니다');
+                                msg.textContent = '저장되었습니다.';
+                                msg.className = 'settings-msg success';
+                            } catch (err) {
+                                msg.textContent = err.message;
+                                msg.className = 'settings-msg error';
+                            } finally {
+                                btn.disabled = false;
+                                btn.textContent = '저장';
+                            }
+                        });
 
                         document.getElementById('mileage-rate-form').addEventListener('submit', async (e) => {
                             e.preventDefault();
@@ -6222,6 +7277,10 @@
                             <div class="settings-card" style="max-width:900px;">
                                 <h3>📄 엑셀/CSV로 상품 일괄 등록</h3>
                                 <p class="desc">기존에 운영하시던 쇼핑몰(예: 카페24 관리자 "상품 &gt; 상품목록 &gt; 엑셀다운로드")에서 받은 파일이나 직접 만든 엑셀/CSV 파일을 올리면 상품명·가격·재고 등을 자동으로 인식해서 한 번에 등록합니다. 도매매 API 키가 없어도 바로 사용할 수 있어요. (.xlsx, .xls, .csv 지원, 최대 500건)</p>
+                                <div style="background:var(--bg-light); border:1px dashed var(--border-color); border-radius:8px; padding:12px 14px; margin:12px 0; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+                                    <button type="button" class="btn btn-secondary" id="bulk-import-template-btn">📥 등록 양식 다운로드 (엑셀)</button>
+                                    <span style="font-size:0.82em; color:var(--text-gray);">양식(예시 상품 포함)을 받아 상품 정보를 채운 뒤 아래에 업로드하세요. 필요할 때 언제든 다시 받을 수 있습니다.</span>
+                                </div>
                                 <input type="file" id="bulk-import-file" accept=".xlsx,.xls,.csv" style="margin:10px 0;">
                                 <div id="bulk-import-preview"></div>
                             </div>
@@ -6345,6 +7404,22 @@
                             } catch (err) {
                                 resultArea.innerHTML = `<p style="color:#C62828; font-size:0.85em;">${WithPlus.escapeHtml(err.message)}</p>`;
                             }
+                        });
+
+                        const bulkTemplateBtn = document.getElementById('bulk-import-template-btn');
+                        if (bulkTemplateBtn) bulkTemplateBtn.addEventListener('click', () => {
+                            // 서버(bulk-import 엔드포인트)와 위 헤더 자동인식(ALIASES)이 알아보는 표준 컬럼명 그대로 양식을 만든다.
+                            // 예시 행 2개를 넣어 형식을 바로 알 수 있게 하고, 그 아래는 빈 줄로 남겨 형님이 계속 이어 입력하면 된다.
+                            const headers = ['상품명', '판매가', '할인가', '재고수량', '이미지주소', '상품코드', '상품설명'];
+                            const examples = [
+                                ['가르시니아 다이어트 캡슐', 19900, 15900, 80, 'https://example.com/images/product1.jpg', 'DIET-001', '천연 가르시니아 성분으로 만든 다이어트 보조제입니다.'],
+                                ['국산 생강차', 11900, '', 110, '', '', '']
+                            ];
+                            const ws = XLSX.utils.aoa_to_sheet([headers, ...examples]);
+                            ws['!cols'] = [{ wch: 28 }, { wch: 10 }, { wch: 10 }, { wch: 10 }, { wch: 34 }, { wch: 14 }, { wch: 44 }];
+                            const wb = XLSX.utils.book_new();
+                            XLSX.utils.book_append_sheet(wb, ws, '상품등록양식');
+                            XLSX.writeFile(wb, 'WITH+_상품일괄등록_양식.xlsx');
                         });
 
                         document.getElementById('bulk-import-file').addEventListener('change', (e) => {
