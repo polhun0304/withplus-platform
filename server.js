@@ -1964,6 +1964,164 @@ app.get('/api/admin/integrations/:supplierKey/search', authenticate, requireRole
 });
 
 // 선택한 상품들을 실제로 우리 플랫폼 상품(products_with)으로 가져오기 - 이미 가져온 external_id는 건너뜀(중복 방지)
+// ============================================
+// 🤖 대량 등록 시 카테고리 AI 자동분류
+// - 예전에는 대량 등록(도매매/엑셀 가져오기) 시 상품 전체에 카테고리 하나를 똑같이 적용해서,
+//   실제로는 성격이 다른 상품들이 한 카테고리에 뒤섞이는 문제가 있었다(이카운트 829개 가져올 때 실제로 겪은 문제).
+// - 이제는 상품명을 하나씩 AI가 보고, 기존 카테고리 중 가장 알맞은 곳에 배정하거나(우선),
+//   정말 기존 카테고리 어디에도 안 맞을 때만 새 카테고리를 제안한다.
+// - 새 카테고리는 무한정 늘어나지 않도록: 이번 가져오기 1건당 최대 개수 제한 + 최소 상품 개수(너무 적으면 새로 만들지 않고
+//   가장 비슷한 기존 카테고리로 대신 배정) 두 가지 안전장치를 둔다. 새 카테고리는 기존에 이미 만들어둔
+//   2단(대분류/중분류) 체계를 그대로 활용해 적절한 대분류 아래 중분류로 만드는 것을 기본으로 한다.
+// ============================================
+const CATEGORY_AUTOCLASSIFY_CHUNK_SIZE = 40; // 한 번의 AI 호출에 담는 상품 수(프롬프트/응답 크기 관리용)
+const CATEGORY_AUTOCLASSIFY_MAX_NEW_PER_BATCH = 5; // 이번 가져오기 1건에서 새로 만들 수 있는 카테고리 최대 개수
+const CATEGORY_AUTOCLASSIFY_MIN_ITEMS_FOR_NEW = 3; // 이 개수 미만으로 몰린 새 카테고리 제안은 만들지 않고 fallback으로 대체
+
+async function classifyProductsForCategories(names, existingCategories, config) {
+  const topLevel = existingCategories.filter(c => !c.parent_id);
+  const catSummary = topLevel.map(c => {
+    const children = existingCategories.filter(ch => ch.parent_id === c.id);
+    return `- ${c.slug} (${c.label})${children.length ? ' > 하위: ' + children.map(ch => `${ch.slug}(${ch.label})`).join(', ') : ''}`;
+  }).join('\n');
+
+  const results = [];
+  for (let i = 0; i < names.length; i += CATEGORY_AUTOCLASSIFY_CHUNK_SIZE) {
+    const chunk = names.slice(i, i + CATEGORY_AUTOCLASSIFY_CHUNK_SIZE);
+    const prompt = `당신은 이커머스 쇼핑몰의 상품 카테고리 분류 담당자입니다.
+아래 기존 카테고리 목록을 참고해, 상품명 목록 각각을 가장 알맞은 카테고리에 배정하세요.
+
+기존 카테고리(대분류 및 그 아래 중분류):
+${catSummary}
+
+규칙:
+1. 기존 카테고리 중 자연스럽게 맞는 것이 있으면 그 slug를 category_slug에 넣으세요. 이 경우가 기본입니다.
+2. 기존 카테고리 어디에도 정말 안 맞는 상품들만 new_category를 제안하세요(남용 금지 — 애매하면 가장 가까운 기존 카테고리를 쓰세요).
+3. new_category를 제안할 때는 fallback_slug(새 카테고리가 이번에 실제로 만들어지지 않을 경우 대신 사용할, 가장 비슷한 기존 카테고리의 slug)를 반드시 함께 주세요.
+4. 새 카테고리는 기본적으로 가장 어울리는 기존 대분류 밑에 중분류로 만드세요(parent_slug에 그 대분류의 slug를 넣으세요). 정말 이질적이어서 대분류 자체가 필요하면 parent_slug를 null로 하세요.
+5. 같은 성격의 상품이 여러 개 있어 같은 새 카테고리를 제안할 때는, 그 상품들 모두 new_category.slug를 동일한 값으로 통일하세요.
+
+상품 목록(0번부터 순서대로):
+${chunk.map((n, idx) => `${idx}. ${n}`).join('\n')}
+
+반드시 아래 JSON 배열 형식으로만 응답하세요(코드블록/설명 문구 금지, 상품 개수·순서를 정확히 지키세요):
+[{"index":0,"category_slug":"기존카테고리slug 또는 null","new_category":null,"fallback_slug":"가장비슷한기존카테고리slug"}]
+new_category를 제안할 때는 예: {"index":1,"category_slug":null,"new_category":{"label":"홍삼","emoji":"🌿","slug":"ginseng","parent_slug":"functional"},"fallback_slug":"functional"}`;
+
+    let aiResp;
+    try {
+      aiResp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': config.api_key, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 4096, messages: [{ role: 'user', content: prompt }] }),
+        signal: AbortSignal.timeout(45000)
+      });
+    } catch (callErr) {
+      throw new Error('AI 서버 호출에 실패했습니다: ' + callErr.message);
+    }
+    const aiJson = await aiResp.json().catch(() => null);
+    if (!aiResp.ok || !aiJson) {
+      throw new Error(aiJson?.error?.message || `AI 응답을 받아오지 못했습니다(HTTP ${aiResp.status})`);
+    }
+    const rawText = (aiJson.content || []).map(b => b.text || '').join('').trim();
+    let parsed;
+    try {
+      const jsonMatch = rawText.match(/\[[\s\S]*\]/);
+      parsed = JSON.parse(jsonMatch ? jsonMatch[0] : rawText);
+    } catch (parseErr) {
+      throw new Error('AI 응답을 해석하지 못했습니다(카테고리 자동분류). 다시 시도해주세요');
+    }
+    if (!Array.isArray(parsed)) throw new Error('AI 응답 형식이 올바르지 않습니다(카테고리 자동분류)');
+    parsed.forEach(p => {
+      if (p && Number.isInteger(p.index) && chunk[p.index] !== undefined) {
+        results[i + p.index] = p;
+      }
+    });
+  }
+  return results; // results[k]는 names[k]에 대응 (AI가 건너뛴 항목은 undefined일 수 있음)
+}
+
+// AI 분류 결과(상품별 category_slug/new_category/fallback_slug)를 받아, 실제로 db_category 문자열을 확정한다.
+// - 새 카테고리는 이번 배치에서 충분히 많이(>= MIN) 제안된 것 중 상위 MAX개만 실제로 생성한다(무한 증식 방지).
+// - 채택되지 않은 새 카테고리 제안이나 매칭 실패 항목은 fallback_slug(그마저 없으면 첫 번째 기존 카테고리)로 대체한다.
+async function resolveAutoClassifiedCategories(classifications, existingCategories) {
+  const bySlug = new Map(existingCategories.map(c => [c.slug, c]));
+  const defaultDbCategory = (existingCategories[0] && existingCategories[0].db_category) || 'lifestyle';
+
+  // 1) 새 카테고리 제안 집계 (slug 기준)
+  const proposals = new Map(); // slug -> { label, emoji, parent_slug, count }
+  classifications.forEach(c => {
+    if (c && c.new_category && c.new_category.slug) {
+      const cleanSlug = String(c.new_category.slug).trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+      if (!cleanSlug || bySlug.has(cleanSlug)) return; // 이미 존재하는 slug와 겹치면 새로 만들지 않음(그 카테고리를 쓴 것으로 간주하지 않고 fallback 처리)
+      const existing = proposals.get(cleanSlug);
+      if (existing) { existing.count++; }
+      else {
+        proposals.set(cleanSlug, {
+          label: String(c.new_category.label || cleanSlug).trim(),
+          emoji: (c.new_category.emoji && String(c.new_category.emoji).trim()) || '🛍️',
+          parent_slug: c.new_category.parent_slug ? String(c.new_category.parent_slug).trim() : null,
+          count: 1
+        });
+      }
+    }
+  });
+
+  // 2) 개수 많은 순으로 정렬해, 최소 개수 이상이면서 상한 개수 이내인 것만 실제로 생성 승인
+  const approved = Array.from(proposals.entries())
+    .filter(([, v]) => v.count >= CATEGORY_AUTOCLASSIFY_MIN_ITEMS_FOR_NEW)
+    .sort((a, b) => b[1].count - a[1].count)
+    .slice(0, CATEGORY_AUTOCLASSIFY_MAX_NEW_PER_BATCH)
+    .map(([slug, v]) => ({ slug, ...v }));
+
+  const created = [];
+  const rejected = Array.from(proposals.entries())
+    .filter(([slug]) => !approved.some(a => a.slug === slug))
+    .map(([slug, v]) => ({ slug, label: v.label, count: v.count }));
+
+  for (const cat of approved) {
+    let parentId = null;
+    if (cat.parent_slug) {
+      const parent = bySlug.get(cat.parent_slug);
+      if (parent && !parent.parent_id) parentId = parent.id; // 2단(대분류/중분류) 제약을 지켜, 이미 중분류인 것은 상위로 쓰지 않음
+    }
+    const { data: newCat, error } = await supabase.from('categories').insert([{
+      slug: cat.slug, label: cat.label, emoji: cat.emoji, db_category: cat.slug, parent_id: parentId,
+      display_order: 999, is_active: true
+    }]).select().single();
+    if (error) {
+      // 동시성 등으로 방금 다른 요청이 같은 slug를 먼저 만들었을 수 있음 - 실패해도 배치 전체를 막지 않고 기존 카테고리로 취급
+      rejected.push({ slug: cat.slug, label: cat.label, count: cat.count, reason: error.message });
+      continue;
+    }
+    created.push(newCat);
+    bySlug.set(newCat.slug, newCat);
+  }
+
+  // 3) 상품별 최종 db_category 확정
+  const finalCategories = classifications.map(c => {
+    if (!c) return { db_category: defaultDbCategory, used: 'default_fallback' };
+    if (c.new_category && c.new_category.slug) {
+      const cleanSlug = String(c.new_category.slug).trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
+      const approvedCat = bySlug.get(cleanSlug);
+      if (approvedCat && created.some(cr => cr.slug === cleanSlug)) {
+        return { db_category: approvedCat.db_category, used: 'new_category', category_label: approvedCat.label };
+      }
+    }
+    if (c.category_slug && bySlug.has(c.category_slug)) {
+      const cat = bySlug.get(c.category_slug);
+      return { db_category: cat.db_category, used: 'existing', category_label: cat.label };
+    }
+    if (c.fallback_slug && bySlug.has(c.fallback_slug)) {
+      const cat = bySlug.get(c.fallback_slug);
+      return { db_category: cat.db_category, used: 'fallback', category_label: cat.label };
+    }
+    return { db_category: defaultDbCategory, used: 'default_fallback' };
+  });
+
+  return { finalCategories, created, rejected };
+}
+
 app.post('/api/admin/integrations/:supplierKey/import', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { supplierKey } = req.params;
@@ -1971,15 +2129,39 @@ app.post('/api/admin/integrations/:supplierKey/import', authenticate, requireRol
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: 'Bad Request', message: '가져올 상품(items)이 없습니다', timestamp: new Date().toISOString() });
     }
-    if (!category || typeof category !== 'string') {
-      return res.status(400).json({ error: 'Bad Request', message: '등록할 카테고리를 선택해주세요', timestamp: new Date().toISOString() });
+
+    // category를 명시적으로 지정하지 않으면 AI가 상품명을 보고 하나씩 알맞은 카테고리로 자동분류한다(없으면 적당한 선에서 새로 만듦).
+    // category를 지정하면 예전처럼 전체 상품에 그 카테고리 하나를 그대로 적용한다(관리자가 명시적으로 원할 때를 위한 기존 동작 유지).
+    let perItemCategory = null;
+    let categorySummary = null;
+    if (!category) {
+      const aiConfig = await getAiConfig('anthropic');
+      if (!aiConfig || !aiConfig.enabled || !aiConfig.api_key) {
+        return res.status(400).json({ error: 'Bad Request', message: '카테고리를 지정하지 않으셨습니다. AI 자동분류를 쓰려면 "⚙️ 설정"에서 Anthropic API 키를 등록·활성화하시거나, 등록할 카테고리를 직접 선택해주세요', timestamp: new Date().toISOString() });
+      }
+      const { data: existingCategories, error: catErr } = await supabase.from('categories').select('id, slug, label, db_category, parent_id').eq('is_active', true);
+      if (catErr) throw catErr;
+      let classifications;
+      try {
+        classifications = await classifyProductsForCategories(items.map(it => String(it.name || '')), existingCategories, aiConfig);
+      } catch (aiErr) {
+        return res.status(502).json({ error: 'AI Request Failed', message: aiErr.message, timestamp: new Date().toISOString() });
+      }
+      const resolved = await resolveAutoClassifiedCategories(classifications, existingCategories);
+      perItemCategory = resolved.finalCategories.map(f => f.db_category);
+      categorySummary = {
+        new_categories_created: resolved.created.map(c => ({ slug: c.slug, label: c.label, parent_id: c.parent_id })),
+        new_categories_rejected: resolved.rejected // 개수 부족 등으로 새로 만들지 않고 fallback으로 대체된 제안들(참고용)
+      };
     }
 
     const results = { imported: [], skipped_duplicate: [], failed: [] };
-    for (const raw of items) {
+    for (let idx = 0; idx < items.length; idx++) {
+      const raw = items[idx];
       const externalId = String(raw.external_id || '').trim();
       const name = String(raw.name || '').trim();
       const price = Number(raw.price);
+      const itemCategory = category || perItemCategory[idx];
       if (!externalId || !name || !Number.isFinite(price) || price <= 0) {
         results.failed.push({ external_id: externalId, reason: '필수 정보(상품명/가격)가 올바르지 않습니다' });
         continue;
@@ -1994,7 +2176,7 @@ app.post('/api/admin/integrations/:supplierKey/import', authenticate, requireRol
         slug: slugify(name) + '-' + Date.now().toString(36),
         description: `외부 공급사(${supplierKey === 'domeggook' ? '도매매' : supplierKey})에서 가져온 상품입니다.`,
         price,
-        category,
+        category: itemCategory,
         stock: Number.isFinite(Number(raw.stock)) ? Number(raw.stock) : 0,
         images_urls: raw.image_url ? [raw.image_url] : [],
         supplier_id: req.user.id,
@@ -2009,8 +2191,9 @@ app.post('/api/admin/integrations/:supplierKey/import', authenticate, requireRol
       if (Number(created.stock) > 0) {
         await supabase.from('stock_adjustments_with').insert([{ product_id: created.id, variant_id: null, delta: Number(created.stock), reason: '외부 공급사 일괄 등록', created_by: req.user.id, scan_source: 'admin_manual' }]);
       }
-      results.imported.push({ external_id: externalId, name, product_id: created.id });
+      results.imported.push({ external_id: externalId, name, product_id: created.id, category: itemCategory });
     }
+    if (categorySummary) results.category_summary = categorySummary;
 
     res.json({ success: true, data: results, timestamp: new Date().toISOString() });
   } catch (err) {
@@ -2037,8 +2220,30 @@ app.post('/api/admin/products/bulk-import', authenticate, requireRole(['provider
     if (items.length > 500) {
       return res.status(400).json({ error: 'Bad Request', message: '한 번에 최대 500건까지 등록할 수 있습니다. 파일을 나눠서 올려주세요', timestamp: new Date().toISOString() });
     }
-    if (!category || typeof category !== 'string') {
-      return res.status(400).json({ error: 'Bad Request', message: '등록할 카테고리를 선택해주세요', timestamp: new Date().toISOString() });
+
+    // category를 명시적으로 지정하지 않으면 AI가 상품명을 보고 하나씩 알맞은 카테고리로 자동분류한다(없으면 적당한 선에서 새로 만듦).
+    // category를 지정하면 예전처럼 전체 상품에 그 카테고리 하나를 그대로 적용한다(관리자가 명시적으로 원할 때를 위한 기존 동작 유지).
+    let perItemCategory = null;
+    let categorySummary = null;
+    if (!category) {
+      const aiConfig = await getAiConfig('anthropic');
+      if (!aiConfig || !aiConfig.enabled || !aiConfig.api_key) {
+        return res.status(400).json({ error: 'Bad Request', message: '카테고리를 지정하지 않으셨습니다. AI 자동분류를 쓰려면 "⚙️ 설정"에서 Anthropic API 키를 등록·활성화하시거나, 등록할 카테고리를 직접 선택해주세요', timestamp: new Date().toISOString() });
+      }
+      const { data: existingCategories, error: catErr } = await supabase.from('categories').select('id, slug, label, db_category, parent_id').eq('is_active', true);
+      if (catErr) throw catErr;
+      let classifications;
+      try {
+        classifications = await classifyProductsForCategories(items.map(it => String(it.name || '')), existingCategories, aiConfig);
+      } catch (aiErr) {
+        return res.status(502).json({ error: 'AI Request Failed', message: aiErr.message, timestamp: new Date().toISOString() });
+      }
+      const resolved = await resolveAutoClassifiedCategories(classifications, existingCategories);
+      perItemCategory = resolved.finalCategories.map(f => f.db_category);
+      categorySummary = {
+        new_categories_created: resolved.created.map(c => ({ slug: c.slug, label: c.label, parent_id: c.parent_id })),
+        new_categories_rejected: resolved.rejected
+      };
     }
 
     // 이 판매자가 이미 등록해둔 상품명 목록(중복 등록 방지용) - 대소문자/공백 무시하고 비교
@@ -2046,9 +2251,11 @@ app.post('/api/admin/products/bulk-import', authenticate, requireRole(['provider
     const existingNames = new Set((existingProducts || []).map(p => String(p.name || '').trim().toLowerCase()));
 
     const results = { imported: [], skipped_duplicate: [], failed: [] };
-    for (const raw of items) {
+    for (let idx = 0; idx < items.length; idx++) {
+      const raw = items[idx];
       const name = String(raw.name || '').trim();
       const price = Number(raw.price);
+      const itemCategory = category || perItemCategory[idx];
       if (!name || !Number.isFinite(price) || price <= 0) {
         results.failed.push({ name: name || '(이름없음)', reason: '필수 정보(상품명/가격)가 올바르지 않습니다' });
         continue;
@@ -2067,7 +2274,7 @@ app.post('/api/admin/products/bulk-import', authenticate, requireRole(['provider
         description: (raw.description && String(raw.description).trim()) || '엑셀/CSV 일괄 등록으로 추가된 상품입니다.',
         price,
         discount_price: Number.isFinite(discountPrice) && discountPrice > 0 && discountPrice < price ? discountPrice : null,
-        category,
+        category: itemCategory,
         stock: Number.isFinite(stock) && stock >= 0 ? stock : 0,
         images_urls: raw.image_url ? [String(raw.image_url).trim()] : [],
         supplier_id: req.user.id,
@@ -2083,8 +2290,9 @@ app.post('/api/admin/products/bulk-import', authenticate, requireRole(['provider
       if (Number(created.stock) > 0) {
         await supabase.from('stock_adjustments_with').insert([{ product_id: created.id, variant_id: null, delta: Number(created.stock), reason: '엑셀/CSV 일괄 등록', created_by: req.user.id, scan_source: 'admin_manual' }]);
       }
-      results.imported.push({ name, product_id: created.id });
+      results.imported.push({ name, product_id: created.id, category: itemCategory });
     }
+    if (categorySummary) results.category_summary = categorySummary;
 
     res.json({ success: true, data: results, timestamp: new Date().toISOString() });
   } catch (err) {

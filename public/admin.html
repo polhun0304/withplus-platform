@@ -7356,7 +7356,8 @@
                                 const { ok, json } = await authedFetch('/api/admin/integrations/domeggook/search?keyword=' + encodeURIComponent(kw));
                                 if (!ok) throw new Error(json.message || '검색 실패');
                                 importFoundItems = json.data.items;
-                                const catOptions = importCategories.map(c => `<option value="${WithPlus.escapeHtml(c.db_category || c.slug || c.name)}">${WithPlus.escapeHtml(c.name)}</option>`).join('');
+                                const catOptions = '<option value="">🤖 AI 자동분류(상품마다 알맞은 카테고리로 자동 배정 · 추천)</option>'
+                                    + importCategories.map(c => `<option value="${WithPlus.escapeHtml(c.db_category || c.slug || c.name)}">${WithPlus.escapeHtml(c.name)}</option>`).join('');
                                 resultArea.innerHTML = `
                                     ${json.data.warning ? `<p style="color:#C62828; font-size:0.85em;">${WithPlus.escapeHtml(json.data.warning)}</p>` : ''}
                                     ${importFoundItems.length > 0 ? `
@@ -7389,12 +7390,22 @@
                                     if (checked.length === 0) { alert('가져올 상품을 선택해주세요'); return; }
                                     const category = document.getElementById('dome-import-category').value;
                                     const msg = document.getElementById('dome-import-msg');
-                                    importBtn.disabled = true; importBtn.textContent = '가져오는 중...';
+                                    importBtn.disabled = true; importBtn.textContent = category ? '가져오는 중...' : 'AI가 카테고리 분류 중... (상품이 많으면 시간이 걸릴 수 있어요)';
                                     try {
-                                        const { ok, json: importJson } = await authedFetch('/api/admin/integrations/domeggook/import', { method: 'POST', body: JSON.stringify({ items: checked, category }) });
+                                        const { ok, json: importJson } = await authedFetch('/api/admin/integrations/domeggook/import', { method: 'POST', body: JSON.stringify({ items: checked, category: category || undefined }) });
                                         if (!ok) throw new Error(importJson.message || '가져오기 실패');
                                         const r = importJson.data;
-                                        msg.innerHTML = `✅ ${r.imported.length}건 등록됨, ⏭️ ${r.skipped_duplicate.length}건 이미 가져온 상품(건너뜀), ❌ ${r.failed.length}건 실패`;
+                                        let summaryHtml = `✅ ${r.imported.length}건 등록됨, ⏭️ ${r.skipped_duplicate.length}건 이미 가져온 상품(건너뜀), ❌ ${r.failed.length}건 실패`;
+                                        if (r.category_summary) {
+                                            const cs = r.category_summary;
+                                            if (cs.new_categories_created.length) {
+                                                summaryHtml += `<br>🆕 새로 만들어진 카테고리: ${cs.new_categories_created.map(c => WithPlus.escapeHtml(c.label)).join(', ')}`;
+                                            }
+                                            if (cs.new_categories_rejected.length) {
+                                                summaryHtml += `<br>ℹ️ 상품 수가 적어(3개 미만) 새로 만들지 않고 기존 카테고리로 대신 배정한 제안: ${cs.new_categories_rejected.map(c => `${WithPlus.escapeHtml(c.label)}(${c.count}개)`).join(', ')}`;
+                                            }
+                                        }
+                                        msg.innerHTML = summaryHtml;
                                     } catch (err) {
                                         msg.textContent = '오류: ' + err.message;
                                     } finally {
@@ -7480,7 +7491,8 @@
                                     }
                                     bulkImportRows = parsedRows;
 
-                                    const catOptions = importCategories.map(c => `<option value="${WithPlus.escapeHtml(c.db_category || c.slug || c.name)}">${WithPlus.escapeHtml(c.name)}</option>`).join('');
+                                    const catOptions = '<option value="">🤖 AI 자동분류(상품마다 알맞은 카테고리로 자동 배정 · 추천)</option>'
+                                        + importCategories.map(c => `<option value="${WithPlus.escapeHtml(c.db_category || c.slug || c.name)}">${WithPlus.escapeHtml(c.name)}</option>`).join('');
                                     const missingFields = [];
                                     if (!colMap.name) missingFields.push('상품명');
                                     if (!colMap.price) missingFields.push('가격');
@@ -7518,16 +7530,25 @@
                                         const checkedIdxs = Array.from(document.querySelectorAll('.bulk-item-check:checked')).map(cb => Number(cb.dataset.idx));
                                         if (checkedIdxs.length === 0) { alert('등록할 상품을 선택해주세요'); return; }
                                         const category = document.getElementById('bulk-import-category').value;
-                                        if (!category) { alert('등록할 카테고리를 선택해주세요'); return; }
                                         const btn = document.getElementById('bulk-import-btn');
                                         const msg = document.getElementById('bulk-import-msg');
-                                        btn.disabled = true; btn.textContent = '등록하는 중...';
+                                        btn.disabled = true; btn.textContent = category ? '등록하는 중...' : 'AI가 카테고리 분류 중... (상품이 많으면 시간이 걸릴 수 있어요)';
                                         try {
                                             const items = checkedIdxs.map(idx => bulkImportRows[idx]);
-                                            const { ok, json } = await authedFetch('/api/admin/products/bulk-import', { method: 'POST', body: JSON.stringify({ items, category }) });
+                                            const { ok, json } = await authedFetch('/api/admin/products/bulk-import', { method: 'POST', body: JSON.stringify({ items, category: category || undefined }) });
                                             if (!ok) throw new Error(json.message || '등록 실패');
                                             const r = json.data;
-                                            msg.innerHTML = `✅ ${r.imported.length}건 등록됨, ⏭️ ${r.skipped_duplicate.length}건 이미 있는 상품(건너뜀), ❌ ${r.failed.length}건 실패`;
+                                            let summaryHtml = `✅ ${r.imported.length}건 등록됨, ⏭️ ${r.skipped_duplicate.length}건 이미 있는 상품(건너뜀), ❌ ${r.failed.length}건 실패`;
+                                            if (r.category_summary) {
+                                                const cs = r.category_summary;
+                                                if (cs.new_categories_created.length) {
+                                                    summaryHtml += `<br>🆕 새로 만들어진 카테고리: ${cs.new_categories_created.map(c => WithPlus.escapeHtml(c.label)).join(', ')}`;
+                                                }
+                                                if (cs.new_categories_rejected.length) {
+                                                    summaryHtml += `<br>ℹ️ 상품 수가 적어(3개 미만) 새로 만들지 않고 기존 카테고리로 대신 배정한 제안: ${cs.new_categories_rejected.map(c => `${WithPlus.escapeHtml(c.label)}(${c.count}개)`).join(', ')}`;
+                                                }
+                                            }
+                                            msg.innerHTML = summaryHtml;
                                         } catch (err) {
                                             msg.textContent = '오류: ' + err.message;
                                         } finally {

@@ -80,12 +80,13 @@ async function main() {
   const j4 = await r4.json();
   assert(j4.data.failed.length === 1, `가격 없는 행은 failed 처리됨 (실제: ${j4.data.failed.length})`);
 
-  // 5) category 누락 -> 400
+  // 5) category 누락 -> AI가 상품명을 보고 자동분류해서 성공(카테고리 강제 선택 요구하던 예전 동작에서 변경됨)
   const r5 = await fetch(`${API}/api/admin/products/bulk-import`, {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ items: [{ name: 'x', price: 1000 }] })
+    body: JSON.stringify({ items: [{ name: `벌크임포트테스트-카테고리생략-${Date.now()}`, price: 1000 }] })
   });
-  assert(r5.status === 400, `카테고리 누락 시 400 (실제: ${r5.status})`);
+  const j5 = await r5.json();
+  assert(r5.status === 200 && j5.data.imported.length === 1 && !!j5.data.imported[0].category, `카테고리 생략 시 AI 자동분류로 성공 + 카테고리 배정됨 (실제: status=${r5.status}, category=${j5.data.imported[0] && j5.data.imported[0].category})`);
 
   // 6) items 빈 배열 -> 400
   const r6 = await fetch(`${API}/api/admin/products/bulk-import`, {
