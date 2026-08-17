@@ -798,8 +798,46 @@
   // 어느 페이지든 이 스크립트만 불러오면 자동으로 배너 여부를 판단하도록 한다
   // (index/category/search 처럼 initCategoryNav를 쓰는 페이지뿐 아니라 상품상세·마이페이지 등에서도
   //  "특정 매장 보는 중" 상태를 알아채고 빠져나갈 수 있어야 하기 때문에, 카테고리 렌더링과는 별도로 항상 실행한다)
+  // ============================================
+  // WITH+ → GMWOS(의료복지 플랫폼) 역방향 SSO 링크 주입
+  // 어느 쪽에서 가입/로그인하든 다른 쪽도 재로그인 없이 이용(세션 핸드오프).
+  // 헤더(.header-top-right)에 "의료복지 플랫폼" 링크를 넣고, 클릭 시 현재 세션을
+  // GMWOS /sso 로 URL 해시로 전달한다.
+  // ============================================
+  const GMWOS_BASE = 'https://global-medical-welfare-os.vercel.app';
+  function injectGmwosLink() {
+    try {
+      const bar = document.querySelector('.header-top-right');
+      if (!bar || document.getElementById('wp-gmwos-link')) return;
+      const a = document.createElement('a');
+      a.id = 'wp-gmwos-link';
+      a.href = GMWOS_BASE + '/health';
+      a.textContent = '🏥 의료복지 플랫폼';
+      a.style.cssText = 'font-weight:700;color:#0F766E;';
+      a.addEventListener('click', async (e) => {
+        e.preventDefault();
+        const win = window.open('', '_blank'); // 제스처 내 새 탭 선점(팝업차단 회피)
+        let url = GMWOS_BASE + '/health';
+        try {
+          const session = await getSession();
+          if (session && session.access_token && session.refresh_token) {
+            url = GMWOS_BASE + '/sso#wp_sso=1&at=' + encodeURIComponent(session.access_token) +
+                  '&rt=' + encodeURIComponent(session.refresh_token) + '&next=' + encodeURIComponent('/health');
+          }
+        } catch (err) { /* 세션 없으면 일반 진입 */ }
+        if (win) win.location.href = url; else window.location.href = url;
+      });
+      bar.insertBefore(a, bar.firstChild);
+    } catch (e) { /* 헤더 없으면 조용히 무시 */ }
+  }
+
   // GMWOS에서 넘어온 SSO 세션이 있으면 먼저 이식(성공 시 재로딩되어 로그인 상태로 시작)
   consumeSsoHandoff();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', injectGmwosLink);
+  } else {
+    injectGmwosLink();
+  }
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', renderCommunityBanner);
