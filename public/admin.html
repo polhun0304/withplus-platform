@@ -271,6 +271,10 @@
                 <div class="field"><label>공급자 (거래처, 선택)</label>
                     <select id="pf-vendor"><option value="">선택 안 함</option></select>
                 </div>
+                <div class="field"><label>브랜드 (선택)</label>
+                    <input type="text" id="pf-brand" placeholder="예: 이니스프리, 앙쥬">
+                    <p style="font-size:0.78em; color:var(--text-gray); margin:4px 0 0;">개인화 추천에서 "브랜드 선호" 신호로 쓰입니다. 상품명에서 자동으로 인식하기 어려운 브랜드는 여기에 직접 입력해주세요.</p>
+                </div>
                 <div class="field" style="background:#FAFAFA; border:1px dashed var(--border-color); border-radius:8px; padding:12px;">
                     <label>🤖 AI로 상세페이지 문구 초안 만들기 (선택)</label>
                     <p style="font-size:0.78em; color:var(--text-gray); margin:2px 0 8px;">상품명·카테고리를 먼저 입력한 뒤, 특징을 키워드나 문장으로 적고 버튼을 누르면 아래 "설명/상세 설명/상세페이지 블록" 문구 초안을 AI가 채워줍니다. 반드시 검토 후 저장해주세요 — 과장 광고 표현은 자동으로 걸러지지 않을 수 있습니다.</p>
@@ -501,6 +505,58 @@
                 <div class="modal-actions">
                     <button type="button" class="btn btn-secondary" id="lef-cancel">취소</button>
                     <button type="submit" class="btn btn-primary" id="lef-submit">저장</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 자동 쿠폰 규칙 수정 모달 -->
+    <div class="modal-overlay" id="mkt-rule-edit-modal">
+        <div class="modal-box">
+            <h3>🔁 자동 쿠폰 규칙 수정</h3>
+            <form id="mkt-rule-edit-form">
+                <input type="hidden" id="mref-id">
+                <div class="field"><label>규칙 종류</label><input type="text" id="mref-type-display" disabled style="background:#FAFAFA;"></div>
+                <div class="field" id="mref-grade-field"><label>대상 등급</label><select id="mref-grade"></select></div>
+                <div class="field" id="mref-milestone-field" style="display:none;"><label>몇 번째 구매</label><input type="number" id="mref-milestone" min="1"></div>
+                <div class="field"><label>쿠폰 이름 *</label><input type="text" id="mref-coupon-label" required></div>
+                <div class="field" style="display:flex; gap:10px;">
+                    <div style="flex:1;">
+                        <label>할인 유형/값 *</label>
+                        <div style="display:flex; gap:6px;">
+                            <select id="mref-coupon-type"><option value="percent">%</option><option value="fixed">원</option></select>
+                            <input type="number" id="mref-coupon-value" required>
+                        </div>
+                    </div>
+                </div>
+                <div class="field" style="display:flex; gap:10px;">
+                    <div style="flex:1;"><label>최소주문금액</label><input type="number" id="mref-min-order" min="0" value="0"></div>
+                    <div style="flex:1;"><label>유효기간(일)</label><input type="number" id="mref-valid-days" min="1" value="30"></div>
+                </div>
+                <div class="field"><label><input type="checkbox" id="mref-enabled" checked style="width:auto; margin-right:6px;">활성화</label></div>
+                <div class="msg" id="mref-msg"></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="mref-cancel">취소</button>
+                    <button type="submit" class="btn btn-primary" id="mref-submit">저장</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 창고 마스터 수정 모달 -->
+    <div class="modal-overlay" id="warehouse-edit-modal">
+        <div class="modal-box">
+            <h3>🏭 창고 정보 수정</h3>
+            <form id="warehouse-edit-form">
+                <input type="hidden" id="whef-code">
+                <div class="field"><label>코드</label><input type="text" id="whef-code-display" disabled style="background:#FAFAFA;"></div>
+                <div class="field"><label>이름 *</label><input type="text" id="whef-name" required></div>
+                <div class="field"><label>주소</label><input type="text" id="whef-address" placeholder="선택 입력"></div>
+                <div class="field"><label><input type="checkbox" id="whef-is-active" checked style="width:auto; margin-right:6px;">사용중(체크 해제 시 비활성)</label></div>
+                <div class="msg" id="whef-msg"></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="whef-cancel">취소</button>
+                    <button type="submit" class="btn btn-primary" id="whef-submit">저장</button>
                 </div>
             </form>
         </div>
@@ -1144,6 +1200,7 @@
                     ${isAdmin ? '<button class="tab-btn" data-tab="subscriptions">🔄 정기배송 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="categories">🏷️ 카테고리 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="suppliers">🏭 공급자 관리</button>' : ''}
+                    ${isAdmin ? '<button class="tab-btn" data-tab="seller-applications">🆕 판매자 입점신청</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="communities">🏢 분양 조직 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="community-settlements">💵 분양조직 정산</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="boards">📝 게시판 관리</button>' : ''}
@@ -1307,6 +1364,18 @@
                         <button class="btn btn-primary" id="btn-new-supplier">+ 새 공급자 추가</button>
                     </div>
                     <div id="suppliers-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                </div>
+                <div class="tab-panel" id="tab-seller-applications">
+                    <div class="panel-toolbar">
+                        <span style="color:var(--text-gray); font-size:0.9em;">회원이 /seller 페이지에서 직접 접수한 판매자(셀프서비스 provider 계정) 입점 신청입니다. 승인 시 해당 계정의 권한이 즉시 판매자로 바뀝니다.</span>
+                        <select id="sapp-status-filter" style="padding:8px 12px; border:1px solid var(--border-color); border-radius:6px;">
+                            <option value="pending">심사 대기중</option>
+                            <option value="approved">승인됨</option>
+                            <option value="rejected">반려됨</option>
+                            <option value="">전체</option>
+                        </select>
+                    </div>
+                    <div id="seller-applications-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                 </div>
                 <div class="tab-panel" id="tab-communities">
                     <div class="panel-toolbar">
@@ -2162,6 +2231,7 @@
                     document.getElementById('pf-images').value = Array.isArray(product.images_urls) ? product.images_urls.join('\n') : '';
                     document.getElementById('pf-long-description').value = product.long_description || '';
                     document.getElementById('pf-vendor').value = product.vendor_id || '';
+                    document.getElementById('pf-brand').value = product.brand || '';
                     document.getElementById('pf-subscribable').checked = !!product.subscription_available;
                     document.getElementById('pf-barcode').value = product.barcode || '';
                     document.getElementById('pf-expiry-date').value = product.expiry_date ? String(product.expiry_date).slice(0, 10) : '';
@@ -2174,6 +2244,7 @@
                     document.getElementById('pf-id').value = '';
                     document.getElementById('pf-status').value = 'active';
                     document.getElementById('pf-vendor').value = '';
+                    document.getElementById('pf-brand').value = '';
                     document.getElementById('pf-subscribable').checked = false;
                     document.getElementById('pf-barcode').value = '';
                     document.getElementById('pf-expiry-date').value = '';
@@ -2250,6 +2321,7 @@
                     long_description: document.getElementById('pf-long-description').value.trim(),
                     detail_sections: collectDetailSections(),
                     vendor_id: document.getElementById('pf-vendor').value || null,
+                    brand: document.getElementById('pf-brand').value.trim() || null,
                     subscription_available: document.getElementById('pf-subscribable').checked,
                     barcode: document.getElementById('pf-barcode').value.trim() || null,
                     expiry_date: document.getElementById('pf-expiry-date').value || null,
@@ -2714,50 +2786,90 @@
                 // ===== 💵 분양조직(커뮤니티) 현금 정산 (관리자 전용) =====
                 // 공급자 정산과 같은 SETTLEMENT_STATUS_LABEL/CLASS를 그대로 재사용한다.
                 if (isAdmin) {
+                    let csRatesAll = []; // 조직별 사업자등록·수수료율 - 서버에서 전체 목록을 한 번만 받아오고, 검색/정렬은 클라이언트에서 즉시 처리한다(수천 건이어도 재조회 없이 빠르게 반응)
+
+                    function filterSortCsRates() {
+                        const kw = (document.getElementById('cs-rates-search')?.value || '').trim().toLowerCase();
+                        const kwDigits = kw.replace(/[^0-9]/g, '');
+                        let list = csRatesAll;
+                        if (kw) {
+                            list = list.filter(c => {
+                                const name = (c.name || '').toLowerCase();
+                                const bizDigits = (c.business_number || '').replace(/[^0-9]/g, '');
+                                return name.includes(kw) || (kwDigits && bizDigits.includes(kwDigits));
+                            });
+                        }
+                        const sort = document.getElementById('cs-rates-sort')?.value || 'name-asc';
+                        list = [...list].sort((a, b) => {
+                            switch (sort) {
+                                case 'name-desc': return (b.name || '').localeCompare(a.name || '', 'ko');
+                                case 'rate-desc': return (b.settlement_commission_rate ?? -1) - (a.settlement_commission_rate ?? -1);
+                                case 'rate-asc': return (a.settlement_commission_rate ?? 999) - (b.settlement_commission_rate ?? 999);
+                                case 'verified-first': return (b.business_number_verified ? 1 : 0) - (a.business_number_verified ? 1 : 0);
+                                case 'unregistered-first': return (a.business_number ? 1 : 0) - (b.business_number ? 1 : 0);
+                                case 'name-asc':
+                                default: return (a.name || '').localeCompare(b.name || '', 'ko');
+                            }
+                        });
+                        return list;
+                    }
+
+                    function renderCsRatesTable() {
+                        const area = document.getElementById('cs-rates-area');
+                        if (!area) return;
+                        if (csRatesAll.length === 0) {
+                            area.innerHTML = `<div class="state-box"><div class="emoji">🏢</div><h3>등록된 분양 조직이 없습니다</h3></div>`;
+                            return;
+                        }
+                        const communities = filterSortCsRates();
+                        if (communities.length === 0) {
+                            area.innerHTML = `<div class="state-box"><div class="emoji">🔍</div><h3>검색 결과가 없습니다</h3></div>`;
+                            return;
+                        }
+                        area.innerHTML = `
+                            <p style="color:var(--text-gray); font-size:0.82em; margin-bottom:8px;">전체 ${csRatesAll.length}개 중 ${communities.length}개 표시</p>
+                            <table>
+                                <thead><tr><th>조직명</th><th>사업자등록번호</th><th>검증 상태</th><th>수수료율</th><th>정산 세무처리</th><th></th></tr></thead>
+                                <tbody>
+                                    ${communities.map(c => `
+                                    <tr>
+                                        <td data-label="조직명">${WithPlus.escapeHtml(c.name)}</td>
+                                        <td data-label="사업자등록번호"><input type="text" class="cs-biz-input" data-id="${c.id}" value="${WithPlus.escapeHtml(c.business_number || '')}" placeholder="000-00-00000" style="width:130px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px;"></td>
+                                        <td data-label="검증 상태">${c.business_number
+                                            ? (c.business_number_verified ? `<span class="badge active">✅ 확인됨${c.business_number_status ? ' · ' + WithPlus.escapeHtml(c.business_number_status) : ''}</span>` : `<span class="badge inactive">⚠️ 미확인</span>`)
+                                            : `<span class="badge inactive">미등록</span>`}</td>
+                                        <td data-label="수수료율"><input type="number" class="cs-rate-input" data-id="${c.id}" value="${c.settlement_commission_rate != null ? c.settlement_commission_rate : ''}" placeholder="5" min="0" max="100" step="0.1" style="width:70px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px;">%</td>
+                                        <td data-label="정산 세무처리">${TAX_METHOD_SELECT_HTML('cs-tax-method-input', c.id, c.settlement_tax_method)}</td>
+                                        <td><button class="btn btn-secondary cs-save-btn" data-id="${c.id}" style="padding:6px 10px; font-size:0.82em;">저장</button></td>
+                                    </tr>`).join('')}
+                                </tbody>
+                            </table>
+                            <p style="color:var(--text-gray); font-size:0.8em; margin-top:8px;">사업자등록번호를 입력하고 저장하면 국세청 상태조회로 실시간 검증됩니다(폐업 상태면 저장이 거부됩니다). <strong>정산은 검증까지 완료된 조직만 대상이 됩니다.</strong> 수수료율을 비워두면 기본값 5%가 적용됩니다. 🧾 <strong>원천징수(3.3%)</strong>: 개인사업자 조직에 지급 시 자동 원천징수+영수증 발급. <strong>세금계산서 발행</strong>: 법인 조직은 전액 지급 후 별도로 세금계산서를 받습니다.</p>`;
+
+                        area.querySelectorAll('.cs-save-btn').forEach(btn => {
+                            btn.addEventListener('click', async () => {
+                                const id = btn.dataset.id;
+                                const bizInput = area.querySelector(`.cs-biz-input[data-id="${id}"]`);
+                                const rateInput = area.querySelector(`.cs-rate-input[data-id="${id}"]`);
+                                const taxSelect = area.querySelector(`.cs-tax-method-input[data-id="${id}"]`);
+                                const body = { business_number: bizInput.value.trim() || null, settlement_commission_rate: rateInput.value === '' ? null : Number(rateInput.value), settlement_tax_method: taxSelect.value };
+                                btn.disabled = true; btn.textContent = '저장 중...';
+                                const { ok, json } = await authedFetch(`/api/admin/communities/${id}`, { method: 'PUT', body: JSON.stringify(body) });
+                                btn.disabled = false; btn.textContent = '저장';
+                                if (!ok || !json.success) { alert(json.message || '저장 중 오류가 발생했습니다'); return; }
+                                if (json.warning) alert(json.warning);
+                                loadCsRates();
+                            });
+                        });
+                    }
+
                     async function loadCsRates() {
                         const area = document.getElementById('cs-rates-area');
                         try {
                             const { ok, json } = await authedFetch('/api/admin/communities');
                             if (!ok || !json.success) throw new Error(json.message || '조직 목록을 불러오지 못했습니다');
-                            const communities = json.data;
-                            if (communities.length === 0) {
-                                area.innerHTML = `<div class="state-box"><div class="emoji">🏢</div><h3>등록된 분양 조직이 없습니다</h3></div>`;
-                                return;
-                            }
-                            area.innerHTML = `
-                                <table>
-                                    <thead><tr><th>조직명</th><th>사업자등록번호</th><th>검증 상태</th><th>수수료율</th><th>정산 세무처리</th><th></th></tr></thead>
-                                    <tbody>
-                                        ${communities.map(c => `
-                                        <tr>
-                                            <td data-label="조직명">${WithPlus.escapeHtml(c.name)}</td>
-                                            <td data-label="사업자등록번호"><input type="text" class="cs-biz-input" data-id="${c.id}" value="${WithPlus.escapeHtml(c.business_number || '')}" placeholder="000-00-00000" style="width:130px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px;"></td>
-                                            <td data-label="검증 상태">${c.business_number
-                                                ? (c.business_number_verified ? `<span class="badge active">✅ 확인됨${c.business_number_status ? ' · ' + WithPlus.escapeHtml(c.business_number_status) : ''}</span>` : `<span class="badge inactive">⚠️ 미확인</span>`)
-                                                : `<span class="badge inactive">미등록</span>`}</td>
-                                            <td data-label="수수료율"><input type="number" class="cs-rate-input" data-id="${c.id}" value="${c.settlement_commission_rate != null ? c.settlement_commission_rate : ''}" placeholder="5" min="0" max="100" step="0.1" style="width:70px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px;">%</td>
-                                            <td data-label="정산 세무처리">${TAX_METHOD_SELECT_HTML('cs-tax-method-input', c.id, c.settlement_tax_method)}</td>
-                                            <td><button class="btn btn-secondary cs-save-btn" data-id="${c.id}" style="padding:6px 10px; font-size:0.82em;">저장</button></td>
-                                        </tr>`).join('')}
-                                    </tbody>
-                                </table>
-                                <p style="color:var(--text-gray); font-size:0.8em; margin-top:8px;">사업자등록번호를 입력하고 저장하면 국세청 상태조회로 실시간 검증됩니다(폐업 상태면 저장이 거부됩니다). <strong>정산은 검증까지 완료된 조직만 대상이 됩니다.</strong> 수수료율을 비워두면 기본값 5%가 적용됩니다. 🧾 <strong>원천징수(3.3%)</strong>: 개인사업자 조직에 지급 시 자동 원천징수+영수증 발급. <strong>세금계산서 발행</strong>: 법인 조직은 전액 지급 후 별도로 세금계산서를 받습니다.</p>`;
-
-                            area.querySelectorAll('.cs-save-btn').forEach(btn => {
-                                btn.addEventListener('click', async () => {
-                                    const id = btn.dataset.id;
-                                    const bizInput = area.querySelector(`.cs-biz-input[data-id="${id}"]`);
-                                    const rateInput = area.querySelector(`.cs-rate-input[data-id="${id}"]`);
-                                    const taxSelect = area.querySelector(`.cs-tax-method-input[data-id="${id}"]`);
-                                    const body = { business_number: bizInput.value.trim() || null, settlement_commission_rate: rateInput.value === '' ? null : Number(rateInput.value), settlement_tax_method: taxSelect.value };
-                                    btn.disabled = true; btn.textContent = '저장 중...';
-                                    const { ok, json } = await authedFetch(`/api/admin/communities/${id}`, { method: 'PUT', body: JSON.stringify(body) });
-                                    btn.disabled = false; btn.textContent = '저장';
-                                    if (!ok || !json.success) { alert(json.message || '저장 중 오류가 발생했습니다'); return; }
-                                    if (json.warning) alert(json.warning);
-                                    loadCsRates();
-                                });
-                            });
+                            csRatesAll = json.data;
+                            renderCsRatesTable();
                         } catch (err) {
                             area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>조직별 설정을 불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
                         }
@@ -2849,6 +2961,19 @@
                                 ${enabled ? `
                                 <div class="settings-card" style="max-width:900px; margin-bottom:20px;">
                                     <h3>🏢 조직별 사업자등록 · 수수료율</h3>
+                                    <div class="panel-toolbar" style="margin-bottom:10px;">
+                                        <div class="search-box" style="display:flex; gap:8px;">
+                                            <input type="text" id="cs-rates-search" placeholder="조직명/사업자등록번호 검색" style="padding:9px 12px; border:1px solid var(--border-color); border-radius:8px; font-size:0.88em; width:220px;">
+                                        </div>
+                                        <select id="cs-rates-sort" style="padding:9px 12px; border:1px solid var(--border-color); border-radius:8px; font-size:0.88em;">
+                                            <option value="name-asc">조직명(가나다순)</option>
+                                            <option value="name-desc">조직명(역순)</option>
+                                            <option value="rate-desc">수수료율 높은순</option>
+                                            <option value="rate-asc">수수료율 낮은순</option>
+                                            <option value="verified-first">검증 상태(확인됨 먼저)</option>
+                                            <option value="unregistered-first">사업자등록 미등록 먼저</option>
+                                        </select>
+                                    </div>
                                     <div id="cs-rates-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                                 </div>
                                 <div class="panel-toolbar">
@@ -2882,6 +3007,9 @@
 
                             await loadCsRates();
                             await loadCsTable();
+
+                            document.getElementById('cs-rates-search').addEventListener('input', renderCsRatesTable);
+                            document.getElementById('cs-rates-sort').addEventListener('change', renderCsRatesTable);
 
                             document.getElementById('cs-generate-btn').addEventListener('click', async () => {
                                 const start = document.getElementById('cs-gen-start').value;
@@ -3010,6 +3138,7 @@
                 // ===== 📢 마케팅자동화 (세그먼트 캠페인 + 등급유지/구매마일스톤 자동 쿠폰, admin 이상) =====
                 if (isAdmin) {
                     let mktGradesCache = [];
+                    let mktRulesCache = [];
 
                     async function loadMktGrades() {
                         try {
@@ -3169,11 +3298,17 @@
                                     </span>
                                     <span style="display:flex; gap:6px;">
                                         <button type="button" class="btn btn-secondary mkt-rule-run-btn" data-id="${r.id}" style="padding:6px 10px; font-size:0.82em;">지금 실행</button>
+                                        <button type="button" class="btn btn-secondary mkt-rule-edit-btn" data-id="${r.id}" style="padding:6px 10px; font-size:0.82em;">수정</button>
                                         <button type="button" class="btn btn-secondary mkt-rule-toggle-btn" data-id="${r.id}" data-enabled="${r.enabled}" style="padding:6px 10px; font-size:0.82em;">${r.enabled ? '비활성화' : '활성화'}</button>
                                         <button type="button" class="btn btn-secondary mkt-rule-delete-btn" data-id="${r.id}" style="padding:6px 10px; font-size:0.82em; color:#C62828;">삭제</button>
                                     </span>
                                 </div>`;
                             }).join('');
+                            mktRulesCache = rows;
+                            area.querySelectorAll('.mkt-rule-edit-btn').forEach(btn => btn.addEventListener('click', () => {
+                                const rule = mktRulesCache.find(x => x.id === btn.dataset.id);
+                                if (rule) openMktRuleEditModal(rule);
+                            }));
 
                             area.querySelectorAll('.mkt-rule-run-btn').forEach(btn => btn.addEventListener('click', async () => {
                                 btn.disabled = true; btn.textContent = '실행 중...';
@@ -3241,6 +3376,68 @@
                             loadMktRules();
                         } catch (err) {
                             alert(err.message);
+                        }
+                    });
+
+                    // ---- 자동 쿠폰 규칙 수정 모달 ----
+                    const mktRuleEditModal = document.getElementById('mkt-rule-edit-modal');
+                    function openMktRuleEditModal(rule) {
+                        document.getElementById('mref-msg').className = 'msg';
+                        document.getElementById('mref-id').value = rule.id;
+                        document.getElementById('mref-type-display').value = rule.rule_type === 'grade' ? '등급유지' : '구매마일스톤';
+                        const isGrade = rule.rule_type === 'grade';
+                        document.getElementById('mref-grade-field').style.display = isGrade ? '' : 'none';
+                        document.getElementById('mref-milestone-field').style.display = isGrade ? 'none' : '';
+                        const gradeSel = document.getElementById('mref-grade');
+                        gradeSel.innerHTML = mktGradesCache.map(g => `<option value="${WithPlus.escapeHtml(g.key)}">${WithPlus.escapeHtml(g.label)}</option>`).join('');
+                        if (isGrade) gradeSel.value = rule.rule_config?.grade_key || '';
+                        else document.getElementById('mref-milestone').value = rule.rule_config?.order_count || '';
+                        document.getElementById('mref-coupon-label').value = rule.coupon_template?.label || '';
+                        document.getElementById('mref-coupon-type').value = rule.coupon_template?.discount_type || 'percent';
+                        document.getElementById('mref-coupon-value').value = rule.coupon_template?.discount_value || '';
+                        document.getElementById('mref-min-order').value = rule.coupon_template?.min_order_amount || 0;
+                        document.getElementById('mref-valid-days').value = rule.coupon_template?.valid_days || 30;
+                        document.getElementById('mref-enabled').checked = rule.enabled !== false;
+                        mktRuleEditModal.classList.add('open');
+                    }
+                    document.getElementById('mref-cancel')?.addEventListener('click', () => mktRuleEditModal.classList.remove('open'));
+                    document.getElementById('mkt-rule-edit-form')?.addEventListener('submit', async (e) => {
+                        e.preventDefault();
+                        const msg = document.getElementById('mref-msg');
+                        msg.className = 'msg';
+                        const id = document.getElementById('mref-id').value;
+                        const isGrade = document.getElementById('mref-grade-field').style.display !== 'none';
+                        const coupon_template = {
+                            label: document.getElementById('mref-coupon-label').value.trim(),
+                            discount_type: document.getElementById('mref-coupon-type').value,
+                            discount_value: Number(document.getElementById('mref-coupon-value').value),
+                            min_order_amount: Number(document.getElementById('mref-min-order').value || 0),
+                            valid_days: Number(document.getElementById('mref-valid-days').value || 30)
+                        };
+                        if (!coupon_template.label || !(coupon_template.discount_value > 0)) {
+                            msg.textContent = '쿠폰 이름과 할인 값을 입력해주세요';
+                            msg.className = 'msg error';
+                            return;
+                        }
+                        const rule_config = isGrade
+                            ? { grade_key: document.getElementById('mref-grade').value }
+                            : { order_count: Number(document.getElementById('mref-milestone').value) };
+                        if (!isGrade && !(rule_config.order_count > 0)) {
+                            msg.textContent = '몇 번째 구매인지 입력해주세요';
+                            msg.className = 'msg error';
+                            return;
+                        }
+                        try {
+                            const { ok, json } = await authedFetch(`/api/admin/marketing/automation-rules/${id}`, {
+                                method: 'PUT',
+                                body: JSON.stringify({ rule_config, coupon_template, enabled: document.getElementById('mref-enabled').checked })
+                            });
+                            if (!ok || !json.success) throw new Error(json.message || '수정에 실패했습니다');
+                            mktRuleEditModal.classList.remove('open');
+                            loadMktRules();
+                        } catch (err) {
+                            msg.textContent = err.message;
+                            msg.className = 'msg error';
                         }
                     });
 
@@ -3436,7 +3633,9 @@
                                                 <td>${WithPlus.escapeHtml(w.address || '-')}</td>
                                                 <td>${w.is_active ? '<span class="badge active">사용중</span>' : '<span class="badge out-of-stock">비활성</span>'}</td>
                                                 <td>
+                                                    <button class="btn btn-secondary wh-edit-btn" data-code="${WithPlus.escapeHtml(w.code)}" style="padding:6px 10px; font-size:0.82em;">수정</button>
                                                     <button class="btn btn-secondary wh-toggle-btn" data-code="${w.code}" data-active="${w.is_active}" style="padding:6px 10px; font-size:0.82em;">${w.is_active ? '비활성화' : '활성화'}</button>
+                                                    <button class="btn btn-secondary wh-delete-btn" data-code="${WithPlus.escapeHtml(w.code)}" style="padding:6px 10px; font-size:0.82em;">삭제</button>
                                                 </td>
                                             </tr>
                                         `).join('')}
@@ -3452,10 +3651,59 @@
                                     loadWmsWarehouses();
                                 });
                             });
+                            area.querySelectorAll('.wh-edit-btn').forEach(btn => {
+                                btn.addEventListener('click', () => {
+                                    const wh = list.find(x => x.code === btn.dataset.code);
+                                    if (wh) openWarehouseEditModal(wh);
+                                });
+                            });
+                            area.querySelectorAll('.wh-delete-btn').forEach(btn => {
+                                btn.addEventListener('click', async () => {
+                                    if (!confirm(`창고 "${btn.dataset.code}"를 삭제하시겠습니까?`)) return;
+                                    const { ok, json } = await authedFetch(`/api/admin/inventory/warehouses/${encodeURIComponent(btn.dataset.code)}`, { method: 'DELETE' });
+                                    if (!ok) { alert(json.message || '삭제 실패 - 이 창고에 연결된 로케이션이 있으면 먼저 로케이션 연결을 해제해야 합니다'); return; }
+                                    loadWmsWarehouses();
+                                });
+                            });
                         } catch (err) {
                             area.innerHTML = `<p style="color:#C62828; font-size:0.85em;">${WithPlus.escapeHtml(err.message)}</p>`;
                         }
                     }
+
+                    // ---- 창고 수정 모달 ----
+                    const warehouseEditModal = document.getElementById('warehouse-edit-modal');
+                    function openWarehouseEditModal(wh) {
+                        document.getElementById('whef-msg').className = 'msg';
+                        document.getElementById('whef-code').value = wh.code;
+                        document.getElementById('whef-code-display').value = wh.code;
+                        document.getElementById('whef-name').value = wh.name || '';
+                        document.getElementById('whef-address').value = wh.address || '';
+                        document.getElementById('whef-is-active').checked = wh.is_active !== false;
+                        warehouseEditModal.classList.add('open');
+                    }
+                    document.getElementById('whef-cancel')?.addEventListener('click', () => warehouseEditModal.classList.remove('open'));
+                    document.getElementById('warehouse-edit-form')?.addEventListener('submit', async (e) => {
+                        e.preventDefault();
+                        const msg = document.getElementById('whef-msg');
+                        msg.className = 'msg';
+                        const code = document.getElementById('whef-code').value;
+                        try {
+                            const { ok, json } = await authedFetch(`/api/admin/inventory/warehouses/${encodeURIComponent(code)}`, {
+                                method: 'PUT',
+                                body: JSON.stringify({
+                                    name: document.getElementById('whef-name').value.trim(),
+                                    address: document.getElementById('whef-address').value.trim(),
+                                    is_active: document.getElementById('whef-is-active').checked
+                                })
+                            });
+                            if (!ok) throw new Error(json.message || '수정에 실패했습니다');
+                            warehouseEditModal.classList.remove('open');
+                            loadWmsWarehouses();
+                        } catch (err) {
+                            msg.textContent = err.message;
+                            msg.className = 'msg error';
+                        }
+                    });
                     document.getElementById('whf-code-generate-btn')?.addEventListener('click', async () => {
                         const btn = document.getElementById('whf-code-generate-btn');
                         btn.disabled = true;
@@ -3842,7 +4090,7 @@
                                 if (!sel) wmsSelectedLocationId = null;
                             }
                             const eqOnFloor = (equipment || []).filter(eq => eq.warehouse_locations_with && (eq.warehouse_locations_with.floor || 1) === wmsCurrentFloor && (eq.warehouse_locations_with.sub_level || 1) === wmsCurrentSubLevel);
-                            legend.innerHTML = `분홍/파랑/노랑/초록 칸: 선반(랙) 종류별 표시 · 회색 칸: 장애물(벽/기둥) · 🔵 파란점: AGV 로봇 · 🟠 주황점: PDA 단말기 (${wmsCurrentFloor}층 ${wmsCurrentSubLevel}단, 총 ${locations.length}개 로케이션, ${eqOnFloor.length}개 장비)${wmsEditMode ? ' · ✏️ 편집 모드: 랙을 드래그해 이동하거나 클릭해 속성을 수정하세요.' : ''}`;
+                            legend.innerHTML = `분홍/파랑/노랑/초록 칸: 선반(랙) 종류별 표시 · 회색 칸: 장애물(벽/기둥) · 🔵 파란점: AGV 로봇 · 🟠 주황점: PDA 단말기 (${wmsCurrentFloor}층 ${wmsCurrentSubLevel}단, 총 ${locations.length}개 로케이션, ${eqOnFloor.length}개 장비)${wmsEditMode ? ' · ✏️ 편집 모드: 랙을 드래그해 이동하거나 클릭해 속성을 수정하세요. (클릭으로 선택 후 ↑↓←→ 방향키로도 1칸씩 이동 가능)' : ''}`;
                         } catch (err) {
                             legend.innerHTML = `<span style="color:#C62828;">⚠️ ${WithPlus.escapeHtml(err.message)}</span>`;
                         }
@@ -3948,6 +4196,37 @@
                         });
                         canvas.addEventListener('mouseleave', () => { dragInfo = null; });
                     })();
+
+                    // ---- 방향키로 랙 이동: 편집모드에서 랙을 클릭해 선택한 뒤 ↑↓←→ 키로 1칸씩 이동 ----
+                    let wmsArrowMoveBusy = false;
+                    document.addEventListener('keydown', async (e) => {
+                        if (!wmsEditMode || !wmsSelectedLocationId) return;
+                        if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+                        const activeTag = document.activeElement && document.activeElement.tagName;
+                        if (activeTag === 'INPUT' || activeTag === 'TEXTAREA' || activeTag === 'SELECT') return; // 속성 패널 입력 중에는 방향키 본연의 동작(값 조절 등)을 막지 않는다
+                        if (!wmsTwinRenderState) return;
+                        const loc = (wmsTwinRenderState.locations || []).find(l => l.id === wmsSelectedLocationId);
+                        if (!loc) return;
+                        e.preventDefault();
+                        if (wmsArrowMoveBusy) return;
+                        wmsArrowMoveBusy = true;
+                        try {
+                            let dx = 0, dy = 0;
+                            if (e.key === 'ArrowUp') dy = -1;
+                            else if (e.key === 'ArrowDown') dy = 1;
+                            else if (e.key === 'ArrowLeft') dx = -1;
+                            else if (e.key === 'ArrowRight') dx = 1;
+                            const newGridX = Math.max(0, Number(loc.grid_x) + dx);
+                            const newGridY = Math.max(0, Number(loc.grid_y) + dy);
+                            const { ok, json } = await authedFetch(`/api/admin/inventory/locations/${wmsSelectedLocationId}`, {
+                                method: 'PUT', body: JSON.stringify({ grid_x: newGridX, grid_y: newGridY })
+                            });
+                            if (!ok) { alert(json.message || '이동 실패'); return; }
+                            await loadWmsTwin();
+                        } finally {
+                            wmsArrowMoveBusy = false;
+                        }
+                    });
 
                     // ---- 5) AGV 시뮬레이션 대시보드 (admin 전용) ----
                     async function loadWmsEquipment() {
@@ -5136,6 +5415,71 @@
                     }
                 });
 
+                // ===== 판매자 입점신청 심사 (관리자 전용) =====
+                const SAPP_STATUS_LABEL = { pending: '⏳ 심사 대기중', approved: '✅ 승인됨', rejected: '❌ 반려됨' };
+                async function loadSellerApplications() {
+                    const area = document.getElementById('seller-applications-table-area');
+                    area.innerHTML = `<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>`;
+                    try {
+                        const status = document.getElementById('sapp-status-filter').value;
+                        const { ok, json } = await authedFetch(`/api/admin/supplier-applications${status ? '?status=' + status : ''}`);
+                        if (!ok || !json.success) throw new Error(json.message || '입점 신청 목록을 불러오지 못했습니다');
+                        const rows = json.data;
+                        if (rows.length === 0) {
+                            area.innerHTML = `<div class="state-box"><div class="emoji">🆕</div><h3>해당 조건의 입점 신청이 없습니다</h3></div>`;
+                            return;
+                        }
+                        area.innerHTML = `
+                            <table>
+                                <thead><tr><th>상호명</th><th>신청자</th><th>사업자번호</th><th>연락처</th><th>희망 카테고리</th><th>상태</th><th>신청일</th><th></th></tr></thead>
+                                <tbody>
+                                    ${rows.map(a => `
+                                    <tr data-id="${a.id}">
+                                        <td data-label="상호명">${WithPlus.escapeHtml(a.company_name)}</td>
+                                        <td data-label="신청자">${WithPlus.escapeHtml(a.profiles?.email || '-')}</td>
+                                        <td data-label="사업자번호">${a.business_number ? `${WithPlus.escapeHtml(a.business_number)} ${a.business_number_verified ? '✅' : '⚠️'}` : '-'}</td>
+                                        <td data-label="연락처">${WithPlus.escapeHtml(a.contact_person || '-')} ${WithPlus.escapeHtml(a.phone || '')}</td>
+                                        <td data-label="희망 카테고리">${WithPlus.escapeHtml(a.category || '-')}</td>
+                                        <td data-label="상태">${SAPP_STATUS_LABEL[a.status] || a.status}</td>
+                                        <td data-label="신청일">${WithPlus.timeAgo(a.created_at)}</td>
+                                        <td>${a.status === 'pending' ? `
+                                            <button type="button" class="btn btn-primary sapp-approve-btn" style="padding:6px 12px; font-size:0.82em;">승인</button>
+                                            <button type="button" class="btn btn-secondary sapp-reject-btn" style="padding:6px 12px; font-size:0.82em; color:#C62828;">반려</button>
+                                        ` : (a.rejection_reason ? `<span style="font-size:0.8em; color:var(--text-gray);">사유: ${WithPlus.escapeHtml(a.rejection_reason)}</span>` : '-')}</td>
+                                    </tr>`).join('')}
+                                </tbody>
+                            </table>`;
+
+                        area.querySelectorAll('.sapp-approve-btn').forEach(btn => {
+                            btn.addEventListener('click', async () => {
+                                const id = btn.closest('tr').dataset.id;
+                                if (!confirm('이 신청을 승인하시겠습니까? 신청자 계정이 즉시 판매자(provider) 권한으로 바뀝니다.')) return;
+                                btn.disabled = true;
+                                const { ok, json } = await authedFetch(`/api/admin/supplier-applications/${id}/approve`, { method: 'PUT' });
+                                if (!ok) { alert(json.message || '승인 처리에 실패했습니다'); btn.disabled = false; return; }
+                                loadSellerApplications();
+                            });
+                        });
+                        area.querySelectorAll('.sapp-reject-btn').forEach(btn => {
+                            btn.addEventListener('click', async () => {
+                                const id = btn.closest('tr').dataset.id;
+                                const reason = prompt('반려 사유를 입력해주세요 (신청자에게 알림으로 전달됩니다)');
+                                if (reason === null) return;
+                                btn.disabled = true;
+                                const { ok, json } = await authedFetch(`/api/admin/supplier-applications/${id}/reject`, { method: 'PUT', body: JSON.stringify({ reason }) });
+                                if (!ok) { alert(json.message || '반려 처리에 실패했습니다'); btn.disabled = false; return; }
+                                loadSellerApplications();
+                            });
+                        });
+                    } catch (err) {
+                        area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>목록을 불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                    }
+                }
+                document.getElementById('sapp-status-filter')?.addEventListener('change', loadSellerApplications);
+                document.querySelector('[data-tab="seller-applications"]').addEventListener('click', () => {
+                    loadSellerApplications();
+                });
+
                 // ===== 분양 조직(커뮤니티) 관리 (관리자 전용) =====
                 // "분양"은 이 쇼핑몰을 다른 조직(교회 등)에 화이트라벨로 제공하는 것을 의미하며,
                 // 여기서 만든 조직은 communities 테이블의 한 행으로 저장되고 /c/슬러그 랜딩페이지가 자동으로 생성된다.
@@ -5804,8 +6148,8 @@
                                             <input type="number" id="sc-reward" min="1" value="1000" required>
                                         </div>
                                         <div class="field" style="flex:1; margin-bottom:0;">
-                                            <label>발급 개수 (최대 1000)</label>
-                                            <input type="number" id="sc-count" min="1" max="1000" value="10" required>
+                                            <label>발급 개수 (최대 5,000만 개 · 대량 발급은 백그라운드에서 처리됩니다)</label>
+                                            <input type="number" id="sc-count" min="1" max="50000000" value="10" required>
                                         </div>
                                     </div>
                                     <div class="field">
@@ -5815,6 +6159,7 @@
                                     <div class="settings-msg" id="sc-generate-msg"></div>
                                     <button type="submit" class="settings-save-btn" id="sc-generate-btn">시리얼 코드 생성</button>
                                 </form>
+                                <div id="sc-job-progress-area" style="margin-top:14px;"></div>
                                 <div id="serial-batches-area" style="margin-top:22px;"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                             </div>
                             <div class="settings-card" style="margin-top:20px; max-width:640px;">
@@ -5843,6 +6188,40 @@
                                 </form>
                             </div>`;
 
+                        // 발급 개수가 많으면 서버에서 백그라운드로 처리되므로(202 응답), 여기서는 작업을 시작시켜놓고
+                        // job_id로 진행 상황을 주기적으로 조회(폴링)해서 진행률을 보여준다. 페이지를 벗어나지 않아도
+                        // 완료/실패가 자동으로 반영되고, 완료되면 배치 목록도 새로고침한다.
+                        let scJobPollTimer = null;
+                        function renderScJobProgress(job) {
+                            const area = document.getElementById('sc-job-progress-area');
+                            if (!job) { area.innerHTML = ''; return; }
+                            const pct = job.requested_count > 0 ? Math.min(100, Math.round((job.generated_count / job.requested_count) * 100)) : 0;
+                            if (job.status === 'completed') {
+                                area.innerHTML = `<div class="settings-msg success">✅ "${WithPlus.escapeHtml(job.batch_name)}" ${job.generated_count.toLocaleString('ko-KR')}개 생성 완료</div>`;
+                            } else if (job.status === 'failed') {
+                                area.innerHTML = `<div class="settings-msg error">❌ 생성 실패: ${WithPlus.escapeHtml(job.error_message || '알 수 없는 오류')} (${job.generated_count.toLocaleString('ko-KR')}/${job.requested_count.toLocaleString('ko-KR')}개까지 생성됨)</div>`;
+                            } else {
+                                area.innerHTML = `
+                                    <div style="font-size:0.85em; color:var(--text-gray); margin-bottom:6px;">⏳ "${WithPlus.escapeHtml(job.batch_name)}" 생성 중... ${job.generated_count.toLocaleString('ko-KR')} / ${job.requested_count.toLocaleString('ko-KR')}개 (${pct}%)</div>
+                                    <div style="background:#F0F0F0; border-radius:6px; height:8px; overflow:hidden;"><div style="background:var(--primary-color); height:100%; width:${pct}%; transition:width 0.3s;"></div></div>`;
+                            }
+                        }
+                        async function pollScJob(jobId) {
+                            if (scJobPollTimer) clearInterval(scJobPollTimer);
+                            scJobPollTimer = setInterval(async () => {
+                                try {
+                                    const { ok, json } = await authedFetch(`/api/admin/serial-coupons/jobs/${jobId}`);
+                                    if (!ok || !json.success) return;
+                                    renderScJobProgress(json.data);
+                                    if (json.data.status === 'completed' || json.data.status === 'failed') {
+                                        clearInterval(scJobPollTimer);
+                                        scJobPollTimer = null;
+                                        loadSerialBatches();
+                                    }
+                                } catch (e) { /* 일시적 폴링 실패는 다음 주기에 다시 시도 */ }
+                            }, 1500);
+                        }
+
                         document.getElementById('serial-generate-form').addEventListener('submit', async (e) => {
                             e.preventDefault();
                             const msg = document.getElementById('sc-generate-msg');
@@ -5858,13 +6237,14 @@
                             btn.textContent = '생성 중...';
                             try {
                                 const { ok, json } = await authedFetch('/api/admin/serial-coupons/generate', { method: 'POST', body: JSON.stringify(payload) });
-                                if (!ok) throw new Error(json.message || '생성에 실패했습니다');
+                                if (!ok) throw new Error(json.message || '생성 작업 시작에 실패했습니다');
                                 msg.textContent = json.message;
                                 msg.className = 'settings-msg success';
                                 document.getElementById('serial-generate-form').reset();
                                 document.getElementById('sc-reward').value = '1000';
                                 document.getElementById('sc-count').value = '10';
-                                loadSerialBatches();
+                                renderScJobProgress(json.data);
+                                pollScJob(json.data.id);
                             } catch (err) {
                                 msg.textContent = err.message;
                                 msg.className = 'settings-msg error';
@@ -5873,6 +6253,16 @@
                                 btn.textContent = '시리얼 코드 생성';
                             }
                         });
+
+                        // 페이지를 새로고침해도 아직 처리 중인 작업이 있으면 이어서 보여준다
+                        (async () => {
+                            try {
+                                const { ok, json } = await authedFetch('/api/admin/serial-coupons/jobs');
+                                if (!ok || !json.success) return;
+                                const inProgress = (json.data || []).find(j => j.status === 'pending' || j.status === 'processing');
+                                if (inProgress) { renderScJobProgress(inProgress); pollScJob(inProgress.id); }
+                            } catch (e) { /* 무시 - 폴링 없이도 결과 목록은 loadSerialBatches로 확인 가능 */ }
+                        })();
 
                         async function loadSerialBatches() {
                             const batchesArea = document.getElementById('serial-batches-area');
@@ -6593,6 +6983,16 @@
                                 <div class="settings-msg" id="cart-reminder-msg" style="margin-top:12px;"></div>
                             </div>
                             <div class="settings-card" style="margin-top:20px; max-width:640px;">
+                                <h3>🔁 재구매 알림</h3>
+                                <p class="desc">
+                                    같은 상품을 2번 이상 구매한 회원의 평균 구매 간격을 계산해, 예상 재구매일이 3일 이내로 다가오면
+                                    이메일(SMTP 설정 시)과 인앱 알림으로 "다시 필요하지 않으신가요?" 안내를 보냅니다. 소모품(화장품/건강식품 등)
+                                    재구매 유도에 효과적입니다. 매일 새벽 4시 자동 실행되며, 같은 상품은 14일 안에는 다시 알리지 않습니다.
+                                </p>
+                                <button type="button" class="btn btn-secondary" id="repurchase-reminder-run-now-btn">지금 실행</button>
+                                <div class="settings-msg" id="repurchase-reminder-msg" style="margin-top:12px;"></div>
+                            </div>
+                            <div class="settings-card" style="margin-top:20px; max-width:640px;">
                                 <h3>🎁 추천인(리퍼럴) 프로그램</h3>
                                 <p class="desc">
                                     회원마다 고유 추천코드를 발급하고, 그 코드로 가입한 신규 회원이 첫 주문을 완료하면
@@ -7064,6 +7464,24 @@
                                 if (!ok) throw new Error(json.message || '실행 실패');
                                 const r = json.data;
                                 msg.textContent = `실행 완료 - 대상 ${r.scanned}건 중 발송 ${r.sent}건, 스킵 ${r.skipped}건, 정리(품절/삭제상품만 남음) ${r.cleaned}건`;
+                                msg.className = 'settings-msg success';
+                            } catch (err) {
+                                msg.textContent = err.message;
+                                msg.className = 'settings-msg error';
+                            } finally {
+                                btn.disabled = false; btn.textContent = '지금 실행';
+                            }
+                        });
+                        document.getElementById('repurchase-reminder-run-now-btn').addEventListener('click', async () => {
+                            const btn = document.getElementById('repurchase-reminder-run-now-btn');
+                            const msg = document.getElementById('repurchase-reminder-msg');
+                            msg.className = 'settings-msg';
+                            btn.disabled = true; btn.textContent = '실행 중...';
+                            try {
+                                const { ok, json } = await authedFetch('/api/admin/repurchase-reminder/run-now', { method: 'POST' });
+                                if (!ok) throw new Error(json.message || '실행 실패');
+                                const r = json.data;
+                                msg.textContent = `실행 완료 - 대상 회원 ${r.usersScanned}명, 재구매 후보 ${r.candidatesFound}건 중 발송 ${r.sent}건, 쿨다운으로 스킵 ${r.skippedCooldown}건, 이메일 없음 ${r.skippedNoEmail}건`;
                                 msg.className = 'settings-msg success';
                             } catch (err) {
                                 msg.textContent = err.message;
