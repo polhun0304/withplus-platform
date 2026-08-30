@@ -326,7 +326,7 @@
                 ${(community.intro_text || community.image_url) ? `
                 <section class="classic-intro-section">
                     <h2>${WithPlus.escapeHtml(community.name)} 소개</h2>
-                    ${community.image_url ? `<div class="intro-image" style="background-image:url('${community.image_url}');"></div>` : ''}
+                    ${community.image_url ? `<div class="intro-image" style="background-image:url('${WithPlus.safeUrlAttr(community.image_url)}');"></div>` : ''}
                     ${community.intro_text ? `<p>${WithPlus.escapeHtml(community.intro_text)}</p>` : ''}
                     ${community.website_url ? `<a href="${WithPlus.escapeHtml(community.website_url)}" target="_blank" rel="noopener" class="site-link">${WithPlus.escapeHtml(community.name)} 홈페이지 바로가기 →</a>` : ''}
                 </section>` : ''}
@@ -427,7 +427,7 @@
                 ${(community.intro_text || community.image_url) ? `
                 <section class="modern-intro">
                     <h2>${WithPlus.escapeHtml(community.name)} 소개</h2>
-                    ${community.image_url ? `<div class="m-intro-image" style="background-image:url('${community.image_url}');"></div>` : ''}
+                    ${community.image_url ? `<div class="m-intro-image" style="background-image:url('${WithPlus.safeUrlAttr(community.image_url)}');"></div>` : ''}
                     ${community.intro_text ? `<p>${WithPlus.escapeHtml(community.intro_text)}</p>` : ''}
                     ${community.website_url ? `<a href="${WithPlus.escapeHtml(community.website_url)}" target="_blank" rel="noopener" class="m-site-link" style="color:${primaryColor}; border-color:${primaryColor};">${WithPlus.escapeHtml(community.name)} 홈페이지 바로가기 →</a>` : ''}
                 </section>` : ''}
@@ -507,7 +507,7 @@
 
                 ${(community.intro_text || community.image_url) ? `
                 <section class="warm-story">
-                    ${community.image_url ? `<div class="w-story-img" style="background-image:url('${community.image_url}');"></div>` : ''}
+                    ${community.image_url ? `<div class="w-story-img" style="background-image:url('${WithPlus.safeUrlAttr(community.image_url)}');"></div>` : ''}
                     <h2>${WithPlus.escapeHtml(community.name)} 이야기</h2>
                     ${community.intro_text ? `<p>${WithPlus.escapeHtml(community.intro_text)}</p>` : ''}
                     ${community.website_url ? `<a href="${WithPlus.escapeHtml(community.website_url)}" target="_blank" rel="noopener" class="w-site-link" style="background:${primaryColor};">${WithPlus.escapeHtml(community.name)} 홈페이지 바로가기 →</a>` : ''}

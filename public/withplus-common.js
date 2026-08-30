@@ -238,6 +238,20 @@
     return div.innerHTML;
   }
 
+  // 이미지 URL을 style="background-image:url('...')" 같은 홑따옴표 인라인 속성 안에 안전하게 넣기 위한 헬퍼.
+  // escapeHtml은 텍스트 노드 직렬화 기준이라 홑따옴표(')를 이스케이프하지 않으므로(HTML 텍스트 콘텐츠에서는
+  // 따옴표가 특별한 의미가 없음) 그대로 쓰면 url('${...}') 같은 속성에서 홑따옴표로 속성을 깨고 나가는
+  // 저장형 XSS가 가능하다. encodeURI로 URL을 인코딩하되(URL 구조는 보존하면서 위험 문자는 인코딩),
+  // encodeURI만으로는 인코딩되지 않는 홑따옴표를 추가로 %27로 치환해 속성 탈출을 막는다.
+  function safeUrlAttr(url) {
+    const str = String(url == null ? '' : url);
+    try {
+      return encodeURI(str).replace(/'/g, '%27');
+    } catch (e) {
+      return '';
+    }
+  }
+
   function timeAgo(dateStr) {
     const diffMs = Date.now() - new Date(dateStr).getTime();
     const min = Math.floor(diffMs / 60000);
@@ -436,7 +450,7 @@
 
     return `
     <div class="product-card" data-product-id="${product.id}" style="cursor:pointer;">
-        <div class="product-image" ${imageUrl ? `style="background-image:url('${imageUrl}');background-size:cover;background-position:center;"` : ''}>
+        <div class="product-image" ${imageUrl ? `style="background-image:url('${safeUrlAttr(imageUrl)}');background-size:cover;background-position:center;"` : ''}>
             <div class="mileage-badge">
                 <span class="individual">💰 ${formatPercent(rates.personalPercent)}%</span>
                 <span class="bonus">+커뮤니티 ${formatPercent(rates.communityPercent)}%</span>
@@ -771,6 +785,7 @@
     formatPercent,
     renderProductCard,
     escapeHtml,
+    safeUrlAttr,
     timeAgo,
     attachProductCardInteractions,
     syncWishlistHearts,

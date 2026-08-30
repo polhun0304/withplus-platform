@@ -28,6 +28,17 @@ const supabasePublic = createClient(supabaseUrl, supabaseAnonKey);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// 🔒 JWT_SECRET 미설정 시 안전장치: 예전에는 고정 문자열('withplus-fallback-secret')로 fail-open 됐는데,
+// 이 문자열은 소스코드에 그대로 공개되어 있어 JWT_SECRET을 깜빡하고 설정하지 않으면 누구나 같은 값으로
+// 서명을 위조할 수 있는 상태가 된다. 대신 프로세스 시작 시 1회 랜덤 시크릿을 생성해두고, 환경변수가
+// 없을 때만 이 런타임 전용 값을 폴백으로 쓰도록 바꿔 "공개된 고정 문자열"이 되는 것만은 막는다
+// (재시작마다 값이 바뀌므로 재시작 전에 발급된 서명은 재시작 후 무효화된다 - 그래도 값을 아무도 예측할 수
+// 없는 것이 하드코딩된 고정값보다 훨씬 안전하다). 운영 환경에서는 반드시 JWT_SECRET을 설정해야 한다.
+if (!process.env.JWT_SECRET) {
+  console.error('[SECURITY WARNING] JWT_SECRET 환경변수가 설정되지 않았습니다. 프로세스 시작 시 생성한 런타임 전용 임시 시크릿을 대신 사용합니다. 재시작 시 이전에 발급된 서명은 모두 무효화됩니다. 반드시 .env에 JWT_SECRET을 설정해주세요.');
+}
+const RUNTIME_FALLBACK_SECRET = crypto.randomBytes(32).toString('hex');
+
 // ============================================
 // 미들웨어
 // ============================================
@@ -1023,12 +1034,15 @@ function resolveMemberGrade(totalSpent, grades) {
   return { current, next };
 }
 
+// 회원등급 누적구매액 산정 기준: 결제가 완료된 주문만 포함한다 (pending/cancelled/refunded 제외).
+// 기존에는 cancelled/refunded만 제외했는데, 그러면 아직 결제도 되지 않은 pending 주문까지 실적에
+// 잡혀서 결제 없이도 등급이 올라가는 문제가 있었다. paid 이후 상태만 화이트리스트로 명시한다.
 async function getUserCumulativeSpent(userId) {
   const { data, error } = await supabase
     .from('orders_with')
     .select('final_price, status')
     .eq('user_id', userId)
-    .not('status', 'in', '(cancelled,refunded)');
+    .in('status', ['paid', 'processing', 'shipped', 'delivered']);
   if (error || !data) return 0;
   return data.reduce((sum, o) => sum + Number(o.final_price || 0), 0);
 }
@@ -2800,7 +2814,7 @@ function signNaverState() {
   const nonce = crypto.randomBytes(16).toString('hex');
   const ts = Date.now().toString();
   const payload = `${nonce}.${ts}`;
-  const sig = crypto.createHmac('sha256', process.env.JWT_SECRET || 'withplus-fallback-secret').update(payload).digest('hex');
+  const sig = crypto.createHmac('sha256', process.env.JWT_SECRET || RUNTIME_FALLBACK_SECRET).update(payload).digest('hex');
   return `${payload}.${sig}`;
 }
 function verifyNaverState(state) {
@@ -2809,7 +2823,7 @@ function verifyNaverState(state) {
   if (parts.length !== 3) return false;
   const [nonce, ts, sig] = parts;
   const payload = `${nonce}.${ts}`;
-  const expected = crypto.createHmac('sha256', process.env.JWT_SECRET || 'withplus-fallback-secret').update(payload).digest('hex');
+  const expected = crypto.createHmac('sha256', process.env.JWT_SECRET || RUNTIME_FALLBACK_SECRET).update(payload).digest('hex');
   if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return false;
   const age = Date.now() - Number(ts);
   if (!Number.isFinite(age) || age < 0 || age > 10 * 60 * 1000) return false; // 10분 초과 시 만료
@@ -4367,6 +4381,13 @@ function computeVatSplit(price, suppliedSupplyAmount, suppliedVatAmount) {
   return { supply_amount: supply, vat_amount: p - supply };
 }
 
+// 상품 이미지 URL 검증 — http(s)로 시작하는 문자열만 허용 (저장형 XSS 방지: javascript:, data: 등 차단)
+function isValidImageUrlList(urls) {
+  if (urls === undefined || urls === null) return true;
+  if (!Array.isArray(urls)) return false;
+  return urls.every(u => typeof u === 'string' && /^https?:\/\//i.test(u));
+}
+
 // 상품 바코드/상품코드 자동채번 — 'P' + 6자리 순번(이카운트 등 외부 코드 접두사 A/B/C와 겹치지 않게 구분). 항상 미사용 값만 반환한다.
 app.get('/api/admin/products/suggest-barcode', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
@@ -4416,7 +4437,7 @@ app.get('/api/admin/products/check-barcode', authenticate, requireRole(['provide
   }
 });
 
-app.post('/api/products', authenticate, async (req, res) => {
+app.post('/api/products', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
     const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, vendor_id, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount } = req.body;
 
@@ -4424,6 +4445,14 @@ app.post('/api/products', authenticate, async (req, res) => {
       return res.status(400).json({
         error: 'Bad Request',
         message: 'Required fields: name, price, category',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    if (!isValidImageUrlList(images_urls)) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'images_urls는 http(s):// 로 시작하는 문자열 배열이어야 합니다',
         timestamp: new Date().toISOString()
       });
     }
@@ -4510,6 +4539,14 @@ app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'su
 
     if (!isAdminRole(req.userRole) && existing.supplier_id !== req.user.id) {
       return res.status(403).json({ error: 'Forbidden', message: '본인 상품만 수정할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+
+    if (!isValidImageUrlList(images_urls)) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: 'images_urls는 http(s):// 로 시작하는 문자열 배열이어야 합니다',
+        timestamp: new Date().toISOString()
+      });
     }
 
     const updates = {};
@@ -6727,6 +6764,9 @@ app.post('/api/orders', authenticate, async (req, res) => {
       }
       const variants = variantsByProduct[item.product_id] || [];
       const qty = Number(item.quantity) || 1;
+      if (!Number.isInteger(qty) || qty < 1) {
+        return res.status(400).json({ error: 'Bad Request', message: `수량이 올바르지 않습니다: ${product.name}`, timestamp: new Date().toISOString() });
+      }
       let unitPrice = Number(product.price) || 0;
       let variantLabel = '';
 
@@ -6810,6 +6850,19 @@ app.post('/api/orders', authenticate, async (req, res) => {
     const personalEarnedPoints = Math.floor(productPaymentAmount * personalRateWithGrade);
     const communityEarnedPoints = community_id ? Math.floor(productPaymentAmount * mileageRates.community) : 0;
 
+    // 🔒 마일리지 동시사용 레이스 컨디션 완화: 주문 INSERT 직전에 잔액을 한 번 더 재확인한다.
+    // 완전한 해결은 아니다(이 재확인과 실제 INSERT 사이에도 여전히 이론적으로 경합 창이 남는다) - 근본적으로는
+    // DB 레벨 advisory lock(pg_advisory_xact_lock)이나 마일리지 원장 테이블의 조건부 UPDATE(예: "사용액 합계가
+    // 적립액을 초과하면 실패") 방식으로 전환해야 완전히 막을 수 있다. 이 프로젝트에는 현재 advisory lock RPC나
+    // 그런 원장 테이블(mileage_ledger 등)이 없어 이번에는 애플리케이션 레벨에서 재확인만 추가해 경합 창을 최대한 좁혔다.
+    // TODO: 완전한 동시성 방어를 위해서는 DB 레벨 advisory lock 또는 마일리지 원장 테이블의 조건부 UPDATE 방식으로 전환 필요
+    if (usedMileage > 0) {
+      const recheckedBalance = await getUserMileageBalance(req.user.id);
+      if (usedMileage > recheckedBalance) {
+        return res.status(400).json({ error: 'Bad Request', message: `보유 마일리지(${recheckedBalance.toLocaleString('ko-KR')}원)보다 많이 사용할 수 없습니다`, timestamp: new Date().toISOString() });
+      }
+    }
+
     // 주문번호 생성
     const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -6887,14 +6940,43 @@ app.post('/api/orders', authenticate, async (req, res) => {
     }
 
     // 쿠폰 사용 기록 (주문 생성이 성공한 뒤에만 사용 처리 - 실패 시 쿠폰이 소모되지 않도록)
+    // 🔒 used_count 증가를 원자적(check-then-act가 아닌 조건부 update)으로 처리한다: 읽어온 시점의
+    // used_count 값과 여전히 같을 때만(CAS), 그리고 usage_limit이 있으면 그 한도 안일 때만 실제로 갱신되도록
+    // 필터를 걸고, .select()로 실제 업데이트된 row가 있는지 확인한다. 동시에 여러 주문이 마지막 남은 한 장을
+    // 두고 경합하면, 먼저 도착한 요청만 성공하고 나머지는 0건 매칭되어 아래에서 주문을 원복(재고 복구 + 주문 삭제)한다.
     if (appliedCoupon) {
+      let couponUpdateQuery = supabase
+        .from('coupons')
+        .update({ used_count: appliedCoupon.used_count + 1 })
+        .eq('id', appliedCoupon.id)
+        .eq('used_count', appliedCoupon.used_count);
+      if (appliedCoupon.usage_limit !== null && appliedCoupon.usage_limit !== undefined) {
+        couponUpdateQuery = couponUpdateQuery.lt('used_count', appliedCoupon.usage_limit);
+      }
+      const { data: couponUpdated, error: couponUpdateErr } = await couponUpdateQuery.select().maybeSingle();
+      if (couponUpdateErr) throw couponUpdateErr;
+      if (!couponUpdated) {
+        // 레이스에서 짐(다른 요청이 먼저 쿠폰을 소진시킴) - 이미 차감한 재고를 원복하고 생성했던 주문을 삭제한다
+        for (const d of decrementedItems) {
+          try {
+            await supabase.rpc('adjust_stock_with', {
+              p_product_id: d.product_id, p_variant_id: d.variant_id, p_delta: d.qty, p_reason: '쿠폰 소진으로 인한 주문 실패 - 자동 원복', p_order_id: data.id, p_created_by: req.user.id
+            });
+          } catch (compensateErr) { /* 재고 원복은 최선을 다해 시도하되, 실패해도 요청 처리를 막지 않는다 */ }
+        }
+        await supabase.from('orders_with').delete().eq('id', data.id);
+        return res.status(409).json({
+          error: 'Conflict',
+          message: '쿠폰 사용 한도가 방금 소진되었습니다. 다시 시도해주세요.',
+          timestamp: new Date().toISOString()
+        });
+      }
       await supabase.from('coupon_redemptions').insert([{
         coupon_id: appliedCoupon.id,
         user_id: req.user.id,
         order_id: data.id,
         discount_amount: discountAmount
       }]);
-      await supabase.from('coupons').update({ used_count: appliedCoupon.used_count + 1 }).eq('id', appliedCoupon.id);
     }
 
     // 주문 접수 이메일 발송 - SMTP 미설정이면 조용히 생략(정직하게 email_logs_with에 기록)되고,
@@ -6930,6 +7012,73 @@ app.post('/api/orders', authenticate, async (req, res) => {
       timestamp: new Date().toISOString()
     });
   }
+});
+
+// 결제 없이 24시간 넘게 pending으로 남아있는 주문 자동 취소 - 재고를 이미 차감해둔 주문이므로
+// (POST /api/orders 에서 생성 직후 adjust_stock_with로 재고를 미리 차감함) 취소 처리 시 반드시
+// 차감했던 재고를 함께 복구해야 재고 불일치가 남지 않는다. 옵션 상품이면 products_with.stock도
+// syncProductStockFromVariants로 다시 맞춰준다 (주문 생성 로직과 동일한 패턴).
+async function cancelStalePendingOrders() {
+  const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data: staleOrders, error } = await supabase
+    .from('orders_with')
+    .select('id, order_number, items, user_id, created_at')
+    .eq('status', 'pending')
+    .lt('created_at', cutoff);
+  if (error) {
+    console.error('Error fetching stale pending orders:', error);
+    return { cancelled: 0 };
+  }
+
+  let cancelledCount = 0;
+  for (const order of staleOrders || []) {
+    try {
+      const items = Array.isArray(order.items) ? order.items : [];
+      const affectedProductIds = new Set();
+      for (const item of items) {
+        if (!item.product_id) continue;
+        const qty = Number(item.quantity) || 1;
+        try {
+          await supabase.rpc('adjust_stock_with', {
+            p_product_id: item.product_id,
+            p_variant_id: item.variant_id || null,
+            p_delta: qty,
+            p_reason: `24시간 미결제 주문 자동 취소에 따른 재고 복구 (주문번호 ${order.order_number})`,
+            p_order_id: order.id,
+            p_created_by: null,
+            p_scan_source: 'auto_cancel_pending'
+          });
+          if (item.variant_id) affectedProductIds.add(item.product_id);
+        } catch (stockErr) {
+          console.error(`Error restoring stock for stale order ${order.order_number}:`, stockErr);
+        }
+      }
+      for (const pid of affectedProductIds) {
+        await syncProductStockFromVariants(pid).catch(() => {});
+      }
+
+      // 참고: orders_with 테이블에는 취소 시각을 별도로 남기는 컬럼(cancelled_at)이 없어 status만 갱신한다
+      // (다른 취소 관련 코드에서 보이는 cancelled_at은 orders_with가 아닌 channel_sales_with 등 다른 테이블의 컬럼).
+      const { error: updateErr } = await supabase
+        .from('orders_with')
+        .update({ status: 'cancelled' })
+        .eq('id', order.id)
+        .eq('status', 'pending'); // 그 사이 결제가 완료됐을 수 있으므로 여전히 pending일 때만 취소 (레이스 컨디션 방지)
+      if (updateErr) {
+        console.error(`Error cancelling stale order ${order.order_number}:`, updateErr);
+        continue;
+      }
+      cancelledCount++;
+    } catch (orderErr) {
+      console.error(`Error processing stale pending order ${order.order_number}:`, orderErr);
+    }
+  }
+  return { cancelled: cancelledCount };
+}
+
+// 매시간 1회 자동 스캔 (대상이 없으면 즉시 빈 결과로 반환)
+cron.schedule('0 * * * *', () => {
+  cancelStalePendingOrders().catch(err => console.error('Stale pending order cancel cron error:', err));
 });
 
 // 관리자용 전체 주문 조회 (상태 필터 가능, 주문자 이메일 포함)

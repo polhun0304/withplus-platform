@@ -567,7 +567,7 @@
                             return `
                             <a class="wishlist-card" href="/product/${WithPlus.escapeHtml(p.id)}">
                                 <button class="wishlist-remove-btn" data-product-id="${WithPlus.escapeHtml(p.id)}" title="찜 해제">✕</button>
-                                <div class="thumb" ${img ? `style="background-image:url('${img}');"` : ''}>${img ? '' : emoji}</div>
+                                <div class="thumb" ${img ? `style="background-image:url('${WithPlus.safeUrlAttr(img)}');"` : ''}>${img ? '' : emoji}</div>
                                 <div class="info">
                                     <div class="name">${WithPlus.escapeHtml(p.name)}</div>
                                     <div class="price">${WithPlus.formatPrice(p.price)}</div>

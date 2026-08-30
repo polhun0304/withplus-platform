@@ -224,13 +224,13 @@
                     : `<p style="color:var(--text-gray);padding:20px 0;">아직 작성된 리뷰가 없습니다. 첫 리뷰를 남겨보세요!</p>`;
 
                 const thumbStripHtml = images.length > 1
-                    ? `<div class="thumb-strip" id="thumb-strip">${images.map((url, i) => `<div class="thumb-item${i === 0 ? ' active' : ''}" data-index="${i}" style="background-image:url('${url}');"></div>`).join('')}</div>`
+                    ? `<div class="thumb-strip" id="thumb-strip">${images.map((url, i) => `<div class="thumb-item${i === 0 ? ' active' : ''}" data-index="${i}" style="background-image:url('${WithPlus.safeUrlAttr(url)}');"></div>`).join('')}</div>`
                     : '';
 
                 wrap.innerHTML = `
                     <div class="detail-grid">
                         <div class="image-gallery">
-                            <div class="detail-image" id="main-image" ${imageUrl ? `style="background-image:url('${imageUrl}');background-size:cover;background-position:center;"` : ''}>
+                            <div class="detail-image" id="main-image" ${imageUrl ? `style="background-image:url('${WithPlus.safeUrlAttr(imageUrl)}');background-size:cover;background-position:center;"` : ''}>
                                 <div class="detail-badge">💰 개인 ${personalPct}% + 커뮤니티 ${communityPct}% 적립</div>
                                 ${imageUrl ? '' : emoji}
                             </div>
@@ -540,7 +540,7 @@
                             const fPrice = fHasDiscount ? fp.discount_price : fp.price;
                             return `
                             <a class="fbt-card" href="/product/${WithPlus.escapeHtml(fp.id)}">
-                                <div class="fbt-image" ${fImg ? `style="background-image:url('${fImg}');"` : ''}>${fImg ? '' : fEmoji}</div>
+                                <div class="fbt-image" ${fImg ? `style="background-image:url('${WithPlus.safeUrlAttr(fImg)}');"` : ''}>${fImg ? '' : fEmoji}</div>
                                 <div class="fbt-name">${WithPlus.escapeHtml(fp.name)}</div>
                                 <div class="fbt-price">${WithPlus.formatPrice(fPrice)}</div>
                             </a>`;
@@ -567,7 +567,7 @@
                             const sPrice = sHasDiscount ? sp.discount_price : sp.price;
                             return `
                             <a class="fbt-card" href="/product/${WithPlus.escapeHtml(sp.id)}">
-                                <div class="fbt-image" ${sImg ? `style="background-image:url('${sImg}');"` : ''}>${sImg ? '' : sEmoji}</div>
+                                <div class="fbt-image" ${sImg ? `style="background-image:url('${WithPlus.safeUrlAttr(sImg)}');"` : ''}>${sImg ? '' : sEmoji}</div>
                                 <div class="fbt-name">${WithPlus.escapeHtml(sp.name)}</div>
                                 <div class="fbt-price">${WithPlus.formatPrice(sPrice)}</div>
                             </a>`;
