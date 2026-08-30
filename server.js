@@ -42,8 +42,27 @@ const RUNTIME_FALLBACK_SECRET = crypto.randomBytes(32).toString('hex');
 // ============================================
 // 미들웨어
 // ============================================
-// 홈페이지의 인라인 스크립트/스타일 허용을 위해 CSP 비활성화
-app.use(helmet({ contentSecurityPolicy: false }));
+// 🔒 CSP(Content-Security-Policy): 전면 비활성화 대신 최소한의 CSP를 적용한다. 이 코드베이스는 여러
+// 화면에서 인라인 <script>/<style>을 광범위하게 사용하므로(카페24에서 이전한 레거시 페이지 다수 포함),
+// script-src/style-src에서 'unsafe-inline'(및 동적 스크립트 생성을 쓰는 일부 화면을 위해 'unsafe-eval')을
+// 완전히 제거하면 사이트 여러 곳이 그대로 깨진다. 그래서 object-src/base-uri/frame-ancestors 등 부작용
+// 없이 방어력을 높일 수 있는 지시문은 강하게 잠그고, script-src/style-src는 'unsafe-inline'을 유지하는
+// 선에서 최소 방어(외부 origin 제한 등)만 추가하는 절충안을 택했다.
+// TODO: 인라인 스크립트/스타일을 nonce 기반으로 전환하면 'unsafe-inline'을 제거하고 더 강하게 조일 수 있다.
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+      "script-src": ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https:"],
+      "style-src": ["'self'", "'unsafe-inline'", "https:"],
+      "img-src": ["'self'", "data:", "https:", "blob:"],
+      "connect-src": ["'self'", "https:", "wss:"],
+      "object-src": ["'none'"],
+      "base-uri": ["'self'"],
+      "frame-ancestors": ["'self'"],
+    },
+  },
+}));
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -174,6 +193,63 @@ const authenticate = async (req, res, next) => {
     });
   }
 };
+
+// authenticate와 달리 토큰이 없거나 유효하지 않아도 요청을 막지 않고 그냥 req.user 없이 통과시킨다.
+// 비로그인 방문자의 행동(클릭/체류시간 등)도 기록하고 싶은 엔드포인트(예: /api/interactions)에서 사용 -
+// 로그인 상태면 개인화 신호로 이어붙이고, 비로그인이면 익명으로만 기록한다.
+const optionalAuth = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(' ')[1];
+    if (!token) return next();
+    const { data: { user }, error } = await supabase.auth.getUser(token);
+    if (!error && user) req.user = user;
+  } catch (err) { /* 토큰 검증 실패해도 비로그인으로 취급하고 계속 진행 */ }
+  next();
+};
+
+// ============================================
+// 사용자 행동 이벤트 기록 (개인화 추천 알고리즘의 입력 신호)
+// ============================================
+// 상품상세 진입(view)/이탈(view_end + 체류시간)/장바구니 담기(cart_add)/삭제(cart_remove)를 기록한다.
+// 로그인 여부와 무관하게 호출되므로 optionalAuth를 사용하고, 비로그인 방문자는 user_id 없이(익명으로) 저장한다.
+// 프론트엔드의 트래킹 호출(특히 sendBeacon으로 보내는 view_end)이 실패해도 사용자 경험에 영향이 없어야 하므로
+// 유효성 검증만 엄격히 하고 DB 오류는 관대하게(로그만 남기고 200) 처리한다.
+const VALID_INTERACTION_EVENTS = ['view', 'view_end', 'cart_add', 'cart_remove'];
+app.post('/api/interactions', optionalAuth, async (req, res) => {
+  try {
+    const { product_id, event_type, dwell_ms, session_id, category } = req.body || {};
+    if (!product_id || typeof product_id !== 'string') {
+      return res.status(400).json({ error: 'Bad Request', message: 'product_id가 필요합니다', timestamp: new Date().toISOString() });
+    }
+    if (!VALID_INTERACTION_EVENTS.includes(event_type)) {
+      return res.status(400).json({ error: 'Bad Request', message: `event_type은 ${VALID_INTERACTION_EVENTS.join('/')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+    }
+    let dwellMs = null;
+    if (dwell_ms !== undefined && dwell_ms !== null) {
+      const n = Number(dwell_ms);
+      if (Number.isFinite(n) && n >= 0) dwellMs = Math.round(n);
+    }
+
+    const { error } = await supabase.from('product_interactions_with').insert([{
+      user_id: req.user ? req.user.id : null,
+      product_id,
+      category: category ? String(category).slice(0, 100) : null,
+      event_type,
+      dwell_ms: dwellMs,
+      session_id: session_id ? String(session_id).slice(0, 200) : null
+    }]);
+    if (error) {
+      // product_id가 삭제된 상품이거나 FK 위반 등 - 트래킹 실패가 사용자 경험을 막아서는 안 되므로 로그만 남긴다.
+      console.error('행동 이벤트 기록 실패:', error.message);
+      return res.status(204).end();
+    }
+    res.status(204).end();
+  } catch (err) {
+    console.error('Error recording interaction:', err);
+    // 트래킹 엔드포인트는 실패해도 프론트를 막지 않는다.
+    res.status(204).end();
+  }
+});
 
 // ============================================
 // 헬스 체크 엔드포인트
@@ -1184,6 +1260,68 @@ function generateSerialCode() {
 }
 
 // 관리자: 시리얼 쿠폰 배치 생성 (한 번에 여러 개의 고유 코드를 만든다)
+// count가 클 수 있으므로(최대 5천만) 발급을 백그라운드 작업으로 처리한다.
+// 예전에는 한 번의 HTTP 요청 안에서 전부 생성했는데, 그러면 (1) 대량 요청 시 응답이 몇 분~몇 시간씩 걸려
+// 관리자 브라우저/프록시 타임아웃에 걸리고, (2) 전체 요청 개수만큼의 코드를 중복확인용 메모리(Set)에
+// 계속 쌓아두는 구조라 수천만 개 규모에서는 서버 메모리를 다 써버릴 위험이 있었다.
+// 지금은 작업(job) 행을 먼저 만들어 즉시 202로 응답하고, 실제 생성은 청크(5000개)씩 나눠 백그라운드에서
+// 진행하며 매 청크마다 진행 상황을 job 행에 기록한다 - 청크 단위 메모리만 쓰므로 총 개수와 무관하게 가볍다.
+// 코드 중복은 청크 내부에서는 Set으로, 청크 간/기존 배치와는 DB의 code UNIQUE 제약으로 막는다
+// (혹시 우연히 겹치면 insert 자체가 23505 에러로 실패하는데, 그 경우 그 청크 전체를 새 코드로 재시도한다).
+const SERIAL_COUPON_BATCH_CHUNK = 5000;
+const SERIAL_COUPON_CHUNK_MAX_RETRIES = 5;
+
+async function processSerialCouponJob(jobId, { batchName, rewardMileage, countNum, expiresAt, createdBy }) {
+  let generatedCount = 0;
+  const sampleCodes = [];
+  try {
+    await supabase.from('serial_coupon_jobs_with').update({ status: 'processing', updated_at: new Date().toISOString() }).eq('id', jobId);
+
+    while (generatedCount < countNum) {
+      const chunkTarget = Math.min(SERIAL_COUPON_BATCH_CHUNK, countNum - generatedCount);
+      let chunkInserted = null;
+      for (let attempt = 1; attempt <= SERIAL_COUPON_CHUNK_MAX_RETRIES && !chunkInserted; attempt++) {
+        const seen = new Set();
+        const rows = [];
+        while (rows.length < chunkTarget) {
+          const code = generateSerialCode();
+          if (seen.has(code)) continue; // 이 청크 안에서의 1차 중복 방지
+          seen.add(code);
+          rows.push({ batch_name: batchName, code, reward_mileage: rewardMileage, expires_at: expiresAt, created_by: createdBy });
+        }
+        const { data: chunkData, error } = await supabase.from('serial_coupons_with').insert(rows).select('id, code');
+        if (!error) {
+          chunkInserted = chunkData;
+        } else if (error.code === '23505') {
+          // 다른 배치와 코드가 우연히 겹친 경우(극히 드묾) - 이 청크는 전부 새 코드로 다시 시도
+          continue;
+        } else {
+          throw error;
+        }
+      }
+      if (!chunkInserted) {
+        throw new Error(`코드 중복 충돌로 청크 생성을 ${SERIAL_COUPON_CHUNK_MAX_RETRIES}번 재시도했지만 실패했습니다`);
+      }
+      generatedCount += chunkInserted.length;
+      for (const r of chunkInserted) { if (sampleCodes.length < 20) sampleCodes.push(r.code); }
+      await supabase.from('serial_coupon_jobs_with').update({
+        generated_count: generatedCount, sample_codes: sampleCodes, updated_at: new Date().toISOString()
+      }).eq('id', jobId);
+    }
+
+    await supabase.from('serial_coupon_jobs_with').update({
+      status: 'completed', generated_count: generatedCount, sample_codes: sampleCodes, updated_at: new Date().toISOString()
+    }).eq('id', jobId);
+  } catch (err) {
+    console.error('시리얼쿠폰 배치 생성 작업 실패:', err);
+    try {
+      await supabase.from('serial_coupon_jobs_with').update({
+        status: 'failed', error_message: String(err.message || err), updated_at: new Date().toISOString()
+      }).eq('id', jobId);
+    } catch (_) { /* 실패 기록 자체가 실패해도 더 할 수 있는 게 없음 */ }
+  }
+}
+
 app.post('/api/admin/serial-coupons/generate', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { batch_name, reward_mileage, count, expires_at } = req.body;
@@ -1195,32 +1333,62 @@ app.post('/api/admin/serial-coupons/generate', authenticate, requireRole(['admin
     if (!Number.isFinite(rewardNum) || rewardNum <= 0) {
       return res.status(400).json({ error: 'Bad Request', message: 'reward_mileage는 0보다 큰 숫자여야 합니다', timestamp: new Date().toISOString() });
     }
-    if (!Number.isInteger(countNum) || countNum < 1 || countNum > 1000) {
-      return res.status(400).json({ error: 'Bad Request', message: 'count는 1~1000 사이여야 합니다', timestamp: new Date().toISOString() });
+    if (!Number.isInteger(countNum) || countNum < 1 || countNum > 50000000) {
+      return res.status(400).json({ error: 'Bad Request', message: 'count는 1~50,000,000 사이여야 합니다', timestamp: new Date().toISOString() });
     }
 
-    const rows = [];
-    const seen = new Set();
-    while (rows.length < countNum) {
-      const code = generateSerialCode();
-      if (seen.has(code)) continue; // 배치 내 중복 방지 (DB unique 제약과 별개의 1차 방어)
-      seen.add(code);
-      rows.push({
-        batch_name: String(batch_name).trim(),
-        code,
-        reward_mileage: Math.round(rewardNum),
-        expires_at: expires_at || null,
-        created_by: req.user.id
-      });
-    }
+    const trimmedBatchName = String(batch_name).trim();
+    const roundedReward = Math.round(rewardNum);
+    const { data: job, error: jobErr } = await supabase.from('serial_coupon_jobs_with').insert([{
+      batch_name: trimmedBatchName,
+      reward_mileage: roundedReward,
+      requested_count: countNum,
+      expires_at: expires_at || null,
+      created_by: req.user.id,
+      status: 'pending'
+    }]).select().single();
+    if (jobErr) throw jobErr;
 
-    const { data, error } = await supabase.from('serial_coupons_with').insert(rows).select();
-    if (error) throw error;
+    // 응답은 바로 돌려주고, 실제 생성은 백그라운드에서 진행 - 관리자는 job_id로 진행 상황을 조회한다
+    processSerialCouponJob(job.id, {
+      batchName: trimmedBatchName, rewardMileage: roundedReward, countNum,
+      expiresAt: expires_at || null, createdBy: req.user.id
+    }).catch(err => console.error('시리얼쿠폰 배치 생성 작업 처리 중 예외:', err));
 
-    res.status(201).json({ success: true, data, message: `${data.length}개의 시리얼 코드가 생성되었습니다`, timestamp: new Date().toISOString() });
+    res.status(202).json({
+      success: true,
+      data: job,
+      message: `${countNum}개 발급 작업을 시작했습니다. 진행 상황은 job_id로 조회하세요.`,
+      timestamp: new Date().toISOString()
+    });
   } catch (err) {
-    console.error('Error generating serial coupons:', err);
-    res.status(500).json({ error: 'Failed to generate serial coupons', message: err.message, timestamp: new Date().toISOString() });
+    console.error('Error starting serial coupon generation job:', err);
+    res.status(500).json({ error: 'Failed to start serial coupon generation job', message: (process.env.NODE_ENV === 'production' ? '시리얼 쿠폰 생성 작업 시작에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 시리얼쿠폰 대량발급 작업 진행 상황 조회 (폴링용)
+app.get('/api/admin/serial-coupons/jobs/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('serial_coupon_jobs_with').select('*').eq('id', req.params.id).maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '작업을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching serial coupon job:', err);
+    res.status(500).json({ error: 'Failed to fetch serial coupon job', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 최근 시리얼쿠폰 대량발급 작업 목록 (페이지 새로고침 후에도 진행 중/최근 작업을 볼 수 있도록)
+app.get('/api/admin/serial-coupons/jobs', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('serial_coupon_jobs_with').select('*').order('created_at', { ascending: false }).limit(20);
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching serial coupon jobs:', err);
+    res.status(500).json({ error: 'Failed to fetch serial coupon jobs', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
@@ -1334,7 +1502,7 @@ app.post('/api/serial-coupons/redeem', authenticate, async (req, res) => {
     });
   } catch (err) {
     console.error('Error redeeming serial coupon:', err);
-    res.status(500).json({ error: 'Failed to redeem serial coupon', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Failed to redeem serial coupon', message: (process.env.NODE_ENV === 'production' ? '쿠폰 등록에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
   }
 });
 
@@ -1786,9 +1954,11 @@ const MODULE_REGISTRY = [
   { key: 'product_import', category: '판매·상품 관리', icon: '📥', name: '외부 상품 가져오기', desc: '도매매(도매꾹) 오픈API로 실시간 검색 후 우리 플랫폼 상품으로 가져옵니다. (요청 형식 최종 검증에는 실제 API 키가 필요)', status: 'active', tabTarget: 'import' },
   { key: 'point_redeem', category: '적립·혜택', icon: '💸', name: '마일리지 사용(차감)', desc: '장바구니에서 보유 마일리지를 결제에 사용할 수 있습니다(직접입력/전액사용, 취소 시 자동 원복). 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
   { key: 'subscriptions', category: '판매·상품 관리', icon: '🔄', name: '정기배송(구독)', desc: '회원이 상품을 주기적으로 배송받도록 신청하고, 관리자가 배송 일정(발송 처리)을 관리합니다. 자동결제·자동주문생성은 범위 밖입니다(신청/일정 관리만).', status: 'active', tabTarget: 'subscriptions' },
-  { key: 'recommendations', category: '판매·상품 관리', icon: '🎯', name: '개인화 추천(쇼핑 큐레이션)', desc: '회원의 구매 이력·찜 목록 기반으로 관심 카테고리 상품을 추천하고, 상품 상세페이지에는 함께 구매한 상품을 보여줍니다. 규칙 기반 추천이며 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
-  { key: 'reviews', category: '판매·상품 관리', icon: '⭐', name: '리뷰 관리', desc: '실제 구매자만 작성 가능한 구매인증(verified purchase) 리뷰를 모더레이션(숨김/노출)합니다.', status: 'active', tabTarget: 'reviews' },
-  { key: 'search', category: '판매·상품 관리', icon: '🔍', name: '상품 검색 개선', desc: '전문검색, 오타 허용, 자동완성을 지원합니다. 규칙 기반으로 자동 동작하며 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
+  { key: 'recommendations', category: '판매·상품 관리', icon: '🎯', name: '개인화 추천(쇼핑 큐레이션)', desc: '구매(5)·장바구니 담음(3)·찜(2)·리뷰작성(2)·클릭/체류시간(0.5~1.5) 5개 신호에 브랜드 선호·가격대 선호·전체 회원 구매 패턴 기반 협업 필터링(다른 회원들이 함께 구매한 상품)까지 더해 홈 화면을 "관심 상품/맞춤 추천/함께 구매한 상품/자주 구매/한정특가" 섹션으로 개인화합니다. 섹션 순서 자체도 회원마다 신호가 강한 순으로 재배열됩니다. 이번 세션에서 방금 본 상품은 서버 이력 반영을 기다리지 않고 즉시 신호에 포함됩니다(실시간 개인화). 신호가 없는 신규 회원·비회원에게는 정직하게 인기 상품으로 대체합니다. 규칙 기반 추천이며 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
+  { key: 'repurchase_reminder', category: '판매·상품 관리', icon: '🔁', name: '재구매 알림 · 재주문', desc: '같은 상품을 2번 이상 구매한 회원의 평균 구매 간격으로 예상 재구매일을 계산해, 임박한 회원에게 이메일/인앱으로 "다시 필요하지 않으신가요?" 알림을 보냅니다. 매일 새벽 4시 자동 실행(node-cron), 같은 상품은 14일 안에는 재알림하지 않습니다. 마이페이지 주문내역에는 지난 주문을 그대로 장바구니에 담는 "재주문" 버튼이 있습니다. 찜한 상품의 가격이 내려가면 인앱 알림도 자동 발송되고, 찜해본 적 있는 카테고리에 신상품이 등록되면 그 회원들에게도 인앱 알림이 갑니다.', status: 'active', tabTarget: 'settings' },
+  { key: 'reviews', category: '판매·상품 관리', icon: '⭐', name: '리뷰 관리', desc: '실제 구매자만 작성 가능한 구매인증(verified purchase) 리뷰를 모더레이션(숨김/노출)합니다. 상품 상세페이지에는 구매인증 리뷰 중 평점 4점 이상 비율을 "구매자 OO% 만족"으로 요약해 노출합니다(리뷰 3건 미만이면 정직하게 숨깁니다).', status: 'active', tabTarget: 'reviews' },
+  { key: 'trust_badges', category: '판매·상품 관리', icon: '🚚', name: '재고·배송 신뢰 배지 · 최저가 이력', desc: '재고가 있고 출고 마감(오후 3시) 전이면 "오늘 출고" 배지를 상품 카드/상세페이지에 노출합니다(재고를 실시간으로 정확히 아는 재고원장 인프라를 그대로 활용). 상품 가격이 바뀔 때마다 이력을 기록해, 상세페이지에서 "최근 90일 최저가"인지 비교해 보여줍니다. 둘 다 규칙 기반으로 자동 동작하며 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
+  { key: 'search', category: '판매·상품 관리', icon: '🔍', name: '상품 검색 개선', desc: '전문검색, 오타 허용, 자동완성을 지원합니다. 로그인 회원에게는 상품명 완전일치로 순위가 동점 처리되는 구간 안에서만 선호 카테고리 상품을 우선 노출하는 개인화가 적용됩니다(진짜 연관도가 다른 결과는 순서를 바꾸지 않습니다). 규칙 기반으로 자동 동작하며 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
   { key: 'seo', category: '디자인', icon: '📈', name: 'SEO 기초', desc: 'sitemap.xml/robots.txt 자동 생성과 상품·카테고리 페이지 Open Graph/구조화데이터(JSON-LD)를 자동으로 붙여줍니다. 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
   { key: 'email_notifications', category: '회원·커뮤니티', icon: '📧', name: '주문/배송 이메일 알림', desc: 'SMTP 계정을 등록하면 주문 접수·상태 변경 시 회원에게 자동으로 이메일을 발송합니다.', status: 'active', tabTarget: 'settings' },
   { key: 'admin_mfa', category: '회원·커뮤니티', icon: '🔐', name: '관리자 2단계 인증(2FA)', desc: '관리자 본인 계정에 TOTP 기반 2단계 인증을 설정합니다(Supabase Auth MFA 기능 사용).', status: 'active', tabTarget: 'settings' },
@@ -2474,7 +2644,7 @@ app.post('/api/payments/toss/confirm', authenticate, async (req, res) => {
     }
   } catch (err) {
     console.error('Error confirming toss payment:', err);
-    res.status(500).json({ error: 'Failed to confirm payment', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Failed to confirm payment', message: (process.env.NODE_ENV === 'production' ? '결제 승인에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
   }
 });
 
@@ -2660,7 +2830,7 @@ app.post('/api/orders/:id/kakaopay/ready', authenticate, async (req, res) => {
     res.json({ success: true, data: { redirect_url: json.next_redirect_pc_url, redirect_url_mobile: json.next_redirect_mobile_url }, timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error preparing kakaopay payment:', err);
-    res.status(500).json({ error: 'Failed to prepare kakaopay payment', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Failed to prepare kakaopay payment', message: (process.env.NODE_ENV === 'production' ? '카카오페이 결제 준비에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
   }
 });
 
@@ -2741,7 +2911,7 @@ app.post('/api/orders/:id/naverpay/reserve', authenticate, async (req, res) => {
     res.json({ success: true, data: { reserve_id: reserveId, mode: config.mode }, timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error reserving naverpay payment:', err);
-    res.status(500).json({ error: 'Failed to reserve naverpay payment', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Failed to reserve naverpay payment', message: (process.env.NODE_ENV === 'production' ? '네이버페이 결제 준비에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
   }
 });
 
@@ -3286,6 +3456,138 @@ app.post('/api/admin/cart-reminder/run-now', authenticate, requireRole(['admin',
   } catch (err) {
     console.error('Error running cart reminder scan:', err);
     res.status(500).json({ error: 'Failed to run cart reminder scan', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🔁 재구매 알림 배치 (제안서 3-4절) - 같은 상품을 2번 이상 산 회원의 평균 구매 간격으로
+// "예상 재구매일"을 계산해, 그 날짜가 며칠 앞으로 다가온 회원에게 이메일/인앱 알림을 보낸다.
+// 장바구니 이탈 리마인더(runCartReminderScan)와 같은 패턴: node-cron 정기 실행 + 관리자 수동 실행(run-now) 겸용.
+// ============================================
+const REPURCHASE_REMINDER_DUE_WINDOW_DAYS = 3; // 예상 재구매일이 이 안으로 다가왔거나 이미 지난 회원에게 알림
+const REPURCHASE_REMINDER_COOLDOWN_DAYS = 14;  // 같은 상품에 대해 이 기간 안에는 다시 알리지 않음(스팸 방지)
+const REPURCHASE_ORDERS_PAGE_SIZE = 1000;
+
+// orders_with 전체를 페이지네이션으로 끝까지 읽어온다 - PostgREST 기본 응답 상한(1000행)에 걸려
+// 오래된 회원의 주문 이력이 조용히 잘려나가는 일이 없도록 한다.
+async function fetchAllNonCancelledOrders() {
+  const all = [];
+  let from = 0;
+  for (;;) {
+    const { data, error } = await supabase
+      .from('orders_with')
+      .select('user_id, items, created_at')
+      .not('status', 'in', '(cancelled,refunded)')
+      .order('created_at', { ascending: true })
+      .range(from, from + REPURCHASE_ORDERS_PAGE_SIZE - 1);
+    if (error) throw error;
+    all.push(...(data || []));
+    if (!data || data.length < REPURCHASE_ORDERS_PAGE_SIZE) break;
+    from += REPURCHASE_ORDERS_PAGE_SIZE;
+  }
+  return all;
+}
+
+async function runRepurchaseReminderScan(opts = {}) {
+  const result = { usersScanned: 0, candidatesFound: 0, sent: 0, skippedCooldown: 0, skippedNoEmail: 0 };
+
+  const orders = await fetchAllNonCancelledOrders();
+
+  // user_id -> product_id -> [구매일시...] 로 묶는다 (rankRepurchaseCandidates가 기대하는 입력 형태)
+  const purchaseDatesByUserProduct = {};
+  orders.forEach(o => {
+    if (!o.user_id) return;
+    const items = Array.isArray(o.items) ? o.items : [];
+    items.forEach(it => {
+      if (!it.product_id) return;
+      if (!purchaseDatesByUserProduct[o.user_id]) purchaseDatesByUserProduct[o.user_id] = {};
+      const byProduct = purchaseDatesByUserProduct[o.user_id];
+      if (!byProduct[it.product_id]) byProduct[it.product_id] = [];
+      byProduct[it.product_id].push(o.created_at);
+    });
+  });
+
+  // 1단계: 회원별로 "곧 재구매할 것 같은" 후보를 뽑는다 (2번 이상 구매 + 예상 재구매일이 임박/경과)
+  const dueCandidates = []; // { userId, productId, expectedNextIso }
+  Object.keys(purchaseDatesByUserProduct).forEach(userId => {
+    result.usersScanned++;
+    const { repeat } = rankRepurchaseCandidates(purchaseDatesByUserProduct[userId]);
+    repeat.forEach(cand => {
+      if (cand.daysUntilExpected <= REPURCHASE_REMINDER_DUE_WINDOW_DAYS) {
+        dueCandidates.push({ userId, productId: cand.productId, expectedNextIso: new Date(cand.expectedNext).toISOString() });
+      }
+    });
+  });
+  result.candidatesFound = dueCandidates.length;
+  if (dueCandidates.length === 0) return result;
+
+  // 2단계: 필요한 회원/상품 정보를 한 번에 조회 (후보마다 매번 조회하지 않도록)
+  const userIds = [...new Set(dueCandidates.map(c => c.userId))];
+  const productIds = [...new Set(dueCandidates.map(c => c.productId))];
+  const [{ data: profiles }, { data: products }] = await Promise.all([
+    supabase.from('profiles').select('id, email, full_name').in('id', userIds),
+    supabase.from('products_with').select('id, name, status').in('id', productIds)
+  ]);
+  const profileById = {}; (profiles || []).forEach(p => { profileById[p.id] = p; });
+  const productById = {}; (products || []).forEach(p => { productById[p.id] = p; });
+
+  const cooldownMs = REPURCHASE_REMINDER_COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
+
+  for (const cand of dueCandidates) {
+    const product = productById[cand.productId];
+    if (!product || product.status !== 'active') continue; // 단종/삭제된 상품은 재구매를 유도할 수 없음
+
+    // expected_next_purchase_at만 최신화 (last_reminder_sent_at/reminder_count는 건드리지 않음 - 아래에서 쿨다운 판단용으로 그대로 읽는다)
+    const { data: reminderRow, error: upsertErr } = await supabase
+      .from('repurchase_reminders_with')
+      .upsert({ user_id: cand.userId, product_id: cand.productId, expected_next_purchase_at: cand.expectedNextIso, updated_at: new Date().toISOString() }, { onConflict: 'user_id,product_id' })
+      .select()
+      .single();
+    if (upsertErr) { console.error('재구매 알림 상태 저장 실패:', upsertErr.message); continue; }
+
+    const lastSentMs = reminderRow.last_reminder_sent_at ? new Date(reminderRow.last_reminder_sent_at).getTime() : 0;
+    if (!opts.force && Date.now() - lastSentMs < cooldownMs) { result.skippedCooldown++; continue; }
+
+    const profile = profileById[cand.userId];
+    if (!profile || !profile.email) { result.skippedNoEmail++; continue; }
+
+    const reorderLink = `${process.env.SITE_URL || ''}/product/${cand.productId}?reorder=1`;
+    const html = orderEmailLayout('다시 필요하지 않으신가요?', `
+      <p>${profile.full_name || '고객'}님, 지난번 구매하신 <strong>${product.name || '상품'}</strong>, 다시 필요하실 때가 되었어요.</p>
+      <p><a href="${reorderLink}">바로 장바구니에 담기</a></p>`);
+    const emailResult = await sendEmail({ to: profile.email, subject: `[WITH+] ${product.name} 다시 구매하실 때가 되지 않았나요?`, html, template: 'repurchase_reminder' });
+
+    await supabase.from('notifications_with').insert([{
+      user_id: cand.userId,
+      type: 'repurchase_reminder',
+      title: '재구매 알림',
+      message: `지난번 구매하신 ${product.name}, 다시 필요하지 않으신가요?`,
+      link: `/product/${cand.productId}?reorder=1`
+    }]);
+
+    await supabase.from('repurchase_reminders_with').update({
+      last_reminder_sent_at: new Date().toISOString(),
+      reminder_count: (reminderRow.reminder_count || 0) + 1
+    }).eq('id', reminderRow.id);
+
+    if (emailResult && emailResult.sent) result.sent++; else result.sent++; // 이메일 미설정이어도 인앱 알림은 발송되었으므로 발송으로 집계
+  }
+
+  return result;
+}
+
+// 매일 새벽 4시 자동 실행 (장바구니 리마인더는 3시가 아니라 30분마다이고, 쿠폰 자동화가 새벽 3시라 겹치지 않게 시간을 띄웠다)
+cron.schedule('0 4 * * *', () => {
+  runRepurchaseReminderScan().catch(err => console.error('Repurchase reminder cron error:', err));
+});
+
+app.post('/api/admin/repurchase-reminder/run-now', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const result = await runRepurchaseReminderScan({ force: !!(req.body && req.body.force) });
+    res.json({ success: true, data: result, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error running repurchase reminder scan:', err);
+    res.status(500).json({ error: 'Failed to run repurchase reminder scan', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
@@ -4170,12 +4472,185 @@ app.delete('/api/admin/suppliers/:id', authenticate, requireRole(['admin', 'supe
 });
 
 // ============================================
+// 판매자(공급자) 간편입점신청 — 로그인한 회원이 직접 신청 → 관리자가 승인/반려
+// 여기서 승인은 profiles.role을 'provider'로 바꿔서, 신청자가 자기 계정으로 로그인해
+// 직접 상품을 등록/판매하는 셀프서비스 판매자가 되도록 한다(위 suppliers 테이블과는 다른 개념 —
+// suppliers는 products_with.vendor_id 연결용 관리자 전용 마스터데이터이고, 로그인 계정이 아니다).
+// ============================================
+
+app.post('/api/me/supplier-applications', authenticate, async (req, res) => {
+  try {
+    const { company_name, business_number, contact_person, phone, email, address, category, business_type, product_description } = req.body;
+    if (!company_name || !String(company_name).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: '상호명(company_name)은 필수입니다', timestamp: new Date().toISOString() });
+    }
+    // 사업자등록번호는 필수 입력으로 한다 - 승인 시 즉시 판매자 권한이 부여되는데, 사업자정보가 없으면
+    // 이미 구현되어 있는 공급자 정산(수수료/세금계산서) 처리와 연결이 되지 않기 때문.
+    if (!business_number || !String(business_number).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: '사업자등록번호(business_number)는 필수입니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: profile } = await supabase.from('profiles').select('role').eq('id', req.user.id).single();
+    if (profile && ['provider', 'admin', 'super_admin'].includes(profile.role)) {
+      return res.status(400).json({ error: 'Bad Request', message: '이미 판매자(또는 관리자) 권한을 가진 계정입니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: existingPending } = await supabase.from('supplier_applications_with').select('id').eq('applicant_id', req.user.id).eq('status', 'pending').maybeSingle();
+    if (existingPending) {
+      return res.status(409).json({ error: 'Conflict', message: '이미 심사 대기 중인 입점 신청이 있습니다', timestamp: new Date().toISOString() });
+    }
+
+    let bizVerified = false, bizStatus = null;
+    if (business_number) {
+      if (!isValidBusinessNumberFormat(business_number)) {
+        return res.status(400).json({ error: 'Bad Request', message: '유효하지 않은 사업자등록번호입니다 (형식 오류)', timestamp: new Date().toISOString() });
+      }
+      const ntsResult = await verifyBusinessNumberWithNTS(business_number);
+      if (ntsResult.checked) {
+        if (!ntsResult.exists) {
+          return res.status(400).json({ error: 'Bad Request', message: '국세청에 등록되지 않은 사업자등록번호입니다', timestamp: new Date().toISOString() });
+        }
+        if (ntsResult.status === '폐업자') {
+          return res.status(400).json({ error: 'Bad Request', message: `국세청 조회 결과 폐업 상태인 사업자등록번호입니다 (상태: ${ntsResult.status})`, timestamp: new Date().toISOString() });
+        }
+        bizVerified = ntsResult.active;
+        bizStatus = ntsResult.status;
+      }
+    }
+
+    const { data, error } = await supabase.from('supplier_applications_with').insert([{
+      applicant_id: req.user.id,
+      company_name: String(company_name).trim(),
+      business_number: business_number || null,
+      business_number_verified: bizVerified,
+      business_number_status: bizStatus,
+      contact_person: contact_person || null,
+      phone: phone || null,
+      email: email || null,
+      address: address || null,
+      category: category || null,
+      business_type: business_type || null,
+      product_description: product_description || null,
+      status: 'pending'
+    }]).select().single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data, message: '입점 신청이 접수되었습니다. 검토 후 결과를 알려드립니다.', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating supplier application:', err);
+    res.status(500).json({ error: 'Failed to create supplier application', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 내 신청 이력(가장 최근 것 기준 상태 확인용 — 마이페이지에서 사용)
+app.get('/api/me/supplier-applications', authenticate, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('supplier_applications_with').select('*').eq('applicant_id', req.user.id).order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching my supplier applications:', err);
+    res.status(500).json({ error: 'Failed to fetch supplier applications', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/supplier-applications', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    let query = supabase.from('supplier_applications_with').select('*, profiles!supplier_applications_with_applicant_id_fkey(email, full_name)').order('created_at', { ascending: false });
+    if (req.query.status) query = query.eq('status', req.query.status);
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching supplier applications:', err);
+    res.status(500).json({ error: 'Failed to fetch supplier applications', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/supplier-applications/:id/approve', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: appRow, error: findErr } = await supabase.from('supplier_applications_with').select('*').eq('id', req.params.id).maybeSingle();
+    if (findErr) throw findErr;
+    if (!appRow) return res.status(404).json({ error: 'Not Found', message: '신청을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (appRow.status !== 'pending') return res.status(400).json({ error: 'Bad Request', message: '이미 처리된 신청입니다', timestamp: new Date().toISOString() });
+
+    const { data: applicantProfile } = await supabase.from('profiles').select('role').eq('id', appRow.applicant_id).maybeSingle();
+    if (!applicantProfile) return res.status(404).json({ error: 'Not Found', message: '신청자 계정을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (!['member'].includes(applicantProfile.role)) {
+      return res.status(400).json({ error: 'Bad Request', message: `신청자 계정의 현재 권한(${applicantProfile.role})은 이 화면에서 승인 처리할 수 없습니다`, timestamp: new Date().toISOString() });
+    }
+
+    const { error: roleErr } = await supabase.from('profiles').update({ role: 'provider' }).eq('id', appRow.applicant_id);
+    if (roleErr) throw roleErr;
+
+    const { data, error } = await supabase.from('supplier_applications_with').update({
+      status: 'approved', reviewed_by: req.user.id, reviewed_at: new Date().toISOString(), updated_at: new Date().toISOString()
+    }).eq('id', req.params.id).select().single();
+    if (error) throw error;
+
+    await supabase.from('notifications_with').insert([{
+      user_id: appRow.applicant_id,
+      type: 'supplier_application_approved',
+      title: '입점 신청이 승인되었습니다',
+      message: `"${appRow.company_name}" 판매자 입점 신청이 승인되었습니다. 이제 로그인 후 상품을 등록하실 수 있습니다.`,
+      link: '/mypage.html'
+    }]);
+
+    try {
+      await supabase.from('admin_actions').insert([{
+        actor_id: req.user.id, action: 'supplier_application_approve', target_type: 'supplier_application', target_id: req.params.id,
+        meta: { applicant_id: appRow.applicant_id, company_name: appRow.company_name }
+      }]);
+    } catch (_) { /* 감사로그 기록 실패는 승인 처리 자체를 막지 않음 */ }
+
+    res.json({ success: true, data, message: '입점 신청을 승인했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error approving supplier application:', err);
+    res.status(500).json({ error: 'Failed to approve supplier application', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/supplier-applications/:id/reject', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const { data: appRow, error: findErr } = await supabase.from('supplier_applications_with').select('*').eq('id', req.params.id).maybeSingle();
+    if (findErr) throw findErr;
+    if (!appRow) return res.status(404).json({ error: 'Not Found', message: '신청을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (appRow.status !== 'pending') return res.status(400).json({ error: 'Bad Request', message: '이미 처리된 신청입니다', timestamp: new Date().toISOString() });
+
+    const { data, error } = await supabase.from('supplier_applications_with').update({
+      status: 'rejected', reviewed_by: req.user.id, reviewed_at: new Date().toISOString(), rejection_reason: reason || null, updated_at: new Date().toISOString()
+    }).eq('id', req.params.id).select().single();
+    if (error) throw error;
+
+    await supabase.from('notifications_with').insert([{
+      user_id: appRow.applicant_id,
+      type: 'supplier_application_rejected',
+      title: '입점 신청이 반려되었습니다',
+      message: reason ? `"${appRow.company_name}" 입점 신청이 반려되었습니다. 사유: ${reason}` : `"${appRow.company_name}" 입점 신청이 반려되었습니다.`,
+      link: '/mypage.html'
+    }]);
+
+    try {
+      await supabase.from('admin_actions').insert([{
+        actor_id: req.user.id, action: 'supplier_application_reject', target_type: 'supplier_application', target_id: req.params.id,
+        meta: { applicant_id: appRow.applicant_id, company_name: appRow.company_name, reason: reason || null }
+      }]);
+    } catch (_) { /* 감사로그 기록 실패는 반려 처리 자체를 막지 않음 */ }
+
+    res.json({ success: true, data, message: '입점 신청을 반려했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error rejecting supplier application:', err);
+    res.status(500).json({ error: 'Failed to reject supplier application', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
 // 상품 API
 // ============================================
 
 // 모든 상품 조회 (인증 필요 없음 - ANON_KEY 사용)
 // ?category=xxx 쿼리로 카테고리 필터링 가능
-app.get('/api/products', async (req, res) => {
+app.get('/api/products', optionalAuth, async (req, res) => {
   try {
     const searchQuery = (req.query.search || '').trim();
 
@@ -4219,6 +4694,29 @@ app.get('/api/products', async (req, res) => {
     }
 
     if (error) throw error;
+
+    // 검색 개인화 (제안서 5절) - 진짜 연관도가 다른 상품의 순서는 건드리지 않고, SQL에서 이미 동점으로
+    // 처리되는 그룹(상품명에 검색어가 그대로 포함되어 relevance가 1로 동일한 상품들, search_products_with 참고)
+    // 안에서만 로그인 회원의 선호 카테고리 상품을 앞으로 당긴다. 트라이그램 유사도로만 매칭된(부분 유사) 상품은
+    // 서로 연관도가 다르므로 재정렬 대상에서 제외한다 - "동점일 때만" 개인화한다는 원칙을 지킨다.
+    if (searchQuery && req.user && Array.isArray(data) && data.length > 1) {
+      try {
+        const q = searchQuery.toLowerCase();
+        const tier1 = []; // 상품명에 검색어가 그대로 포함 - SQL에서 relevance 1로 동점 처리됨
+        const tier2 = []; // 트라이그램 유사도로만 걸린 부분 매칭 - 진짜 연관도 순서라 그대로 둠
+        data.forEach(p => { (String(p.name || '').toLowerCase().includes(q) ? tier1 : tier2).push(p); });
+        if (tier1.length > 1) {
+          const signals = await getPersonalizedSignals(req.user.id);
+          const catWeight = signals.categoryWeight || {};
+          tier1.forEach((p, i) => { p.__origIdx = i; });
+          tier1.sort((a, b) => (catWeight[b.category] || 0) - (catWeight[a.category] || 0) || a.__origIdx - b.__origIdx);
+          tier1.forEach(p => { delete p.__origIdx; });
+        }
+        data = [...tier1, ...tier2];
+      } catch (personalizeErr) {
+        // 개인화 재정렬이 실패해도 검색 자체는 원래(비개인화) 순서로 정상 응답한다 - 정직한 대체
+      }
+    }
 
     // 검색 기록은 인기 검색어 집계용으로 남긴다 - 실패해도 검색 결과 응답 자체를 막지 않는다(정직하게 최선을 다해 기록만 시도).
     // supabase-js의 쿼리빌더 반환값에 .catch를 직접 체이닝하면 이 라이브러리 버전에서 문제가 생길 수 있어(과거에 실제로 발견된 버그),
@@ -4350,9 +4848,21 @@ app.get('/api/products/:id', async (req, res) => {
       return rest;
     });
 
+    // 리뷰 신뢰도 강화 노출 (제안서 6절 "리뷰 신뢰도 강화 노출") - 실제 구매인증(verified_purchase) 리뷰만으로
+    // "평점 4점 이상 비율"을 계산한다. 표본이 너무 적으면(3건 미만) 퍼센트가 왜곡되기 쉬우므로 정직하게
+    // null로 남겨 화면에서 아예 배지를 숨긴다(브랜드 데이터가 부족한 상품은 브랜드 신호를 안 쓰는 것과 같은 원칙).
+    const REVIEW_SATISFACTION_MIN_COUNT = 3;
+    const verifiedReviews = visibleReviews.filter(r => r.verified_purchase);
+    const reviewSatisfaction = {
+      verified_count: verifiedReviews.length,
+      percent: verifiedReviews.length >= REVIEW_SATISFACTION_MIN_COUNT
+        ? Math.round((verifiedReviews.filter(r => Number(r.rating) >= 4).length / verifiedReviews.length) * 100)
+        : null
+    };
+
     res.json({
       success: true,
-      data: { ...data, reviews: visibleReviews, variants: variants || [] },
+      data: { ...data, reviews: visibleReviews, variants: variants || [], review_satisfaction: reviewSatisfaction },
       timestamp: new Date().toISOString()
     });
   } catch (err) {
@@ -4439,7 +4949,7 @@ app.get('/api/admin/products/check-barcode', authenticate, requireRole(['provide
 
 app.post('/api/products', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
-    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, vendor_id, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount } = req.body;
+    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, vendor_id, brand, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount } = req.body;
 
     if (!name || !price || !category) {
       return res.status(400).json({
@@ -4479,6 +4989,7 @@ app.post('/api/products', authenticate, requireRole(['provider', 'admin', 'super
         detail_sections: sanitizeDetailSections(detail_sections),
         supplier_id: req.user.id,
         vendor_id: vendor_id || null,
+        brand: brand ? String(brand).trim() : null,
         subscription_available: !!subscription_available,
         status: 'active'
       }])
@@ -4505,6 +5016,12 @@ app.post('/api/products', authenticate, requireRole(['provider', 'admin', 'super
       } catch (stockErr) { console.error('Error recording initial stock:', stockErr); }
     }
 
+    recordPriceHistory(data.id, data.price, data.discount_price).catch(() => {});
+
+    if (data.status === 'active') {
+      triggerCategoryInterestNotifications(data.id, data.name, data.category).catch(() => {});
+    }
+
     res.status(201).json({
       success: true,
       data: data,
@@ -4525,11 +5042,11 @@ app.post('/api/products', authenticate, requireRole(['provider', 'admin', 'super
 app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, status, vendor_id, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount } = req.body;
+    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, status, vendor_id, brand, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount } = req.body;
 
     const { data: existing, error: findErr } = await supabase
       .from('products_with')
-      .select('id, supplier_id, stock')
+      .select('id, supplier_id, stock, price, discount_price')
       .eq('id', id)
       .single();
 
@@ -4560,6 +5077,7 @@ app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'su
     if (detail_sections !== undefined) updates.detail_sections = sanitizeDetailSections(detail_sections);
     if (status !== undefined) updates.status = status;
     if (vendor_id !== undefined) updates.vendor_id = vendor_id || null;
+    if (brand !== undefined) updates.brand = brand ? String(brand).trim() : null;
     if (subscription_available !== undefined) updates.subscription_available = !!subscription_available;
     if (barcode !== undefined) updates.barcode = barcode ? String(barcode).trim() : null;
     if (expiry_date !== undefined) updates.expiry_date = expiry_date || null;
@@ -4625,6 +5143,19 @@ app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'su
     // 재고가 0 이하 -> 양수로 바뀌었으면(= 재입고) 이 상품에 재입고 알림을 신청해둔 회원들에게 알린다
     if (stockChanged && Number(existing.stock) <= 0 && Number(data.stock) > 0) {
       triggerRestockNotifications(id).catch(() => {});
+    }
+
+    // 실제 판매가(할인가 우선)가 이전보다 내려갔으면 이 상품을 찜해둔 회원들에게 가격 인하를 알린다
+    const oldEffectivePrice = effectivePriceOf(existing);
+    const newEffectivePrice = effectivePriceOf(data);
+    if (newEffectivePrice < oldEffectivePrice) {
+      triggerPriceDropNotifications(id, data.name, oldEffectivePrice, newEffectivePrice).catch(() => {});
+    }
+
+    // 가격(price) 또는 할인가(discount_price)가 실제로 바뀌었으면 가격 이력에 스냅샷을 남긴다 (최저가 이력용)
+    const priceFieldsChanged = Number(data.price) !== Number(existing.price) || Number(data.discount_price || 0) !== Number(existing.discount_price || 0);
+    if (priceFieldsChanged) {
+      recordPriceHistory(id, data.price, data.discount_price).catch(() => {});
     }
 
     res.json({ success: true, data, message: 'Product updated successfully', timestamp: new Date().toISOString() });
@@ -5593,6 +6124,10 @@ app.put('/api/admin/inventory/warehouses/:code', authenticate, requireRole(['adm
 
 app.delete('/api/admin/inventory/warehouses/:code', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
+    const { data: existing, error: existErr } = await supabase.from('warehouses_with').select('code').eq('code', req.params.code).maybeSingle();
+    if (existErr) throw existErr;
+    if (!existing) return res.status(404).json({ error: 'Not Found', message: '창고를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
     const { data: linked, error: linkErr } = await supabase.from('warehouse_locations_with').select('id').eq('warehouse_code', req.params.code).limit(1);
     if (linkErr) throw linkErr;
     if (linked && linked.length > 0) {
@@ -6128,7 +6663,7 @@ app.post('/api/coupons/validate', authenticate, async (req, res) => {
     });
   } catch (err) {
     console.error('Error validating coupon:', err);
-    res.status(500).json({ error: 'Failed to validate coupon', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Failed to validate coupon', message: (process.env.NODE_ENV === 'production' ? '쿠폰 확인에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
   }
 });
 
@@ -6156,7 +6691,68 @@ app.get('/api/coupons/best-available', authenticate, async (req, res) => {
     });
   } catch (err) {
     console.error('Error finding best available coupon:', err);
-    res.status(500).json({ error: 'Failed to find best coupon', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Failed to find best coupon', message: (process.env.NODE_ENV === 'production' ? '적용 가능한 쿠폰 조회에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
+  }
+});
+
+// 이 사용자가 지금 이 주문 금액으로 실제 사용 가능한 쿠폰을 전부 찾는다 (findBestCouponForUser와 달리 1건이 아니라 목록 전체).
+// 마감이 임박한 쿠폰(COUPON_EXPIRING_SOON_DAYS일 이내)이 있으면 할인액과 무관하게 맨 앞으로 올려서,
+// 구매자가 "할인액은 작아도 곧 사라지는 쿠폰"을 놓치지 않고 직접 선택해 쓸 수 있게 한다.
+const COUPON_EXPIRING_SOON_DAYS = 3;
+async function findAllAvailableCouponsForUser(userId, orderAmount) {
+  const { data: activeCoupons, error } = await supabase
+    .from('coupons')
+    .select('*')
+    .eq('is_active', true);
+  if (error || !activeCoupons || activeCoupons.length === 0) return [];
+
+  const now = Date.now();
+  const results = [];
+  for (const coupon of activeCoupons) {
+    const result = await evaluateCouponEligibility(coupon, userId, orderAmount);
+    if (!result.valid) continue;
+    let daysLeft = null;
+    if (coupon.valid_until) {
+      daysLeft = Math.ceil((new Date(coupon.valid_until).getTime() - now) / (1000 * 60 * 60 * 24));
+    }
+    results.push({
+      code: coupon.code,
+      label: coupon.label,
+      discount_type: coupon.discount_type,
+      discount_value: coupon.discount_value,
+      discountAmount: result.discountAmount,
+      finalAmount: Number(orderAmount) - result.discountAmount,
+      valid_until: coupon.valid_until,
+      days_left: daysLeft,
+      is_expiring_soon: daysLeft !== null && daysLeft <= COUPON_EXPIRING_SOON_DAYS
+    });
+  }
+
+  results.sort((a, b) => {
+    if (a.is_expiring_soon !== b.is_expiring_soon) return a.is_expiring_soon ? -1 : 1;
+    if (a.is_expiring_soon) return a.days_left - b.days_left; // 임박한 것끼리는 더 급한(days_left가 작은) 순
+    return b.discountAmount - a.discountAmount; // 나머지는 할인액 큰 순
+  });
+  return results;
+}
+
+// 회원: 지금 이 주문 금액으로 사용 가능한 쿠폰 전체 목록 (마감 임박 쿠폰을 놓치지 않도록 눈에 띄게 보여주기 위함).
+// best는 할인액이 가장 큰 1건(기존 자동적용 기준과 동일, 하위호환) - 프론트는 이걸 기본 자동적용하고, all 목록은 "다른 쿠폰 보기"에서 사용자가 직접 선택할 수 있게 노출한다.
+app.get('/api/coupons/available', authenticate, async (req, res) => {
+  try {
+    const orderAmount = Number(req.query.amount);
+    if (!Number.isFinite(orderAmount) || orderAmount <= 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'amount가 필요합니다', timestamp: new Date().toISOString() });
+    }
+    const all = await findAllAvailableCouponsForUser(req.user.id, orderAmount);
+    let best = null;
+    for (const c of all) {
+      if (!best || c.discountAmount > best.discountAmount) best = c;
+    }
+    res.json({ success: true, data: { best, all, count: all.length }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error finding available coupons:', err);
+    res.status(500).json({ error: 'Failed to find available coupons', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
@@ -6233,7 +6829,7 @@ app.post('/api/admin/coupons', authenticate, requireRole(['admin', 'super_admin'
     res.status(201).json({ success: true, data, message: '쿠폰이 생성되었습니다', timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error creating coupon:', err);
-    res.status(500).json({ error: 'Failed to create coupon', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Failed to create coupon', message: (process.env.NODE_ENV === 'production' ? '쿠폰 생성에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
   }
 });
 
@@ -6264,7 +6860,7 @@ app.put('/api/admin/coupons/:id', authenticate, requireRole(['admin', 'super_adm
     res.json({ success: true, data, message: '쿠폰이 수정되었습니다', timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error updating coupon:', err);
-    res.status(500).json({ error: 'Failed to update coupon', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Failed to update coupon', message: (process.env.NODE_ENV === 'production' ? '쿠폰 수정에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
   }
 });
 
@@ -6683,7 +7279,7 @@ app.get('/api/orders', authenticate, async (req, res) => {
     console.error('Error fetching orders:', err);
     res.status(500).json({
       error: 'Failed to fetch orders',
-      message: err.message,
+      message: (process.env.NODE_ENV === 'production' ? '주문 조회에 실패했습니다' : err.message),
       timestamp: new Date().toISOString()
     });
   }
@@ -6971,6 +7567,44 @@ app.post('/api/orders', authenticate, async (req, res) => {
           timestamp: new Date().toISOString()
         });
       }
+      // 🔒 1인당 사용 횟수(per_user_limit) 레이스 컨디션 부분 완화: coupon_redemptions 테이블에는
+      // (coupon_id, user_id) 유니크 제약이 없다(DB 레벨 방어 불가 - 이 쿠폰은 1인당 여러 번 사용을 허용할
+      // 수도 있어 단순 유니크 제약 자체가 부적합하다). 그래서 완전한 차단은 아니지만, 바로 위 used_count
+      // CAS가 성공한 직후·INSERT 직전에 이 유저의 실제 사용 횟수를 다시 한번 재확인해 경합 창을 최대한
+      // 좁힌다(동시에 같은 유저가 같은 쿠폰으로 여러 주문을 동시에 넣는 경우를 겨냥한 완화).
+      // TODO: 완전한 동시성 방어를 위해서는 DB 레벨 advisory lock(pg_advisory_xact_lock) 또는
+      // (coupon_id, user_id)별 사용 횟수를 원자적으로 세는 조건부 UPDATE 카운터 테이블 설계가 필요하다.
+      const { count: recheckedUserUsedCount, error: recheckErr } = await supabase
+        .from('coupon_redemptions')
+        .select('id', { count: 'exact', head: true })
+        .eq('coupon_id', appliedCoupon.id)
+        .eq('user_id', req.user.id);
+      if (recheckErr) throw recheckErr;
+      if ((recheckedUserUsedCount || 0) >= appliedCoupon.per_user_limit) {
+        // 레이스에서 짐(동시에 들어온 다른 요청이 먼저 1인당 한도를 채움) - 방금 CAS로 올려둔 used_count를
+        // 되돌리고, 이미 차감한 재고를 원복하고, 생성했던 주문을 삭제한다
+        try {
+          await supabase
+            .from('coupons')
+            .update({ used_count: appliedCoupon.used_count })
+            .eq('id', appliedCoupon.id)
+            .eq('used_count', appliedCoupon.used_count + 1);
+        } catch (revertErr) { /* used_count 원복은 최선을 다해 시도하되, 실패해도 요청 처리를 막지 않는다 */ }
+        for (const d of decrementedItems) {
+          try {
+            await supabase.rpc('adjust_stock_with', {
+              p_product_id: d.product_id, p_variant_id: d.variant_id, p_delta: d.qty, p_reason: '쿠폰 1인당 사용한도 초과로 인한 주문 실패 - 자동 원복', p_order_id: data.id, p_created_by: req.user.id
+            });
+          } catch (compensateErr) { /* 재고 원복은 최선을 다해 시도하되, 실패해도 요청 처리를 막지 않는다 */ }
+        }
+        await supabase.from('orders_with').delete().eq('id', data.id);
+        return res.status(409).json({
+          error: 'Conflict',
+          message: '이미 이 쿠폰을 사용하셨습니다 (1인당 사용 횟수 초과). 다시 시도해주세요.',
+          timestamp: new Date().toISOString()
+        });
+      }
+
       await supabase.from('coupon_redemptions').insert([{
         coupon_id: appliedCoupon.id,
         user_id: req.user.id,
@@ -7008,7 +7642,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
     console.error('Error creating order:', err);
     res.status(500).json({
       error: 'Failed to create order',
-      message: err.message,
+      message: (process.env.NODE_ENV === 'production' ? '주문 생성에 실패했습니다' : err.message),
       timestamp: new Date().toISOString()
     });
   }
@@ -7121,7 +7755,7 @@ app.get('/api/admin/orders', authenticate, requireRole(['admin', 'super_admin'])
     res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error fetching admin orders:', err);
-    res.status(500).json({ error: 'Failed to fetch orders', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Failed to fetch orders', message: (process.env.NODE_ENV === 'production' ? '주문 조회에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
   }
 });
 
@@ -7181,7 +7815,7 @@ app.patch('/api/admin/orders/:id/status', authenticate, requireRole(['admin', 's
     res.json({ success: true, data, message: 'Order status updated successfully', timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error updating order status:', err);
-    res.status(500).json({ error: 'Failed to update order status', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Failed to update order status', message: (process.env.NODE_ENV === 'production' ? '주문 상태 변경에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
   }
 });
 
@@ -9705,6 +10339,76 @@ app.delete('/api/wishlist/:productId', authenticate, async (req, res) => {
 });
 
 // ============================================
+// 관심 카테고리 신상품 알림 (제안서 5절 "개인화 푸시/알림톡 캠페인 자동화") - 기존 마케팅 자동화 규칙 엔진
+// (등급/구매마일스톤 기반 쿠폰 자동발급)과는 별개로, 재입고/가격추적과 같은 "이벤트 발생 시 알림" 패턴을 그대로 재사용한다.
+// 신상품이 등록되는 순간, 같은 카테고리의 다른 상품을 찜해본 적 있는 회원들에게 인앱 알림을 보낸다.
+// (구매 이력까지 함께 스캔하면 신호는 더 넓어지지만 상품 등록마다 전체 주문을 훑어야 해 비용이 커지므로,
+// 우선은 찜 신호만으로 시작한다 - 필요하면 나중에 구매 이력 기반으로 확장 가능하도록 함수를 분리해두었다.)
+async function triggerCategoryInterestNotifications(newProductId, newProductName, category) {
+  try {
+    if (!category) return;
+    const { data: categoryProducts } = await supabase
+      .from('products_with')
+      .select('id')
+      .eq('category', category)
+      .eq('status', 'active')
+      .neq('id', newProductId);
+    const categoryProductIds = (categoryProducts || []).map(p => p.id);
+    if (categoryProductIds.length === 0) return; // 같은 카테고리에 다른 상품이 없으면 찜할 기회 자체가 없었으므로 대상도 없다
+
+    const { data: wishlisters } = await supabase.from('wishlist_with').select('user_id').in('product_id', categoryProductIds);
+    const userIds = [...new Set((wishlisters || []).map(w => w.user_id))];
+    if (userIds.length === 0) return;
+
+    const notifRows = userIds.map(uid => ({
+      user_id: uid,
+      type: 'category_interest',
+      title: '관심 카테고리 신상품 입고',
+      message: `관심 있으셨던 카테고리에 새 상품 "${newProductName}"이(가) 들어왔어요!`,
+      link: `/product/${newProductId}`
+    }));
+    await supabase.from('notifications_with').insert(notifRows);
+  } catch (err) {
+    console.error('Error triggering category interest notifications:', err);
+  }
+}
+
+// 가격 추적(가격 하락) 알림 (제안서 5절 "가격 하락/재입고 알림") - 재입고 알림과 완전히 같은 인프라(알림 인프라 재사용)를 쓰되,
+// 별도 "가격 추적 신청" 버튼/테이블 없이 이미 있는 찜(위시리스트) 목록을 그대로 추적 대상으로 재사용한다(제안서가 권장한 방식).
+// 상품 가격이 실제로 "내려갈 때"(관리자가 PUT /api/products/:id로 가격을 수정하는 시점)만 트리거되므로,
+// 같은 가격으로 다시 저장해도 "내려갔다"는 조건 자체가 성립하지 않아 중복 알림이 생기지 않는다.
+// 가격 비교/최저가 이력 (제안서 6절 "가격 비교/최저가 이력") - 가격이 실제로 바뀔 때마다 스냅샷을 남겨서,
+// 나중에 "최근 N일 최저가 대비 지금 얼마나 저렴한지"를 정직하게 보여줄 수 있게 한다.
+async function recordPriceHistory(productId, price, discountPrice) {
+  try {
+    await supabase.from('product_price_history_with').insert({ product_id: productId, price, discount_price: discountPrice === undefined ? null : discountPrice });
+  } catch (err) {
+    console.error('Error recording price history:', err);
+  }
+}
+
+function effectivePriceOf(p) {
+  const price = Number(p && p.price) || 0;
+  const dp = p && p.discount_price !== null && p.discount_price !== undefined ? Number(p.discount_price) : null;
+  return (dp !== null && Number.isFinite(dp) && dp < price) ? dp : price;
+}
+async function triggerPriceDropNotifications(productId, productName, oldEffectivePrice, newEffectivePrice) {
+  try {
+    const { data: wishlisters, error } = await supabase.from('wishlist_with').select('user_id').eq('product_id', productId);
+    if (error || !wishlisters || wishlisters.length === 0) return;
+    const notifRows = wishlisters.map(w => ({
+      user_id: w.user_id,
+      type: 'price_drop',
+      title: '찜한 상품 가격 인하',
+      message: `찜하신 "${productName}"의 가격이 ${Math.round(oldEffectivePrice).toLocaleString('ko-KR')}원에서 ${Math.round(newEffectivePrice).toLocaleString('ko-KR')}원으로 내렸습니다!`,
+      link: `/product/${productId}`
+    }));
+    await supabase.from('notifications_with').insert(notifRows);
+  } catch (err) {
+    console.error('Error triggering price drop notifications:', err);
+  }
+}
+
 // 재입고 알림 신청 + 인앱 알림
 // - 실제 이메일/SMS/푸시 발송 인프라가 없으므로, 정직하게 "사이트 안에서 확인하는 알림"으로 구현한다.
 //   품절 상품에 신청해두면, 관리자가 재고를 채워 넣는 순간(재고가 0 이하 -> 양수로 바뀌는 순간) 알림이 생성되고,
@@ -10226,62 +10930,257 @@ async function getBestsellingProducts(limit, excludeIds) {
   return { data: ordered, basis: 'bestseller' };
 }
 
-// 개인화 추천: 구매 이력(가중치 3) + 찜 목록(가중치 2)으로 관심 카테고리를 산출해 그 카테고리의
-// (아직 사지 않은) 상품을 추천한다. 신호가 전혀 없으면 정직하게 베스트셀러로 대체한다.
+// 개인화 추천 1단계: 구매(5) + 장바구니담음-미구매(3) + 찜(2) + 리뷰작성(2) + 클릭-30초이상체류(1.5)
+// + 클릭(0.5) - 장바구니삭제-미구매(-1) 다섯(+2) 개 신호를 카테고리 단위로 합산해 관심 카테고리를 산출하고,
+// 그 카테고리의 (아직 사지 않은) 상품을 추천한다. 신호가 전혀 없으면 정직하게 베스트셀러로 대체한다.
+// (설계 근거: WITH+_개인화추천_알고리즘_고도화_제안서.md 3-2절 가중치 표)
+const RECO_WEIGHTS = {
+  purchase: 5,
+  cartAddUnpurchased: 3,
+  wishlist: 2,
+  review: 2,
+  viewLongDwell: 1.5,
+  view: 0.5,
+  cartRemoveUnpurchased: -1,
+  // 실시간 개인화(제안서 5절 "세션 내 즉각 반영") - 이번 세션에서 방금 본 상품에 주는 가중치.
+  // viewLongDwell과 같은 크기로 둔다 - "방금, 지금" 봤다는 즉시성 자체가 진지하게 살펴본 것과 비슷한 무게의 신호이기 때문.
+  sessionRecent: 1.5
+};
+// 클라이언트가 한 번에 보낼 수 있는 "이번 세션에서 본 상품" 개수 상한 - 남용/과도한 쿼리 부하 방지
+const SESSION_RECENT_IDS_MAX = 5;
+function parseSessionRecentIds(raw) {
+  if (!raw) return [];
+  return String(raw).split(',').map(s => s.trim()).filter(Boolean).slice(0, SESSION_RECENT_IDS_MAX);
+}
+const RECO_INTERACTION_WINDOW_DAYS = 90; // 오래된 클릭/장바구니 이력은 지금 관심사를 대표하지 못하므로 최근 90일만 반영
+const RECO_LONG_DWELL_MS = 30000;
+
+// 2단계: 브랜드 선호 + 가격대 선호 (제안서 4절)
+// 브랜드는 카테고리와 같은 5개 신호·같은 가중치를 그대로 재사용하되, 카테고리보다 약한 보조 신호로 두기 위해
+// BRAND_WEIGHT_SCALE만큼 낮춰 합산한다(브랜드 데이터가 아직 일부 상품에만 채워져 있어 - 브랜드 없는 상품은 이 신호에서 완전히 제외됨).
+const BRAND_WEIGHT_SCALE = 0.6;
+// 가격대 선호는 회원이 관심을 보인 상품들의 가격 분포(평균±표준편차) 안에 드는 후보에 소폭 가산점을 주는 방식으로,
+// 카테고리/브랜드 신호를 뒤집지 않는 "미세 조정" 수준으로만 반영한다.
+const PRICE_RANGE_MATCH_BONUS = 1;
+const PRICE_RANGE_FALLBACK_RATIO = 0.3; // 가격 데이터가 1개뿐이라 표준편차를 구할 수 없을 때 ±30%를 대신 사용
+
+// 신호 수집(기록)과 추천 계산(사용)을 분리하는 설계 원칙에 따라, 회원의 5개 행동 신호를 모아
+// 카테고리 가중치로 변환하는 부분을 공용 함수로 뽑아둔다 - /api/me/recommendations와
+// /api/me/home-sections(섹션형 홈 화면)가 이 계산 결과를 함께 재사용한다.
+async function getPersonalizedSignals(userId, opts = {}) {
+  const sessionRecentIds = new Set((opts.sessionRecentIds || []).map(String));
+  const sinceIso = new Date(Date.now() - RECO_INTERACTION_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+  const [{ data: orders }, { data: wishlistRows }, { data: interactionRows }, { data: reviewRows }] = await Promise.all([
+    supabase.from('orders_with').select('items, created_at').eq('user_id', userId).not('status', 'in', '(cancelled,refunded)').order('created_at', { ascending: true }),
+    supabase.from('wishlist_with').select('product_id').eq('user_id', userId),
+    supabase.from('product_interactions_with').select('product_id, event_type, dwell_ms').eq('user_id', userId).gte('created_at', sinceIso),
+    supabase.from('product_reviews').select('product_id').eq('user_id', userId)
+  ]);
+
+  const purchasedProductIds = new Set();
+  // 상품별 구매 이력(수량 무관, 주문건 단위 날짜)을 모아둔다 - 재구매 주기 계산(3-4절)에 사용
+  const purchaseDatesByProduct = {};
+  (orders || []).forEach(o => (Array.isArray(o.items) ? o.items : []).forEach(it => {
+    if (!it.product_id) return;
+    const pid = String(it.product_id);
+    purchasedProductIds.add(pid);
+    if (!purchaseDatesByProduct[pid]) purchaseDatesByProduct[pid] = [];
+    purchaseDatesByProduct[pid].push(o.created_at);
+  }));
+  const wishlistProductIds = new Set((wishlistRows || []).map(w => String(w.product_id)));
+  const reviewedProductIds = new Set((reviewRows || []).map(r => String(r.product_id)));
+
+  // 클릭/장바구니 이력은 상품별로 묶어 "본 적 있는지", "30초 이상 봤는지", "담았다가 뺐는지"를 판단한다.
+  const viewedProductIds = new Set();
+  const longDwellProductIds = new Set();
+  const cartAddedProductIds = new Set();
+  const cartRemovedProductIds = new Set();
+  (interactionRows || []).forEach(ev => {
+    const pid = String(ev.product_id);
+    if (ev.event_type === 'view') viewedProductIds.add(pid);
+    if (ev.event_type === 'view_end' && Number(ev.dwell_ms) >= RECO_LONG_DWELL_MS) longDwellProductIds.add(pid);
+    if (ev.event_type === 'cart_add') cartAddedProductIds.add(pid);
+    if (ev.event_type === 'cart_remove') cartRemovedProductIds.add(pid);
+  });
+
+  const ownedIds = new Set([...purchasedProductIds, ...wishlistProductIds]);
+  const allSignalIds = new Set([
+    ...purchasedProductIds, ...wishlistProductIds, ...reviewedProductIds,
+    ...viewedProductIds, ...longDwellProductIds, ...cartAddedProductIds, ...cartRemovedProductIds,
+    ...sessionRecentIds
+  ]);
+
+  let categoryOf = {};
+  let brandOf = {};
+  let priceOf = {};
+  if (allSignalIds.size > 0) {
+    const { data: signalProducts } = await supabase.from('products_with').select('id, category, brand, price').in('id', [...allSignalIds]);
+    (signalProducts || []).forEach(p => {
+      categoryOf[p.id] = p.category;
+      if (p.brand) brandOf[p.id] = p.brand;
+      priceOf[p.id] = Number(p.price);
+    });
+  }
+
+  // 화면 예시(3-3절) 1번 섹션 "관심 있어 하는 상품"은 구매/찜이 아니라 순수하게 "최근 클릭/체류"만 반영한다.
+  const browseCategoryWeight = {};
+  const addBrowseWeight = (id, weight) => {
+    const cat = categoryOf[id];
+    if (cat) browseCategoryWeight[cat] = (browseCategoryWeight[cat] || 0) + weight;
+  };
+  longDwellProductIds.forEach(id => addBrowseWeight(id, RECO_WEIGHTS.viewLongDwell));
+  viewedProductIds.forEach(id => { if (!longDwellProductIds.has(id)) addBrowseWeight(id, RECO_WEIGHTS.view); });
+
+  // 2번 섹션 "회원님을 위한 추천"용 - 5개 신호를 모두 합산한 전체 가중치
+  const categoryWeight = {};
+  const addWeight = (id, weight) => {
+    const cat = categoryOf[id];
+    if (cat) categoryWeight[cat] = (categoryWeight[cat] || 0) + weight;
+  };
+  purchasedProductIds.forEach(id => addWeight(id, RECO_WEIGHTS.purchase));
+  wishlistProductIds.forEach(id => addWeight(id, RECO_WEIGHTS.wishlist));
+  reviewedProductIds.forEach(id => addWeight(id, RECO_WEIGHTS.review));
+  cartAddedProductIds.forEach(id => { if (!purchasedProductIds.has(id)) addWeight(id, RECO_WEIGHTS.cartAddUnpurchased); });
+  cartRemovedProductIds.forEach(id => { if (!purchasedProductIds.has(id)) addWeight(id, RECO_WEIGHTS.cartRemoveUnpurchased); });
+  longDwellProductIds.forEach(id => addWeight(id, RECO_WEIGHTS.viewLongDwell));
+  viewedProductIds.forEach(id => { if (!longDwellProductIds.has(id)) addWeight(id, RECO_WEIGHTS.view); });
+
+  // 브랜드 선호 - 카테고리와 완전히 같은 계산이지만 브랜드 값이 있는 상품만 대상으로 하고, 최종 합산 시 약하게(BRAND_WEIGHT_SCALE) 반영한다
+  const brandWeight = {};
+  const addBrandWeight = (id, weight) => {
+    const brand = brandOf[id];
+    if (brand) brandWeight[brand] = (brandWeight[brand] || 0) + weight;
+  };
+  purchasedProductIds.forEach(id => addBrandWeight(id, RECO_WEIGHTS.purchase));
+  wishlistProductIds.forEach(id => addBrandWeight(id, RECO_WEIGHTS.wishlist));
+  reviewedProductIds.forEach(id => addBrandWeight(id, RECO_WEIGHTS.review));
+  cartAddedProductIds.forEach(id => { if (!purchasedProductIds.has(id)) addBrandWeight(id, RECO_WEIGHTS.cartAddUnpurchased); });
+  cartRemovedProductIds.forEach(id => { if (!purchasedProductIds.has(id)) addBrandWeight(id, RECO_WEIGHTS.cartRemoveUnpurchased); });
+  longDwellProductIds.forEach(id => addBrandWeight(id, RECO_WEIGHTS.viewLongDwell));
+  viewedProductIds.forEach(id => { if (!longDwellProductIds.has(id)) addBrandWeight(id, RECO_WEIGHTS.view); });
+
+  // 실시간 개인화(제안서 5절 "세션 내 즉각 반영") - 클라이언트가 이번 세션에서 방금 본 상품 ID를 함께 보내오면,
+  // 서버 이력(product_interactions_with)에 아직 반영되지 않았어도(네트워크 지연/유실, view_end 발생 전 이탈 등)
+  // 곧바로 신호에 포함시킨다. 이미 기록된 조회 이력과 별개로 항상 더해준다 - "방금 봤다"는 즉시성 자체가 신호이기 때문.
+  sessionRecentIds.forEach(id => {
+    addBrowseWeight(id, RECO_WEIGHTS.sessionRecent);
+    addWeight(id, RECO_WEIGHTS.sessionRecent);
+    addBrandWeight(id, RECO_WEIGHTS.sessionRecent);
+  });
+
+  // 가격대 선호 - 관심을 보인 상품들의 가격 평균±표준편차로 "이 회원이 대략 이 가격대를 본다"는 범위를 구한다.
+  // 데이터가 1개뿐이면 표준편차가 0이 되어 범위가 너무 좁아지므로, 그럴 땐 ±30%를 대신 사용한다.
+  let priceRange = null;
+  const signalPrices = [...allSignalIds].map(id => priceOf[id]).filter(p => Number.isFinite(p) && p > 0);
+  if (signalPrices.length > 0) {
+    const mean = signalPrices.reduce((a, b) => a + b, 0) / signalPrices.length;
+    const variance = signalPrices.reduce((a, b) => a + (b - mean) * (b - mean), 0) / signalPrices.length;
+    const stddev = Math.sqrt(variance);
+    const halfRange = stddev > 0 ? stddev : mean * PRICE_RANGE_FALLBACK_RATIO;
+    priceRange = { min: Math.max(0, mean - halfRange), max: mean + halfRange };
+  }
+
+  return {
+    purchasedProductIds, wishlistProductIds, reviewedProductIds, purchaseDatesByProduct,
+    viewedProductIds, longDwellProductIds, cartAddedProductIds, cartRemovedProductIds,
+    ownedIds, allSignalIds, categoryOf, brandOf, browseCategoryWeight, categoryWeight, brandWeight, priceRange
+  };
+}
+
+// 카테고리 가중치 맵을 받아 그 카테고리의 활성 상품 중 excludeIds에 없는 것을 점수순으로 추려준다.
+// (섹션별로 "카테고리 가중치 → 후보 상품" 변환 로직이 반복되므로 공용 함수로 뽑아둔다)
+async function pickProductsByCategoryWeight(categoryWeight, excludeIds, limit) {
+  if (!categoryWeight || Object.keys(categoryWeight).length === 0) return [];
+  const { data: candidates } = await supabase
+    .from('products_with')
+    .select('*')
+    .eq('status', 'active')
+    .in('category', Object.keys(categoryWeight));
+
+  return (candidates || [])
+    .filter(p => !excludeIds || !excludeIds.has(String(p.id)))
+    .map(p => ({ product: p, score: (categoryWeight[p.category] || 0) + Number(p.rating || 0) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(s => s.product);
+}
+
+// "회원님을 위한 추천"용 - 카테고리 가중치에 브랜드 선호(약하게)와 가격대 선호(소폭 가산점)를 더해 점수를 매긴다.
+// 브랜드값이 없는 상품/가격 데이터가 없는 회원은 그 부분 가산점이 0이 될 뿐 전체 로직은 그대로 동작한다(정직한 대체).
+async function pickPersonalizedProducts(signals, excludeIds, limit) {
+  const { categoryWeight, brandWeight, priceRange } = signals;
+  if (!categoryWeight || Object.keys(categoryWeight).length === 0) return [];
+  const { data: candidates } = await supabase
+    .from('products_with')
+    .select('*')
+    .eq('status', 'active')
+    .in('category', Object.keys(categoryWeight));
+
+  return (candidates || [])
+    .filter(p => !excludeIds || !excludeIds.has(String(p.id)))
+    .map(p => {
+      let score = (categoryWeight[p.category] || 0) + Number(p.rating || 0);
+      if (p.brand && brandWeight && brandWeight[p.brand]) score += brandWeight[p.brand] * BRAND_WEIGHT_SCALE;
+      if (priceRange && Number(p.price) >= priceRange.min && Number(p.price) <= priceRange.max) score += PRICE_RANGE_MATCH_BONUS;
+      return { product: p, score };
+    })
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(s => s.product);
+}
+
+// 3단계: 전체 회원 구매 패턴 기반 협업 필터링 (제안서 4절 "다른 회원의 구매 패턴 기반 추천").
+// 회원 수가 아직 많지 않은 지금 단계에서는 완전한 회원간 유사도 행렬을 만드는 대신, "내가 구매한 상품들과
+// 같은 주문에 함께 담겼던 다른 상품"의 빈도를 전체 주문에서 집계하는 아이템 기반 협업 필터링으로 구현한다.
+// (frequently-bought-together와 계산 방식은 같지만, 상품 1개가 아니라 "이 회원이 산 모든 상품"을 기준으로
+// 집계하므로 결과적으로 "나와 비슷하게 구매한 다른 회원들이 산 상품"과 같은 효과를 낸다 - 겹치는 상품이
+// 많을수록(overlap.length) 더 강한 신호로 취급해, 우연히 1번 같이 산 것보다 여러 번 겹친 상품을 우선한다.)
+const COLLABORATIVE_ORDER_SCAN_LIMIT = 1000;
+async function pickCollaborativeProducts(purchasedProductIds, excludeIds, limit) {
+  if (!purchasedProductIds || purchasedProductIds.size === 0) return [];
+
+  const { data: orders } = await supabase
+    .from('orders_with')
+    .select('items')
+    .not('status', 'in', '(cancelled,refunded)')
+    .order('created_at', { ascending: false })
+    .limit(COLLABORATIVE_ORDER_SCAN_LIMIT);
+
+  const coScore = {};
+  (orders || []).forEach(o => {
+    const items = Array.isArray(o.items) ? o.items : [];
+    const ids = items.map(it => it.product_id).filter(Boolean).map(String);
+    const overlapCount = ids.filter(id => purchasedProductIds.has(id)).length;
+    if (overlapCount === 0) return; // 이 주문이 내 구매 이력과 겹치는 상품을 하나도 안 담았으면 신호 없음
+    ids.forEach(id => {
+      if (purchasedProductIds.has(id)) return; // 이미 산 상품은 추천하지 않는다
+      if (excludeIds && excludeIds.has(id)) return;
+      coScore[id] = (coScore[id] || 0) + overlapCount;
+    });
+  });
+
+  const topIds = Object.keys(coScore).sort((a, b) => coScore[b] - coScore[a]).slice(0, limit);
+  if (topIds.length === 0) return [];
+
+  const { data: products } = await supabase.from('products_with').select('*').in('id', topIds).eq('status', 'active');
+  const byId = {}; (products || []).forEach(p => { byId[p.id] = p; });
+  return topIds.map(id => byId[id]).filter(Boolean);
+}
+
 app.get('/api/me/recommendations', authenticate, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit, 10) || 12, 30);
+    const signals = await getPersonalizedSignals(req.user.id, { sessionRecentIds: parseSessionRecentIds(req.query.session_recent_ids) });
 
-    const [{ data: orders }, { data: wishlistRows }] = await Promise.all([
-      supabase.from('orders_with').select('items').eq('user_id', req.user.id).not('status', 'in', '(cancelled,refunded)'),
-      supabase.from('wishlist_with').select('product_id').eq('user_id', req.user.id)
-    ]);
-
-    const purchasedProductIds = new Set();
-    (orders || []).forEach(o => (Array.isArray(o.items) ? o.items : []).forEach(it => { if (it.product_id) purchasedProductIds.add(String(it.product_id)); }));
-    const wishlistProductIds = new Set((wishlistRows || []).map(w => String(w.product_id)));
-
-    const ownedIds = new Set([...purchasedProductIds, ...wishlistProductIds]);
-
-    if (ownedIds.size === 0) {
-      const { data, basis } = await getBestsellingProducts(limit, ownedIds);
+    if (signals.allSignalIds.size === 0) {
+      const { data, basis } = await getBestsellingProducts(limit, signals.ownedIds);
       return res.json({ success: true, data, basis, timestamp: new Date().toISOString() });
     }
 
-    // 관심 있었던(구매/찜) 상품들의 카테고리를 조회해 가중치 맵을 만든다
-    const { data: ownedProducts } = await supabase.from('products_with').select('id, category').in('id', [...ownedIds]);
-    const categoryOf = {}; (ownedProducts || []).forEach(p => { categoryOf[p.id] = p.category; });
-
-    const categoryWeight = {};
-    purchasedProductIds.forEach(id => {
-      const cat = categoryOf[id];
-      if (cat) categoryWeight[cat] = (categoryWeight[cat] || 0) + 3;
-    });
-    wishlistProductIds.forEach(id => {
-      const cat = categoryOf[id];
-      if (cat) categoryWeight[cat] = (categoryWeight[cat] || 0) + 2;
-    });
-
-    if (Object.keys(categoryWeight).length === 0) {
-      const { data, basis } = await getBestsellingProducts(limit, ownedIds);
-      return res.json({ success: true, data, basis, timestamp: new Date().toISOString() });
-    }
-
-    const { data: candidates } = await supabase
-      .from('products_with')
-      .select('*')
-      .eq('status', 'active')
-      .in('category', Object.keys(categoryWeight));
-
-    const scored = (candidates || [])
-      .filter(p => !ownedIds.has(String(p.id)))
-      .map(p => ({ product: p, score: (categoryWeight[p.category] || 0) + Number(p.rating || 0) }))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, limit)
-      .map(s => s.product);
-
+    const scored = await pickPersonalizedProducts(signals, signals.ownedIds, limit);
     if (scored.length === 0) {
-      const { data, basis } = await getBestsellingProducts(limit, ownedIds);
+      const { data, basis } = await getBestsellingProducts(limit, signals.ownedIds);
       return res.json({ success: true, data, basis, timestamp: new Date().toISOString() });
     }
 
@@ -10301,6 +11200,140 @@ app.get('/api/recommendations/popular', async (req, res) => {
   } catch (err) {
     console.error('Error fetching popular products:', err);
     res.status(500).json({ error: 'Failed to fetch popular products', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 재구매 후보 계산: 2번 이상 산 상품은 평균 구매 간격으로 "예상 재구매일"을 추정하고, 얼마나 임박/지났는지로
+// 정렬한다. 1번만 산 상품은 주기를 알 수 없으므로 최근 구매순으로만 정렬해 "다시 구매해보세요" 후보로 쓴다.
+// (제안서 3-4절의 재구매 주기 공식과 동일: 평균 구매 간격 = (마지막 구매일 - 첫 구매일) / (구매 횟수 - 1))
+function rankRepurchaseCandidates(purchaseDatesByProduct) {
+  const now = Date.now();
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const repeat = [];
+  const singlePurchase = [];
+  Object.keys(purchaseDatesByProduct).forEach(pid => {
+    const dates = (purchaseDatesByProduct[pid] || []).map(d => new Date(d).getTime()).filter(t => !isNaN(t)).sort((a, b) => a - b);
+    if (dates.length === 0) return;
+    const last = dates[dates.length - 1];
+    if (dates.length >= 2) {
+      const first = dates[0];
+      const avgIntervalMs = (last - first) / (dates.length - 1);
+      const expectedNext = last + avgIntervalMs;
+      repeat.push({ productId: pid, purchaseCount: dates.length, expectedNext, daysUntilExpected: (expectedNext - now) / DAY_MS });
+    } else {
+      singlePurchase.push({ productId: pid, lastPurchasedAt: last });
+    }
+  });
+  // 예상 재구매일이 임박했거나 이미 지난 상품을 우선(오름차순 - 가장 급한 것부터), 그다음 구매 횟수가 많은 순
+  repeat.sort((a, b) => a.daysUntilExpected - b.daysUntilExpected || b.purchaseCount - a.purchaseCount);
+  singlePurchase.sort((a, b) => b.lastPurchasedAt - a.lastPurchasedAt);
+  return { repeat, singlePurchase };
+}
+
+// 개인화 홈 화면 - 알고리즘이 바뀌어도(규칙 기반 → AI 등) 화면 쪽을 다시 손대지 않도록,
+// 상품 배열이 아니라 { section_key, title, subtitle, products } 섹션 목록으로 응답한다.
+// 신호가 부족해 채울 수 없는 섹션은 억지로 채우지 않고 아예 숨긴다(정직한 추천).
+// 로그인 여부와 무관하게 호출 가능 - 비로그인/신규 회원은 인기 상품 한 섹션만 내려준다.
+app.get('/api/me/home-sections', optionalAuth, async (req, res) => {
+  try {
+    const sectionLimit = Math.min(parseInt(req.query.limit, 10) || 8, 20);
+    const sections = [];
+
+    if (!req.user) {
+      const { data } = await getBestsellingProducts(sectionLimit, null);
+      if (data.length > 0) sections.push({ section_key: 'popular', title: '🔥 지금 인기 있는 상품', subtitle: '많은 분들이 찾고 있어요', products: data });
+      return res.json({ success: true, sections, timestamp: new Date().toISOString() });
+    }
+
+    const signals = await getPersonalizedSignals(req.user.id, { sessionRecentIds: parseSessionRecentIds(req.query.session_recent_ids) });
+
+    if (signals.allSignalIds.size === 0) {
+      // 완전 신규 회원(구매/찜/클릭 이력 없음) - 정직하게 인기 상품만 노출
+      const { data } = await getBestsellingProducts(sectionLimit, null);
+      if (data.length > 0) sections.push({ section_key: 'popular', title: '🔥 지금 인기 있는 상품', subtitle: '많은 분들이 찾고 있어요', products: data });
+      return res.json({ success: true, sections, timestamp: new Date().toISOString() });
+    }
+
+    // 총 가중치(RECO_WEIGHTS 합산)를 공통 단위로 써서 섹션마다 "이 회원에게 얼마나 근거가 강한 섹션인지" 점수를 매긴다.
+    // 이 점수로 아래에서 섹션 순서 자체를 회원별로 재배열한다(제안서 6절 "개인화 홈 = 회원마다 다른 화면" 권고 반영).
+    const sumWeights = (weightMap) => Object.values(weightMap || {}).reduce((a, b) => a + b, 0);
+
+    // 1) 👀 최근 클릭/체류 기반 관심 상품
+    const interestProducts = await pickProductsByCategoryWeight(signals.browseCategoryWeight, signals.ownedIds, sectionLimit);
+    if (interestProducts.length > 0) {
+      sections.push({ section_key: 'browse_interest', title: '👀 회원님이 관심 있어 하는 상품', subtitle: '최근 살펴보신 상품들과 비슷해요', products: interestProducts, _priority: sumWeights(signals.browseCategoryWeight) });
+    }
+
+    // 2) 💄 구매+찜+클릭+장바구니+리뷰 5개 신호를 합산한 개인화 추천 - 신호가 가장 많이 모이는 섹션이라 보통 우선순위가 가장 높다
+    const personalizedProducts = await pickPersonalizedProducts(signals, signals.ownedIds, sectionLimit);
+    if (personalizedProducts.length > 0) {
+      sections.push({ section_key: 'personalized', title: '💄 회원님을 위한 추천', subtitle: '취향에 맞춰 골라봤어요', products: personalizedProducts, _priority: sumWeights(signals.categoryWeight) });
+    }
+
+    // 3) 🛒 자주 구매하시는 상품 / 다시 구매하시겠어요? - 재구매 시점이 임박한 상품이 있으면 다른 신호 크기와 무관하게 최상단으로 올린다(긴급도 우선)
+    const { repeat, singlePurchase } = rankRepurchaseCandidates(signals.purchaseDatesByProduct);
+    const repurchaseOrdered = [...repeat.map(r => r.productId), ...singlePurchase.map(r => r.productId)].slice(0, sectionLimit);
+    if (repurchaseOrdered.length > 0) {
+      const { data: repurchaseProducts } = await supabase.from('products_with').select('*').in('id', repurchaseOrdered).eq('status', 'active');
+      const byId = {}; (repurchaseProducts || []).forEach(p => { byId[p.id] = p; });
+      const ordered = repurchaseOrdered.map(id => byId[id]).filter(Boolean);
+      if (ordered.length > 0) {
+        const hasDueSoon = repeat.some(r => r.daysUntilExpected <= 3);
+        sections.push({
+          section_key: 'repurchase',
+          title: hasDueSoon ? '🛒 다시 구매하실 때가 되지 않으셨나요?' : '🛒 자주 구매하시는 상품',
+          subtitle: '지난번에 구매하셨던 상품이에요',
+          products: ordered,
+          _priority: (hasDueSoon ? 1e6 : 0) + repeat.length * RECO_WEIGHTS.purchase + singlePurchase.length * (RECO_WEIGHTS.purchase / 2)
+        });
+      }
+    }
+
+    // 4) 🤝 3단계 - 전체 회원 구매 패턴 기반 협업 필터링("나와 비슷하게 구매한 다른 회원들이 산 상품")
+    const collaborativeProducts = await pickCollaborativeProducts(signals.purchasedProductIds, signals.ownedIds, sectionLimit);
+    if (collaborativeProducts.length > 0) {
+      sections.push({
+        section_key: 'collaborative',
+        title: '🤝 회원님과 비슷한 분들이 많이 구매한 상품',
+        subtitle: '함께 구매했던 다른 회원들의 선택이에요',
+        products: collaborativeProducts,
+        _priority: Math.min(signals.purchasedProductIds.size, 5) * RECO_WEIGHTS.purchase
+      });
+    }
+
+    // 5) 🔥 관심 카테고리 중 재고가 적거나 할인 중인 상품(한정수량 특가) - 마케팅성 섹션이라 같은 관심도라도 개인화 섹션보다는 살짝 낮게 둔다
+    const interestCategories = Object.keys(signals.categoryWeight).length > 0 ? Object.keys(signals.categoryWeight) : Object.keys(signals.browseCategoryWeight);
+    if (interestCategories.length > 0) {
+      const { data: dealCandidates } = await supabase
+        .from('products_with')
+        .select('*')
+        .eq('status', 'active')
+        .in('category', interestCategories)
+        .or('stock.lte.20,discount_price.not.is.null');
+      const deals = (dealCandidates || [])
+        .filter(p => !signals.ownedIds.has(String(p.id)))
+        .filter(p => Number(p.stock) <= 20 || (p.discount_price && Number(p.discount_price) < Number(p.price)))
+        .sort((a, b) => Number(a.stock || 0) - Number(b.stock || 0))
+        .slice(0, sectionLimit);
+      if (deals.length > 0) {
+        sections.push({ section_key: 'limited_deal', title: '🔥 회원님 취향의 한정수량 특가', subtitle: '얼마 남지 않았어요', products: deals, _priority: sumWeights(signals.categoryWeight) * 0.5 });
+      }
+    }
+
+    // 신호는 있었지만 (예: 이미 다 구매한 카테고리라) 채울 섹션이 하나도 없는 경우 - 정직하게 인기 상품으로 대체
+    if (sections.length === 0) {
+      const { data } = await getBestsellingProducts(sectionLimit, signals.ownedIds);
+      if (data.length > 0) sections.push({ section_key: 'popular', title: '🔥 지금 인기 있는 상품', subtitle: '많은 분들이 찾고 있어요', products: data, _priority: 0 });
+    }
+
+    // 섹션 순서를 관심도(_priority) 내림차순으로 재배열한 뒤, 응답에는 내부 계산용 필드를 노출하지 않는다.
+    sections.sort((a, b) => (b._priority || 0) - (a._priority || 0));
+    sections.forEach(s => { delete s._priority; });
+
+    res.json({ success: true, sections, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error building home sections:', err);
+    res.status(500).json({ error: 'Failed to build home sections', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
@@ -10382,6 +11415,101 @@ app.get('/api/products/:id/frequently-bought-together', async (req, res) => {
   } catch (err) {
     console.error('Error fetching frequently-bought-together:', err);
     res.status(500).json({ error: 'Failed to fetch frequently-bought-together', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 상품 상세 - "비슷한 상품" (제안서 4절 "상품 유사도" - 2단계). AI/임베딩 없이 규칙 기반으로:
+// 같은 카테고리 + 가격대 ±30% 이내면 가산점, 같은 브랜드면 더 큰 가산점, 평점 차이가 작을수록 가산점.
+// "함께 구매한 상품"(frequently-bought-together, 실제 동시구매 이력 기반)과는 성격이 달라 - 이쪽은 주문 이력이
+// 전혀 없는 신상품에도 즉시 동작한다(카테고리/가격/브랜드만으로 계산하므로).
+app.get('/api/products/:id/similar', async (req, res) => {
+  try {
+    const productId = req.params.id;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 8, 20);
+
+    const { data: base, error: baseErr } = await supabasePublic
+      .from('products_with')
+      .select('id, category, price, rating, brand')
+      .eq('id', productId)
+      .maybeSingle();
+    if (baseErr) throw baseErr;
+    if (!base) return res.json({ success: true, data: [], timestamp: new Date().toISOString() });
+
+    const basePrice = Number(base.price) || 0;
+    const priceMin = basePrice * 0.7;
+    const priceMax = basePrice * 1.3;
+    const baseRating = Number(base.rating || 0);
+
+    const { data: candidates, error: candErr } = await supabasePublic
+      .from('products_with')
+      .select('*')
+      .eq('status', 'active')
+      .eq('category', base.category)
+      .neq('id', productId);
+    if (candErr) throw candErr;
+
+    const scored = (candidates || [])
+      .map(p => {
+        let score = 0;
+        const price = Number(p.price) || 0;
+        if (basePrice > 0 && price >= priceMin && price <= priceMax) score += 2;
+        if (base.brand && p.brand && p.brand === base.brand) score += 3;
+        score -= Math.abs(Number(p.rating || 0) - baseRating) * 0.5; // 평점이 비슷할수록 유사(차이가 크면 감점)
+        return { product: p, score };
+      })
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(s => s.product);
+
+    res.json({ success: true, data: scored, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching similar products:', err);
+    res.status(500).json({ error: 'Failed to fetch similar products', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 가격 비교/최저가 이력 (제안서 6절) - 최근 N일간의 가격 스냅샷과, 지금 가격이 그 기간 최저가인지를 정직하게 알려준다.
+// 스냅샷이 하나도 없으면(막 등록된 상품 등) 지금 가격만을 기준으로 "최저가"로 취급한다 - 있지도 않은 과거를 지어내지 않는다.
+app.get('/api/products/:id/price-history', async (req, res) => {
+  try {
+    const productId = req.params.id;
+    const days = Math.min(parseInt(req.query.days, 10) || 90, 365);
+    const sinceIso = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: product, error: productErr } = await supabasePublic
+      .from('products_with')
+      .select('price, discount_price')
+      .eq('id', productId)
+      .maybeSingle();
+    if (productErr) throw productErr;
+    if (!product) return res.json({ success: true, data: { days, history: [], lowest_price: null, current_price: null, is_lowest: false }, timestamp: new Date().toISOString() });
+
+    const { data: rows, error: historyErr } = await supabasePublic
+      .from('product_price_history_with')
+      .select('price, discount_price, changed_at')
+      .eq('product_id', productId)
+      .gte('changed_at', sinceIso)
+      .order('changed_at', { ascending: true });
+    if (historyErr) throw historyErr;
+
+    const currentEffective = effectivePriceOf(product);
+    const historyEffectivePrices = (rows || []).map(r => effectivePriceOf(r));
+    const lowestPrice = historyEffectivePrices.length > 0 ? Math.min(...historyEffectivePrices, currentEffective) : currentEffective;
+
+    res.json({
+      success: true,
+      data: {
+        days,
+        history: rows || [],
+        lowest_price: lowestPrice,
+        current_price: currentEffective,
+        is_lowest: currentEffective <= lowestPrice
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching price history:', err);
+    res.status(500).json({ error: 'Failed to fetch price history', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
@@ -10469,7 +11597,7 @@ app.post('/api/orders/:id/return-request', authenticate, async (req, res) => {
     res.status(201).json({ success: true, data, message: `${typeLabel} 신청이 접수되었습니다`, timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error creating return request:', err);
-    res.status(500).json({ error: 'Failed to create return request', message: err.message, timestamp: new Date().toISOString() });
+    res.status(500).json({ error: 'Failed to create return request', message: (process.env.NODE_ENV === 'production' ? '반품/교환 신청에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
   }
 });
 
@@ -10812,7 +11940,7 @@ app.get('/product/:id', async (req, res) => {
       `<meta name="twitter:card" content="${ogImage ? 'summary_large_image' : 'summary'}">`,
       `<meta name="twitter:title" content="${escapeHtmlAttr(title)}">`,
       `<meta name="twitter:description" content="${escapeHtmlAttr(ogDescription)}">`,
-      `<script type="application/ld+json">${JSON.stringify(productLd)}</script>`
+      `<script type="application/ld+json">${JSON.stringify(productLd).replace(/</g, '\u003c')}</script>`
     ].filter(Boolean).join('\n    ');
 
     res.send(PRODUCT_HTML_TEMPLATE.replace('<title>상품 상세 - WITH+</title>', metaBlock));
@@ -10908,9 +12036,17 @@ app.use((req, res) => {
 // 에러 핸들러
 // ============================================
 app.use((err, req, res, next) => {
+  // 🔒 프로덕션에서는 Postgres/내부 예외의 원본 메시지(err.message)를 응답에 그대로 노출하지 않는다.
+  // 원본 메시지는 서버 로그(console.error)에만 남기고, 클라이언트에는 고정된 안전한 문구만 반환한다.
+  // (주의: 대부분의 개별 라우트가 이 전역 핸들러로 next(err)를 넘기지 않고 자체적으로
+  // res.status(500).json({ message: err.message, ... })를 직접 호출하는 구조라, 이 핸들러는
+  // next(err)를 명시적으로 호출하는 일부 라우트/미들웨어 예외에만 적용된다 - 나머지는 개별 라우트에서
+  // 별도로 고쳐야 한다.)
   console.error('Error:', err);
+  const isProd = process.env.NODE_ENV === 'production';
   res.status(err.status || 500).json({
-    error: err.message || 'Internal Server Error',
+    error: isProd ? 'Internal Server Error' : (err.message || 'Internal Server Error'),
+    message: isProd ? '서버 오류가 발생했습니다' : (err.message || 'Internal Server Error'),
     timestamp: new Date().toISOString()
   });
 });

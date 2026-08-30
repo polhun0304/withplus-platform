@@ -184,6 +184,19 @@
                 const p = json.data;
                 WithPlus.recordRecentlyViewed(p.id);
 
+                // 개인화 추천을 위한 조회 이벤트 기록: 진입 시 view, 페이지를 벗어날 때 view_end + 체류시간(ms)
+                // visibilitychange(hidden)와 pagehide 양쪽에 걸어 브라우저 뒤로가기/탭전환/새로고침 어느 경우든 놓치지 않게 한다.
+                WithPlus.recordInteraction('view', p.id, { category: p.category });
+                const __viewStartedAt = Date.now();
+                let __viewEndSent = false;
+                function __sendViewEnd() {
+                    if (__viewEndSent) return;
+                    __viewEndSent = true;
+                    WithPlus.recordInteraction('view_end', p.id, { category: p.category, dwell_ms: Date.now() - __viewStartedAt }, { keepalive: true });
+                }
+                document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') __sendViewEnd(); });
+                window.addEventListener('pagehide', __sendViewEnd);
+
                 document.title = p.name + ' - WITH+';
                 document.getElementById('breadcrumb-current').textContent = p.name;
 
@@ -243,6 +256,7 @@
                                 ${hasDiscount ? `<span class="detail-original-price">${WithPlus.formatPrice(p.price)}</span><span class="detail-discount">${discountRate}%</span>` : ''}
                                 <span class="detail-price">${WithPlus.formatPrice(currentPrice)}</span>
                             </div>
+                            <p id="price-history-badge" style="font-size:0.85em; margin:-8px 0 12px; color:var(--text-gray);"></p>
                             <div class="mileage-box">
                                 이 상품 구매 시 <strong>개인 마일리지 ${personalMileage.toLocaleString('ko-KR')}원(${personalPct}%)</strong> +
                                 커뮤니티 참여 시 <strong>추가 ${communityMileage.toLocaleString('ko-KR')}원(${communityPct}%)</strong>이 적립됩니다.
@@ -250,6 +264,7 @@
                             <p class="detail-desc">${WithPlus.escapeHtml(p.description || '상품 설명이 준비 중입니다.')}</p>
                             ${variantSelectHtml}
                             <p class="stock-info" id="stock-info-text">${hasVariants ? '옵션을 선택하면 재고를 확인할 수 있어요' : (outOfStock ? '❌ 현재 품절된 상품입니다' : '✅ 재고 ' + p.stock + '개 남음 | 배송비 무료')}</p>
+                            <p class="stock-info" id="shipping-badge-text" style="color:#2e7d32;">${hasVariants ? '' : (WithPlus.getShippingBadgeLabel(p.stock) || '')}</p>
                             <div class="qty-row">
                                 <div class="qty-control">
                                     <button type="button" id="qty-minus">−</button>
@@ -316,6 +331,11 @@
                         <div class="fbt-scroll" id="fbt-scroll"></div>
                     </div>
 
+                    <div class="fbt-section" id="similar-products-section" style="display:none;">
+                        <h2>🔎 비슷한 상품</h2>
+                        <div class="fbt-scroll" id="similar-products-scroll"></div>
+                    </div>
+
                     <div class="fbt-section" id="supplier-products-section" style="display:none;">
                         <h2 id="supplier-products-title">🏭 이 공급사의 다른 상품</h2>
                         <div class="fbt-scroll" id="supplier-products-scroll"></div>
@@ -323,6 +343,7 @@
 
                     <div class="reviews-section">
                         <h2>⭐ 상품 리뷰 (${reviewCount})</h2>
+                        ${p.review_satisfaction && p.review_satisfaction.percent !== null ? `<p style="color:var(--primary-color); font-weight:600; margin:-8px 0 16px;">✅ 구매자 ${p.review_satisfaction.percent}% 만족 <span style="font-weight:400; color:var(--text-gray); font-size:0.85em;">(구매인증 리뷰 ${p.review_satisfaction.verified_count}건 기준)</span></p>` : ''}
                         <div id="review-write-area"></div>
                         <div id="reviews-list">${reviewsHtml}</div>
                     </div>
@@ -376,6 +397,7 @@
                 const buyBtn = document.getElementById('detail-buy-btn');
                 const priceEl = document.querySelector('.detail-price');
                 const stockInfoEl = document.getElementById('stock-info-text');
+                const shippingBadgeEl = document.getElementById('shipping-badge-text');
                 if (variantSelectEl) {
                     variantSelectEl.addEventListener('change', () => {
                         const opt = variantSelectEl.selectedOptions[0];
@@ -395,6 +417,7 @@
                             cartBtn.disabled = false;
                             buyBtn.disabled = false;
                         }
+                        if (shippingBadgeEl) shippingBadgeEl.textContent = WithPlus.getShippingBadgeLabel(selectedVariantStock) || '';
                     });
                 }
 
@@ -412,6 +435,19 @@
                     WithPlus.addToCart(p.id, parseInt(qtyInput.value, 10) || 1, selectedVariantId);
                     location.href = '/cart';
                 });
+
+                // 재구매 알림 딥링크(?reorder=1)로 들어온 경우 바로 장바구니에 담아준다 ("쿠팡 바로구매" 경험).
+                // 옵션이 있는 상품은 어떤 옵션인지 알 수 없으므로 자동으로 담지 않고 옵션 선택을 안내만 한다.
+                if (new URLSearchParams(location.search).get('reorder') === '1' && !outOfStock) {
+                    if (!hasVariants) {
+                        WithPlus.addToCart(p.id, 1, null);
+                        const cartBtnEl = document.getElementById('detail-cart-btn');
+                        if (cartBtnEl) { cartBtnEl.textContent = '✓ 장바구니에 다시 담았습니다'; setTimeout(() => { cartBtnEl.textContent = '장바구니 담기'; }, 3000); }
+                    } else {
+                        const stockInfoEl2 = document.getElementById('stock-info-text');
+                        if (stockInfoEl2) stockInfoEl2.textContent = '다시 구매하시려면 옵션을 선택해주세요';
+                    }
+                }
 
                 // 재입고 알림 신청 (품절 상품에만 표시됨)
                 const restockBtn = document.getElementById('restock-notify-btn');
@@ -546,6 +582,52 @@
                             </a>`;
                         }).join('');
                         section.style.display = '';
+                    } catch (err) { /* 실패해도 상품 상세 화면 전체에는 지장 없음 */ }
+                })();
+
+                // 🔎 비슷한 상품 (카테고리+가격대+브랜드 기반 규칙 유사도) - 주문 이력이 없는 신상품에도 바로 동작함
+                (async () => {
+                    try {
+                        const res = await fetch(`/api/products/${p.id}/similar?limit=8`);
+                        const json = await res.json();
+                        if (!res.ok || !json.success || !json.data || json.data.length === 0) return;
+                        const section = document.getElementById('similar-products-section');
+                        const scroll = document.getElementById('similar-products-scroll');
+                        scroll.innerHTML = json.data.map(sp => {
+                            const simImg = Array.isArray(sp.images_urls) && sp.images_urls.length > 0 ? sp.images_urls[0] : null;
+                            const simEmoji = (WithPlus.CATEGORY_EMOJI && (WithPlus.CATEGORY_EMOJI[sp.category] || WithPlus.CATEGORY_EMOJI.default)) || '🛍️';
+                            const simHasDiscount = sp.discount_price && Number(sp.discount_price) < Number(sp.price);
+                            const simPrice = simHasDiscount ? sp.discount_price : sp.price;
+                            return `
+                            <a class="fbt-card" href="/product/${WithPlus.escapeHtml(sp.id)}">
+                                <div class="fbt-image" ${simImg ? `style="background-image:url('${WithPlus.safeUrlAttr(simImg)}');"` : ''}>${simImg ? '' : simEmoji}</div>
+                                <div class="fbt-name">${WithPlus.escapeHtml(sp.name)}</div>
+                                <div class="fbt-price">${WithPlus.formatPrice(simPrice)}</div>
+                            </a>`;
+                        }).join('');
+                        section.style.display = '';
+                    } catch (err) { /* 실패해도 상품 상세 화면 전체에는 지장 없음 */ }
+                })();
+
+                // 💰 가격 비교/최저가 이력 (제안서 6절) - 지금 가격이 최근 90일 중 최저가인지 정직하게 보여준다.
+                // 스냅샷이 아직 없는(막 등록된) 상품은 API가 지금 가격을 기준으로 "최저가"라고 응답하므로 자연스럽게 배지가 뜬다.
+                (async () => {
+                    try {
+                        const res = await fetch(`/api/products/${p.id}/price-history?days=90`);
+                        const json = await res.json();
+                        if (!res.ok || !json.success) return;
+                        const badge = document.getElementById('price-history-badge');
+                        if (!badge) return;
+                        const { is_lowest, lowest_price, current_price, history } = json.data;
+                        if (history.length === 0 && is_lowest) return; // 비교할 과거 이력 자체가 없으면 굳이 배지를 띄우지 않는다
+                        if (is_lowest) {
+                            badge.textContent = '📉 최근 90일 중 최저가예요!';
+                            badge.style.color = 'var(--primary-color)';
+                            badge.style.fontWeight = '600';
+                        } else if (Number(lowest_price) > 0) {
+                            const diffPercent = Math.round(((Number(current_price) - Number(lowest_price)) / Number(lowest_price)) * 100);
+                            badge.textContent = `최근 90일 최저가(${WithPlus.formatPrice(lowest_price)}) 대비 ${diffPercent}% 높아요`;
+                        }
                     } catch (err) { /* 실패해도 상품 상세 화면 전체에는 지장 없음 */ }
                 })();
 
