@@ -521,6 +521,18 @@
         </div>
     </div>
 
+    <!-- 감사로그 상세보기 모달 -->
+    <div class="modal-overlay" id="audit-detail-modal">
+        <div class="modal-box wide">
+            <h3>🕵️ 감사로그 상세</h3>
+            <div id="audit-detail-summary" style="font-size:0.9em; color:var(--text-gray); margin-bottom:10px; line-height:1.7;"></div>
+            <pre id="audit-detail-body" style="background:#f7f7f7; border:1px solid #eee; border-radius:6px; padding:12px; max-height:420px; overflow:auto; font-size:0.82em; white-space:pre-wrap; word-break:break-all; margin:0;"></pre>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" id="audit-detail-close">닫기</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 창고 로케이션 수정 모달 -->
     <div class="modal-overlay" id="location-edit-modal">
         <div class="modal-box">
@@ -3280,7 +3292,13 @@
                             tableArea.querySelectorAll('.audit-detail-btn').forEach(btn => {
                                 btn.addEventListener('click', () => {
                                     const row = rows[Number(btn.dataset.idx)];
-                                    alert(`[${row.method}] ${row.path}\n관리자: ${row.admin_email || row.admin_id}\n시각: ${new Date(row.created_at).toLocaleString('ko-KR')}\n상태코드: ${row.status_code}\n\n요청 내용:\n${JSON.stringify(row.body_snapshot, null, 2)}`);
+                                    document.getElementById('audit-detail-summary').innerHTML =
+                                        `<b>[${WithPlus.escapeHtml(row.method)}]</b> ${WithPlus.escapeHtml(row.path)}<br>` +
+                                        `관리자: ${WithPlus.escapeHtml(row.admin_email || row.admin_id)} (${WithPlus.escapeHtml(row.role)})<br>` +
+                                        `시각: ${new Date(row.created_at).toLocaleString('ko-KR')}<br>` +
+                                        `상태코드: ${row.status_code}`;
+                                    document.getElementById('audit-detail-body').textContent = JSON.stringify(row.body_snapshot, null, 2);
+                                    document.getElementById('audit-detail-modal').classList.add('open');
                                 });
                             });
 
@@ -3309,6 +3327,10 @@
                             loadAuditLog(1);
                         }
                     });
+
+                    const auditDetailModal = document.getElementById('audit-detail-modal');
+                    document.getElementById('audit-detail-close').addEventListener('click', () => auditDetailModal.classList.remove('open'));
+                    auditDetailModal.addEventListener('click', (e) => { if (e.target === auditDetailModal) auditDetailModal.classList.remove('open'); });
                 }
 
                 // ===== 📢 마케팅자동화 (세그먼트 캠페인 + 등급유지/구매마일스톤 자동 쿠폰, admin 이상) =====
