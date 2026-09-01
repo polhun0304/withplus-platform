@@ -9315,7 +9315,7 @@
                                 <h3>👑 아직 대표자가 지정되지 않았습니다</h3>
                                 <p style="font-size:0.85em; color:var(--text-gray);">서버 관리자(Render 환경변수에 접근할 수 있는 실제 대표자 본인)가 미리 설정해 둔 설정코드(OWNER_SETUP_CODE)를 입력하면, 지금 로그인한 이 계정이 대표자로 지정됩니다. 이 절차는 대표자가 한 명도 없을 때 딱 한 번만 사용할 수 있습니다.</p>
                                 ${status.setup_code_configured ? '' : '<p class="msg error">⚠️ 서버에 OWNER_SETUP_CODE가 설정되어 있지 않아 대표자 지정을 진행할 수 없습니다. Render 환경변수 설정이 먼저 필요합니다.</p>'}
-                                <div class="field"><label>설정코드</label><input type="password" id="om-setup-code" ${status.setup_code_configured ? '' : 'disabled'} placeholder="서버에 설정된 OWNER_SETUP_CODE"></div>
+                                <div class="field"><label>설정코드</label><input type="text" id="om-setup-code" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" ${status.setup_code_configured ? '' : 'disabled'} placeholder="서버에 설정된 OWNER_SETUP_CODE"></div>
                                 <button type="button" class="btn btn-primary" id="om-claim-btn" ${status.setup_code_configured ? '' : 'disabled'}>👑 대표자로 지정받기</button>
                                 <p class="msg" id="om-claim-msg"></p>
                             </div>`;
