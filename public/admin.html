@@ -1322,6 +1322,7 @@
                     ${(isAdmin || isProvider) ? '<button class="tab-btn" data-tab="wms">🏭 창고관리(WMS)</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="marketing">📢 마케팅자동화</button>' : ''}
                     ${isSuperAdmin ? '<button class="tab-btn" data-tab="audit-log">🕵️ 감사로그</button>' : ''}
+                    ${isSuperAdmin ? '<button class="tab-btn" data-tab="owner-management">👑 대표자 관리</button>' : ''}
                     ${isOwner ? '<button class="tab-btn" data-tab="pricing-policies">💹 가격정책 설정</button>' : ''}
                     ${isOwner ? '<button class="tab-btn" data-tab="owner-security">🔐 대표자 보안설정</button>' : ''}
                 </div>
@@ -1936,6 +1937,13 @@
                     <div class="subsection-title" style="margin-top:24px;">🔐 송금 방법 설정 (방법 A/B/C)</div>
                     <p style="color:var(--text-gray); font-size:0.85em;">분양조직 정산금을 실제로 송금하는 방법을 선택하고 설정합니다. 방법 A(수동 CSV)는 별도 설정 없이 "💵 분양조직 정산" 탭에서 항상 사용할 수 있고, 방법 B(오픈뱅킹)·C(정산대행 서비스)는 여기서 활성화해야 "⚡ 자동이체 실행" 버튼에서 선택할 수 있습니다. <strong>기본값은 테스트모드이며, 테스트모드에서는 실제로 송금되지 않고 시뮬레이션만 기록됩니다.</strong></p>
                     <div id="pp-area"><div class="state-box"><div class="emoji">🔒</div><h3>불러오려면 대표자 2단계 인증이 필요합니다</h3><button type="button" class="btn btn-secondary" id="pp-load-btn">🔓 인증하고 불러오기</button></div></div>
+                </div>` : ''}
+                ${isSuperAdmin ? `
+                <div class="tab-panel" id="tab-owner-management">
+                    <div class="panel-toolbar">
+                        <span style="color:var(--text-gray); font-size:0.9em;">대표자(is_owner) 계정을 지정/추가/해제하는 화면입니다. super_admin이면 대표자 여부와 무관하게 항상 볼 수 있습니다(최초 지정 전에도 접근할 수 있어야 하므로). 원가·마진율·분양조직 자동이체 등 민감 기능은 대표자만 접근할 수 있습니다.</span>
+                    </div>
+                    <div id="om-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                 </div>` : ''}
             `;
 
@@ -9270,6 +9278,153 @@
                     loadOwnerSecurityTab();
                 });
             }
+
+            // ============================================
+            // 👑 대표자 관리 - isSuperAdmin이면 대표자 여부와 무관하게 항상 보이는 탭(최초 부트스트랩에
+            // 필요하기 때문). 추가/해제는 위 isOwner 블록에서 정의된 대표자 2FA 스텝업(window.__ensureOwnerStepUp,
+            // sessionStorage 15분 보관)을 그대로 재사용한다 - 새로 만들지 않는다.
+            // ============================================
+            if (isSuperAdmin) {
+                // ownerFetch와 동일한 패턴(스텝업 토큰 헤더 부착 + 403 시 저장된 토큰 폐기)을 이 탭 전용으로 재구현한다.
+                // ownerFetch 자체는 isOwner 블록 안에서만 정의되어(대표자가 아직 없으면 그 블록이 아예 실행되지
+                // 않으므로) 여기서는 직접 접근할 수 없기 때문이다.
+                async function ownerManagementActionFetch(path, options) {
+                    const token = await window.__ensureOwnerStepUp();
+                    options = options || {};
+                    const res = await authedFetch(path, Object.assign({}, options, {
+                        headers: Object.assign({}, options.headers, { 'X-Cost-StepUp-Token': token })
+                    }));
+                    if (res.status === 403) {
+                        try { sessionStorage.removeItem('withplus_cost_stepup'); } catch (e) { /* no-op */ }
+                    }
+                    return res;
+                }
+
+                async function loadOwnerManagementTab() {
+                    const area = document.getElementById('om-area');
+                    area.innerHTML = '<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>';
+                    try {
+                        const { ok: statusOk, json: statusJson } = await authedFetch('/api/admin/owner/bootstrap-status');
+                        if (!statusOk || !statusJson.success) throw new Error(statusJson.message || '상태를 확인할 수 없습니다');
+                        const status = statusJson.data;
+
+                        let html = '';
+                        if (!status.owner_exists) {
+                            html += `
+                            <div class="state-box" style="text-align:left;">
+                                <h3>👑 아직 대표자가 지정되지 않았습니다</h3>
+                                <p style="font-size:0.85em; color:var(--text-gray);">서버 관리자(Render 환경변수에 접근할 수 있는 실제 대표자 본인)가 미리 설정해 둔 설정코드(OWNER_SETUP_CODE)를 입력하면, 지금 로그인한 이 계정이 대표자로 지정됩니다. 이 절차는 대표자가 한 명도 없을 때 딱 한 번만 사용할 수 있습니다.</p>
+                                ${status.setup_code_configured ? '' : '<p class="msg error">⚠️ 서버에 OWNER_SETUP_CODE가 설정되어 있지 않아 대표자 지정을 진행할 수 없습니다. Render 환경변수 설정이 먼저 필요합니다.</p>'}
+                                <div class="field"><label>설정코드</label><input type="password" id="om-setup-code" ${status.setup_code_configured ? '' : 'disabled'} placeholder="서버에 설정된 OWNER_SETUP_CODE"></div>
+                                <button type="button" class="btn btn-primary" id="om-claim-btn" ${status.setup_code_configured ? '' : 'disabled'}>👑 대표자로 지정받기</button>
+                                <p class="msg" id="om-claim-msg"></p>
+                            </div>`;
+                        }
+
+                        const { ok: listOk, json: listJson } = await authedFetch('/api/admin/owner/list');
+                        const owners = (listOk && listJson.success) ? listJson.data : [];
+
+                        html += `
+                        <div class="subsection-title" style="margin-top:${status.owner_exists ? '0' : '20px'};">현재 대표자</div>
+                        <table>
+                            <thead><tr><th>이메일</th><th>지정일시</th>${isOwner ? '<th>관리</th>' : ''}</tr></thead>
+                            <tbody>
+                                ${owners.length ? owners.map(o => `
+                                <tr>
+                                    <td>${WithPlus.escapeHtml(o.email)}</td>
+                                    <td>${o.owner_granted_at ? new Date(o.owner_granted_at).toLocaleString('ko-KR') : '-'}</td>
+                                    ${isOwner ? `<td><button type="button" class="btn btn-secondary btn-sm om-revoke-btn" data-id="${o.id}" data-email="${WithPlus.escapeHtml(o.email)}">해제</button></td>` : ''}
+                                </tr>`).join('') : `<tr><td colspan="${isOwner ? 3 : 2}" style="text-align:center; color:var(--text-gray);">대표자가 없습니다</td></tr>`}
+                            </tbody>
+                        </table>
+                        <p class="msg" id="om-revoke-msg"></p>`;
+
+                        if (isOwner) {
+                            html += `
+                            <div class="subsection-title" style="margin-top:20px;">새 대표자 추가</div>
+                            <p style="font-size:0.85em; color:var(--text-gray);">추가할 계정은 이미 가입되어 있고 super_admin 권한을 가지고 있어야 합니다(super_admin 승격은 이 화면에서 지원하지 않으며 DB에서 직접 처리해야 합니다). 이 작업은 대표자 2단계 인증이 필요합니다.</p>
+                            <div class="field" style="display:flex; gap:8px; align-items:flex-end;">
+                                <div style="flex:1;"><label>이메일</label><input type="email" id="om-grant-email" placeholder="owner@example.com"></div>
+                                <button type="button" class="btn btn-primary" id="om-grant-btn" style="height:34px;">추가</button>
+                            </div>
+                            <p class="msg" id="om-grant-msg"></p>`;
+                        }
+
+                        area.innerHTML = html;
+
+                        document.getElementById('om-claim-btn')?.addEventListener('click', async () => {
+                            const code = document.getElementById('om-setup-code').value;
+                            const msgEl = document.getElementById('om-claim-msg');
+                            msgEl.className = 'msg';
+                            if (!code) { msgEl.className = 'msg error'; msgEl.textContent = '설정코드를 입력해주세요'; return; }
+                            const btn = document.getElementById('om-claim-btn');
+                            btn.disabled = true;
+                            try {
+                                const { ok, json } = await authedFetch('/api/admin/owner/bootstrap-claim', { method: 'POST', body: JSON.stringify({ setup_code: code }) });
+                                if (!ok || !json.success) throw new Error(json.message || '지정에 실패했습니다');
+                                msgEl.className = 'msg success';
+                                msgEl.textContent = '✅ 대표자로 지정되었습니다. 화면을 새로고침합니다...';
+                                setTimeout(() => location.reload(), 1200);
+                            } catch (err) {
+                                msgEl.className = 'msg error';
+                                msgEl.textContent = err.message;
+                                btn.disabled = false;
+                            }
+                        });
+
+                        document.getElementById('om-grant-btn')?.addEventListener('click', async () => {
+                            const email = document.getElementById('om-grant-email').value.trim();
+                            const msgEl = document.getElementById('om-grant-msg');
+                            msgEl.className = 'msg';
+                            if (!email) { msgEl.className = 'msg error'; msgEl.textContent = '이메일을 입력해주세요'; return; }
+                            const btn = document.getElementById('om-grant-btn');
+                            btn.disabled = true;
+                            try {
+                                const { ok, json } = await ownerManagementActionFetch('/api/admin/owner/grant', { method: 'POST', body: JSON.stringify({ email }) });
+                                if (!ok || !json.success) throw new Error(json.message || '추가에 실패했습니다');
+                                msgEl.className = 'msg success';
+                                msgEl.textContent = '✅ ' + (json.message || '추가되었습니다');
+                                loadOwnerManagementTab();
+                            } catch (err) {
+                                if (err.message === 'CANCELLED') { btn.disabled = false; return; }
+                                msgEl.className = 'msg error';
+                                msgEl.textContent = err.message;
+                                btn.disabled = false;
+                            }
+                        });
+
+                        area.querySelectorAll('.om-revoke-btn').forEach(btn => {
+                            btn.addEventListener('click', async () => {
+                                const id = btn.dataset.id;
+                                const email = btn.dataset.email;
+                                if (!confirm(`${email} 계정의 대표자 지정을 해제할까요?`)) return;
+                                const msgEl = document.getElementById('om-revoke-msg');
+                                msgEl.className = 'msg';
+                                btn.disabled = true;
+                                try {
+                                    const { ok, json } = await ownerManagementActionFetch('/api/admin/owner/revoke', { method: 'POST', body: JSON.stringify({ userId: id }) });
+                                    if (!ok || !json.success) throw new Error(json.message || '해제에 실패했습니다');
+                                    msgEl.className = 'msg success';
+                                    msgEl.textContent = '✅ ' + (json.message || '해제되었습니다');
+                                    loadOwnerManagementTab();
+                                } catch (err) {
+                                    if (err.message === 'CANCELLED') { btn.disabled = false; return; }
+                                    msgEl.className = 'msg error';
+                                    msgEl.textContent = err.message;
+                                    btn.disabled = false;
+                                }
+                            });
+                        });
+                    } catch (err) {
+                        area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>불러오기 실패</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                    }
+                }
+
+                document.querySelector('[data-tab="owner-management"]')?.addEventListener('click', () => {
+                    loadOwnerManagementTab();
+                });
+            }
+
 
             // ===== 💹 채널별(쇼핑몰/라이브/도매) 최종 판매가 - admin/super_admin이면 원가 없이도 조회 가능 =====
             if (isAdmin) {

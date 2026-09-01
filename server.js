@@ -5784,6 +5784,234 @@ app.post('/api/admin/owner/verify-2fa', authenticate, handleOwnerStepUpVerify);
 app.post('/api/admin/owner/2fa/verify-otp', authenticate, handleOwnerStepUpVerify);
 
 // ============================================
+// 👑 대표자(is_owner) 지정 - 관리자 화면에서 완결되는 "최초 부트스트랩 + 이후 추가/해제" 흐름
+// ------------------------------------------------------------
+// is_owner를 처음 true로 지정하는 절차가 지금까지 관리자 화면에 전혀 없어서(원가/마진율/자동이체를
+// "대표자만" 볼 수 있게 만들어놔도 정작 그 대표자를 지정할 방법이 없었다), Supabase에 직접 SQL을 날려야
+// 했다. 이를 관리자 화면 안에서 끝낼 수 있게 하되, "super_admin이면 아무나 버튼 하나로 자기 자신을 대표자로
+// 지정"할 수 있게 만들면 원가 보호 모델 자체가 무의미해지므로(직원 계정이 super_admin 권한만 있으면 스스로
+// 대표자가 되어 원가를 볼 수 있게 됨), 최초 지정과 그 이후 지정을 다르게 보호한다:
+//   - 최초 지정(부트스트랩): 대표자가 0명일 때만, 서버 관리자(Render 환경변수 접근 권한자 = 실제 대표자
+//     본인)만 아는 OWNER_SETUP_CODE를 입력해야 한다. "관리자 화면 접근 권한"이 아니라 "서버 인프라 접근
+//     권한"을 가진 사람만 통제할 수 있는 유일한 통로다. 요청을 보낸 본인 계정에만 적용된다(다른 사람을
+//     대신 지정할 수 없다).
+//   - 이후 추가/해제: 이미 대표자가 있는 상태에서는 반드시 "현재 대표자"가 자기 2FA로 스텝업 인증을 통과한
+//     상태에서만(requireOwnerStepUp, 원가 조회와 동일한 미들웨어) 가능하다.
+// ============================================
+
+// 🔒 대표자 부트스트랩 설정코드 - 위의 다른 시크릿들(JWT_SECRET/OWNER_SECURITY_KEY 등)과 달리 런타임 임의값
+// 폴백을 절대 두지 않는다. 폴백을 두면 "서버를 재시작할 수 있는 사람"이 곧 "대표자를 자칭할 수 있는 사람"이
+// 되어버려서 부트스트랩을 보호하는 의미가 없어지기 때문이다. 미설정이면 부트스트랩 자체를 항상 거부한다.
+if (!process.env.OWNER_SETUP_CODE) {
+  console.error('[SECURITY WARNING] OWNER_SETUP_CODE 환경변수가 설정되지 않았습니다. 대표자가 아직 한 명도 지정되지 않은 상태라면, 이 값을 설정하기 전까지는 관리자 화면에서 대표자 최초 지정(부트스트랩)을 진행할 수 없습니다. Render 환경변수에 OWNER_SETUP_CODE를 설정해주세요(임의 폴백 없음 - 반드시 명시적으로 설정해야 합니다).');
+}
+
+// 상수 시간 문자열 비교 - verifyCostStepUpToken의 서명 비교(crypto.timingSafeEqual)와 동일한 패턴.
+// 길이가 다르면 그 자체로 이미 불일치이므로 그대로 false를 반환한다(기존 서명 비교 코드와 동일한 수준의 보호).
+function timingSafeEqualString(a, b) {
+  const aBuf = Buffer.from(String(a === undefined || a === null ? '' : a), 'utf8');
+  const bBuf = Buffer.from(String(b === undefined || b === null ? '' : b), 'utf8');
+  if (aBuf.length !== bBuf.length) return false;
+  return crypto.timingSafeEqual(aBuf, bBuf);
+}
+
+function maskOwnerEmail(email) {
+  if (!email || typeof email !== 'string' || !email.includes('@')) return null;
+  const [local, domain] = email.split('@');
+  const visible = local.slice(0, Math.min(2, local.length));
+  return `${visible}${'*'.repeat(Math.max(1, local.length - visible.length))}@${domain}`;
+}
+
+// 지금 대표자가 존재하는지 + (있다면) 마스킹된 이메일만 알려준다. super_admin이면 항상 접근 가능해야
+// 부트스트랩 화면 자체에 처음 진입할 수 있으므로(닭과 달걀 문제) requireOwnerStepUp이 아니라
+// requireRole(['super_admin'])만 건다.
+app.get('/api/admin/owner/bootstrap-status', authenticate, requireRole(['super_admin']), async (req, res) => {
+  try {
+    const { data: owners, error } = await supabase
+      .from('profiles')
+      .select('email, owner_granted_at')
+      .eq('is_owner', true)
+      .order('owner_granted_at', { ascending: true });
+    if (error) throw error;
+    const exists = Array.isArray(owners) && owners.length > 0;
+    res.json({
+      success: true,
+      data: {
+        owner_exists: exists,
+        owner_count: exists ? owners.length : 0,
+        first_owner_email_masked: exists ? maskOwnerEmail(owners[0].email) : null,
+        setup_code_configured: !!process.env.OWNER_SETUP_CODE
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('대표자 부트스트랩 상태 조회 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 대표자 목록 - "지금 누가 대표자인지"는 원가처럼 숫자가 새는 정보가 아니므로 admin/super_admin이면
+// 스텝업 없이 볼 수 있게 한다.
+app.get('/api/admin/owner/list', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: owners, error } = await supabase
+      .from('profiles')
+      .select('id, email, full_name, owner_granted_at')
+      .eq('is_owner', true)
+      .order('owner_granted_at', { ascending: true });
+    if (error) throw error;
+    res.json({ success: true, data: owners || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('대표자 목록 조회 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 최초 대표자 부트스트랩 - 대표자가 단 한 명도 없을 때만 통과한다. requireOwnerStepUp을 걸지 않는다(아직
+// 대표자가 없으니 애초에 스텝업 토큰을 발급받을 방법이 없다 - handleOwnerStepUpVerify도 profile.is_owner를
+// 요구한다). 대신 requireRole(['super_admin'])로 "관리자 화면에 super_admin으로 로그인은 되어 있는 사람"까지만
+// 걸러내고, 그 위에 OWNER_SETUP_CODE 검증을 추가로 요구한다.
+app.post('/api/admin/owner/bootstrap-claim', authenticate, requireRole(['super_admin']), async (req, res) => {
+  const ip = getClientIp(req);
+  try {
+    const { setup_code } = req.body || {};
+    // logAdminAction이 res.on('finish') 시점에 req.body를 그대로 감사로그에 스냅샷하므로(admin_audit_logs_with),
+    // 여기서 값을 사용한 직후 즉시 지워서 설정코드 원문이 평문으로 로그에 남지 않게 한다(성공/실패 무관).
+    const submittedCode = setup_code;
+    if (req.body) req.body.setup_code = '[REDACTED]';
+
+    if (!process.env.OWNER_SETUP_CODE) {
+      await logCostAudit({ profileId: req.user.id, action: 'owner_bootstrap_denied', detail: { reason: 'setup_code_not_configured' }, ip });
+      return res.status(503).json({
+        error: 'Service Unavailable',
+        message: '서버에 OWNER_SETUP_CODE가 설정되어 있지 않아 대표자 지정을 진행할 수 없습니다. Render 환경변수 설정이 먼저 필요합니다.',
+        timestamp: new Date().toISOString()
+      });
+    }
+    if (!submittedCode || !timingSafeEqualString(submittedCode, process.env.OWNER_SETUP_CODE)) {
+      await logCostAudit({ profileId: req.user.id, action: 'owner_bootstrap_denied', detail: { reason: 'code_mismatch' }, ip });
+      return res.status(403).json({ error: 'Forbidden', message: '설정코드가 올바르지 않습니다', timestamp: new Date().toISOString() });
+    }
+    // 레이스 컨디션 방지: 코드 검증을 통과한 뒤 "현재 대표자가 0명"인지 서버에서 다시 한번 확인한다
+    // (동시에 여러 super_admin이 부트스트랩을 시도할 가능성을 막는다).
+    const { count, error: countErr } = await supabase
+      .from('profiles')
+      .select('id', { count: 'exact', head: true })
+      .eq('is_owner', true);
+    if (countErr) throw countErr;
+    if (count && count > 0) {
+      await logCostAudit({ profileId: req.user.id, action: 'owner_bootstrap_denied', detail: { reason: 'owner_already_exists' }, ip });
+      return res.status(409).json({
+        error: 'Conflict',
+        message: '이미 대표자가 지정되어 있어 부트스트랩을 사용할 수 없습니다. 대표자 추가는 "대표자 관리" 화면에서 기존 대표자의 2단계 인증을 통해 진행해주세요.',
+        timestamp: new Date().toISOString()
+      });
+    }
+    // 반드시 요청을 보낸 본인 계정(req.user.id)에만 적용한다 - 다른 사람 계정을 지정하는 게 아니라
+    // "그 코드를 아는 사람이 로그인해서 직접 클레임한다"는 안전한 구조를 유지하기 위함이다.
+    const { error: updateErr } = await supabase
+      .from('profiles')
+      .update({ is_owner: true, owner_granted_at: new Date().toISOString() })
+      .eq('id', req.user.id);
+    if (updateErr) throw updateErr;
+    await logCostAudit({ profileId: req.user.id, action: 'owner_bootstrap_claimed', detail: {}, ip });
+    res.json({ success: true, message: '대표자로 지정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('대표자 부트스트랩 클레임 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 대표자 추가(공동대표 등) - 반드시 기존 대표자의 2FA 스텝업을 통과해야 한다.
+app.post('/api/admin/owner/grant', authenticate, requireOwnerStepUp, async (req, res) => {
+  const ip = getClientIp(req);
+  try {
+    const { email } = req.body || {};
+    if (!email || typeof email !== 'string' || !email.trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: '이메일을 입력해주세요', timestamp: new Date().toISOString() });
+    }
+    const { data: target, error: findErr } = await supabase
+      .from('profiles')
+      .select('id, email, role, is_owner')
+      .eq('email', email.trim())
+      .maybeSingle();
+    if (findErr) throw findErr;
+    if (!target) {
+      return res.status(404).json({ error: 'Not Found', message: '해당 이메일로 가입된 회원을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    if (target.is_owner) {
+      return res.status(400).json({ error: 'Bad Request', message: '이미 대표자로 지정된 계정입니다', timestamp: new Date().toISOString() });
+    }
+    // requireOwnerStepUp 자체가 "role === super_admin && is_owner === true"만 owner 기능을 쓸 수 있게 하므로,
+    // super_admin이 아닌 계정을 대표자로 지정하면 스텝업 토큰을 발급받아도 실제로는 어떤 owner 라우트도 통과할
+    // 수 없는 "이름뿐인 대표자"가 되어버린다. super_admin 승격은 이 관리자 화면에서 다루지 않는 영역이므로
+    // (/api/admin/members/:id/role 의 ALLOWED_ROLES에 super_admin이 없는 것과 동일한 이유 - "최고관리자 변경은
+    // DB에서 직접"), 대표자 지정도 "이미 super_admin인 계정"만 대상으로 한다.
+    if (target.role !== 'super_admin') {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: '대표자로 지정하려면 해당 계정이 먼저 super_admin 권한을 가지고 있어야 합니다. super_admin 승격은 관리자 화면에서 지원하지 않으며 DB에서 직접 처리해야 합니다.',
+        timestamp: new Date().toISOString()
+      });
+    }
+    const { error: updateErr } = await supabase
+      .from('profiles')
+      .update({ is_owner: true, owner_granted_at: new Date().toISOString() })
+      .eq('id', target.id);
+    if (updateErr) throw updateErr;
+    await logCostAudit({ profileId: req.user.id, action: 'owner_granted', detail: { target_id: target.id, target_email: target.email }, ip });
+    res.json({ success: true, message: `${target.email} 계정이 대표자로 지정되었습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('대표자 추가 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 대표자 해제 - 반드시 기존 대표자의 2FA 스텝업을 통과해야 하고, 마지막 남은 대표자는 해제할 수 없다
+// (0명이 되면 OWNER_SETUP_CODE 부트스트랩은 "최초 1회"만 허용되는 절차라 이 경로로는 다시 복구할 수 없어
+// 시스템이 잠긴다).
+app.post('/api/admin/owner/revoke', authenticate, requireOwnerStepUp, async (req, res) => {
+  const ip = getClientIp(req);
+  try {
+    const { userId } = req.body || {};
+    if (!userId) {
+      return res.status(400).json({ error: 'Bad Request', message: 'userId를 입력해주세요', timestamp: new Date().toISOString() });
+    }
+    const { data: target, error: findErr } = await supabase
+      .from('profiles')
+      .select('id, email, is_owner')
+      .eq('id', userId)
+      .maybeSingle();
+    if (findErr) throw findErr;
+    if (!target || !target.is_owner) {
+      return res.status(404).json({ error: 'Not Found', message: '대표자로 지정된 해당 계정을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    const { count, error: countErr } = await supabase
+      .from('profiles')
+      .select('id', { count: 'exact', head: true })
+      .eq('is_owner', true);
+    if (countErr) throw countErr;
+    if ((count || 0) <= 1) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: '마지막 남은 대표자는 해제할 수 없습니다. 먼저 다른 계정을 대표자로 추가한 뒤 해제해주세요.',
+        timestamp: new Date().toISOString()
+      });
+    }
+    const { error: updateErr } = await supabase
+      .from('profiles')
+      .update({ is_owner: false, owner_granted_at: null })
+      .eq('id', target.id);
+    if (updateErr) throw updateErr;
+    await logCostAudit({ profileId: req.user.id, action: 'owner_revoked', detail: { target_id: target.id, target_email: target.email }, ip });
+    res.json({ success: true, message: `${target.email} 계정의 대표자 지정이 해제되었습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('대표자 해제 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
 // 채널별 가격 정책/계산
 // ------------------------------------------------------------
 // 마진율(%) 자체는 원가와 마찬가지로 대표자 2FA 스텝업 없이는 어떤 API 응답에도 포함되지 않는다.
