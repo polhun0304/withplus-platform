@@ -1901,7 +1901,15 @@
                     <div class="panel-toolbar">
                         <span style="color:var(--text-gray); font-size:0.9em;">대표자 계정 전용 화면입니다. 원가/마진율 열람에 필요한 2단계 인증 수단을 여기서 등록/관리합니다.</span>
                     </div>
-                    <div class="subsection-title">TOTP(인증 앱) 2단계 인증</div>
+                    <div class="state-box" style="text-align:left; background:#F0F7FF; border:1px solid #BBDEFB; padding:14px; margin-bottom:16px;">
+                        <p style="font-size:0.88em; margin:0 0 10px;">💡 <strong>TOTP(인증 앱) · SMS · 이메일 세 가지를 모두 등록해두는 걸 권장합니다.</strong> 세 가지는 서로 대체하는 게 아니라 함께 등록해두는 것이고, 인증할 때마다 이 중 등록된 아무 방법이나 골라서 쓸 수 있습니다. 그래서 휴대폰을 잃어버리거나 이메일에 접속이 안 되는 상황에서도 남은 방법으로 막힘없이 인증할 수 있습니다.</p>
+                        <div style="display:flex; gap:20px; font-size:0.9em; flex-wrap:wrap;">
+                            <span>1️⃣ TOTP(인증 앱): <b id="os-check-totp">확인 중...</b></span>
+                            <span>2️⃣ SMS(휴대폰): <b id="os-check-sms">확인 중...</b></span>
+                            <span>3️⃣ 이메일: <b id="os-check-email">확인 중...</b></span>
+                        </div>
+                    </div>
+                    <div class="subsection-title">1️⃣ TOTP(인증 앱) 2단계 인증</div>
                     <div id="os-status-area">
                         <p>상태: <span id="os-totp-status">확인 중...</span></p>
                     </div>
@@ -1911,6 +1919,7 @@
                         <img id="os-totp-qr" alt="TOTP QR코드" style="max-width:200px; display:block; margin:8px 0;">
                         <p style="font-size:0.85em;">2) 아래 백업코드 10개를 안전한 곳에 저장하세요 (이 화면을 벗어나면 다시 볼 수 없습니다).</p>
                         <div id="os-backup-codes-area" style="font-family:monospace; background:#FAFAFA; padding:10px; border-radius:6px; word-break:break-all; font-size:0.85em;"></div>
+                        <button type="button" class="btn btn-secondary" id="os-backup-codes-copy-btn" style="margin-top:6px;" hidden>📋 백업코드 복사하기</button>
                         <p style="font-size:0.85em; margin-top:10px;">3) 인증 앱에 표시된 6자리 코드를 입력해 활성화를 완료하세요.</p>
                         <div style="display:flex; gap:6px;">
                             <input type="text" id="os-totp-confirm-code" placeholder="6자리 코드" style="flex:1;">
@@ -1919,14 +1928,14 @@
                         <p class="msg" id="os-totp-confirm-msg"></p>
                     </div>
 
-                    <div class="subsection-title" style="margin-top:20px;">SMS / 이메일 연락처</div>
+                    <div class="subsection-title" style="margin-top:20px;">2️⃣3️⃣ SMS / 이메일 연락처</div>
                     <p>휴대폰: <span id="os-phone-status">확인 중...</span> · 이메일: <span id="os-email-status">확인 중...</span></p>
                     <p>백업코드: <span id="os-backup-status">확인 중...</span></p>
                     <div class="field"><label>휴대폰 번호 (SMS 인증용)</label><input type="text" id="os-phone" placeholder="010-0000-0000"></div>
                     <div class="field"><label>이메일 (인증코드 수신용, 비워두면 로그인 이메일 사용)</label><input type="email" id="os-email" placeholder="owner@example.com"></div>
-                    <div class="field"><label>선호 인증방식</label>
+                    <div class="field"><label>기본으로 먼저 보여줄 인증수단 (선택 — 등록된 수단은 인증할 때 항상 다 골라 쓸 수 있습니다)</label>
                         <select id="os-preferred-method">
-                            <option value="">선택 안 함</option>
+                            <option value="">지정 안 함</option>
                             <option value="totp">TOTP</option>
                             <option value="sms">SMS</option>
                             <option value="email">이메일</option>
@@ -9086,6 +9095,10 @@
                         document.getElementById('os-email-status').textContent = status.has_otp_email ? '✅ 등록됨' : '미등록';
                         document.getElementById('os-backup-status').textContent = `${status.backup_codes_remaining}개 남음 (지금까지 사용 ${status.backup_codes_used_count}회)`;
                         document.getElementById('os-preferred-method').value = status.preferred_method || '';
+                        const osChk = (el, ok) => { el.textContent = ok ? '✅ 등록됨' : '⛔ 미등록'; el.style.color = ok ? '#2E7D32' : '#C62828'; };
+                        osChk(document.getElementById('os-check-totp'), status.totp_enabled);
+                        osChk(document.getElementById('os-check-sms'), status.has_phone);
+                        osChk(document.getElementById('os-check-email'), status.has_otp_email);
                     } catch (err) {
                         document.getElementById('os-status-area').innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>불러오기 실패</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
                     }
@@ -9099,6 +9112,13 @@
                         document.getElementById('os-totp-qr').src = json.data.qr_code_data_url;
                         document.getElementById('os-totp-setup-area').hidden = false;
                         document.getElementById('os-backup-codes-area').textContent = json.data.backup_codes.join('   ');
+                        const copyBtn = document.getElementById('os-backup-codes-copy-btn');
+                        copyBtn.hidden = false;
+                        copyBtn.onclick = () => {
+                            navigator.clipboard.writeText(json.data.backup_codes.join('\n'))
+                                .then(() => { copyBtn.textContent = '✅ 복사됨'; setTimeout(() => { copyBtn.textContent = '📋 백업코드 복사하기'; }, 2000); })
+                                .catch(() => alert('복사에 실패했습니다. 직접 선택해서 복사해주세요.'));
+                        };
                     } catch (err) {
                         alert(err.message);
                     }
