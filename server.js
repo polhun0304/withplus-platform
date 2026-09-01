@@ -6495,7 +6495,7 @@ const WMS_WRITE_OFF_REASONS = { self_use: '자가사용', defect: '불량처리'
 // 창고(로케이션) 간 재고 이동 — 순증감 0이 되도록 출발지에 -수량, 도착지에 +수량 두 건의 이력을 남긴다.
 app.post('/api/admin/inventory/transfer', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { product_id, variant_id, from_location_id, to_location_id, quantity, note } = req.body;
+    const { product_id, variant_id, from_location_id, to_location_id, quantity, note, lot_number } = req.body;
     if (!product_id || !from_location_id || !to_location_id || quantity === undefined || quantity === null) {
       return res.status(400).json({ error: 'Bad Request', message: 'product_id, from_location_id, to_location_id, quantity는 필수입니다', timestamp: new Date().toISOString() });
     }
@@ -6512,10 +6512,11 @@ app.post('/api/admin/inventory/transfer', authenticate, requireRole(['admin', 's
     }
     const noteSuffix = note ? ` (${String(note).trim()})` : '';
 
+    const lotNumberTrimmed = lot_number ? String(lot_number).trim() : null;
     const { error: outErr } = await supabase.rpc('adjust_stock_with', {
       p_product_id: product_id, p_variant_id: variant_id || null, p_delta: -qtyNum,
       p_reason: `창고이동 - 출고${noteSuffix}`, p_order_id: null, p_created_by: req.user.id,
-      p_location_id: from_location_id, p_scan_source: 'admin_manual'
+      p_location_id: from_location_id, p_scan_source: 'admin_manual', p_lot_number: lotNumberTrimmed
     });
     if (outErr) {
       if (outErr.message && outErr.message.includes('INSUFFICIENT_STOCK')) {
@@ -6526,7 +6527,7 @@ app.post('/api/admin/inventory/transfer', authenticate, requireRole(['admin', 's
     const { data: newStock, error: inErr } = await supabase.rpc('adjust_stock_with', {
       p_product_id: product_id, p_variant_id: variant_id || null, p_delta: qtyNum,
       p_reason: `창고이동 - 입고${noteSuffix}`, p_order_id: null, p_created_by: req.user.id,
-      p_location_id: to_location_id, p_scan_source: 'admin_manual'
+      p_location_id: to_location_id, p_scan_source: 'admin_manual', p_lot_number: lotNumberTrimmed
     });
     if (inErr) throw inErr; // 입고 실패 시 총 재고량은 이미 -qtyNum 만큼 줄어든 상태이므로 이력을 보고 수동 보정 필요 (극히 드문 DB 오류 상황)
 
@@ -6541,7 +6542,7 @@ app.post('/api/admin/inventory/transfer', authenticate, requireRole(['admin', 's
 // 판매 외 사유(자가사용/불량처리)로 인한 재고 차감 — 사유를 카테고리로 강제해 이력을 명확히 남긴다.
 app.post('/api/admin/inventory/write-off', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
-    const { product_id, variant_id, quantity, category, location_id, note } = req.body;
+    const { product_id, variant_id, quantity, category, location_id, note, lot_number } = req.body;
     if (!product_id || quantity === undefined || quantity === null || !category) {
       return res.status(400).json({ error: 'Bad Request', message: 'product_id, quantity, category는 필수입니다', timestamp: new Date().toISOString() });
     }
@@ -6561,7 +6562,7 @@ app.post('/api/admin/inventory/write-off', authenticate, requireRole(['provider'
     const { data: newStock, error } = await supabase.rpc('adjust_stock_with', {
       p_product_id: product_id, p_variant_id: variant_id || null, p_delta: -qtyNum,
       p_reason: reasonLabel, p_order_id: null, p_created_by: req.user.id,
-      p_location_id: location_id || null, p_scan_source: 'admin_manual'
+      p_location_id: location_id || null, p_scan_source: 'admin_manual', p_lot_number: lot_number ? String(lot_number).trim() : null
     });
     if (error) {
       if (error.message && error.message.includes('INSUFFICIENT_STOCK')) {
@@ -6594,7 +6595,18 @@ app.post('/api/admin/inventory/stocktake', authenticate, requireRole(['provider'
     }
 
     let currentStock;
-    if (variant_id) {
+    if (location_id) {
+      // location_id가 있으면 "이 랙(로케이션)에 실제로 몇 개 있는지"를 실사한 것이므로,
+      // 상품 전체재고(여러 랙에 나뉘어 있을 수 있음)와 비교하면 안 되고 그 로케이션에 쌓인
+      // 원장 이력만 합산해서 비교해야 한다. (예: 전체재고 50개 중 이 랙엔 5개뿐인데 실사로 5개를
+      // 세서 넘기면, 전체재고 기준으로는 delta=-45가 되어 다른 랙 재고까지 엉뚱하게 지워버리는
+      // 사고가 난다 - 랙 상세 관리 패널에서 실사 기능을 쓸 때 실제로 발생 가능한 문제였다.)
+      let locQuery = supabase.from('stock_adjustments_with').select('delta').eq('product_id', product_id).eq('location_id', location_id);
+      locQuery = variant_id ? locQuery.eq('variant_id', variant_id) : locQuery.is('variant_id', null);
+      const { data: locRows, error: locErr } = await locQuery;
+      if (locErr) throw locErr;
+      currentStock = (locRows || []).reduce((sum, r) => sum + Number(r.delta || 0), 0);
+    } else if (variant_id) {
       const { data: variant, error: vErr } = await supabase.from('product_variants_with').select('stock').eq('id', variant_id).maybeSingle();
       if (vErr) throw vErr;
       if (!variant) return res.status(404).json({ error: 'Not Found', message: '옵션을 찾을 수 없습니다', timestamp: new Date().toISOString() });

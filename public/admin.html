@@ -4573,7 +4573,7 @@
                                 </div>` : ''}
                                 <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
                                     <span style="min-width:110px; font-weight:600;">실사 보정</span>
-                                    <input type="number" class="wms-mng-stocktake-qty" placeholder="실사로 센 전체 재고" min="0" style="width:140px; padding:6px; border:1px solid var(--border-color); border-radius:6px;">
+                                    <input type="number" class="wms-mng-stocktake-qty" placeholder="이 랙에서 실사로 센 수량" min="0" style="width:140px; padding:6px; border:1px solid var(--border-color); border-radius:6px;">
                                     <button type="button" class="btn btn-secondary wms-mng-stocktake-btn" style="padding:6px 12px;">보정</button>
                                     <span style="font-size:0.85em; color:var(--text-gray); flex-basis:100%;">※ 이 상품(옵션)의 전체 재고(모든 랙 합계) 기준으로 보정됩니다 - 이 랙만의 수량이 아닙니다.</span>
                                 </div>
@@ -4655,7 +4655,7 @@
                                 msgEl.textContent = '이동 중...';
                                 const { ok, json } = await authedFetch('/api/admin/inventory/transfer', {
                                     method: 'POST',
-                                    body: JSON.stringify({ product_id: pid, variant_id: vid, from_location_id: wmsRackDetailCurrentLocationId, to_location_id: toLoc, quantity: qty })
+                                    body: JSON.stringify({ product_id: pid, variant_id: vid, from_location_id: wmsRackDetailCurrentLocationId, to_location_id: toLoc, quantity: qty, lot_number: lot || undefined })
                                 });
                                 if (!ok) { msgEl.textContent = `⚠️ ${json.message || '이동 실패'}`; return; }
                                 await wmsRackDetailRefreshAndSync();
@@ -4682,7 +4682,7 @@
                                 msgEl.textContent = '처리 중...';
                                 const { ok, json } = await authedFetch('/api/admin/inventory/write-off', {
                                     method: 'POST',
-                                    body: JSON.stringify({ product_id: pid, variant_id: vid, quantity: qty, category, location_id: wmsRackDetailCurrentLocationId })
+                                    body: JSON.stringify({ product_id: pid, variant_id: vid, quantity: qty, category, location_id: wmsRackDetailCurrentLocationId, lot_number: lot || undefined })
                                 });
                                 if (!ok) { msgEl.textContent = `⚠️ ${json.message || '처리 실패'}`; return; }
                                 await wmsRackDetailRefreshAndSync();
