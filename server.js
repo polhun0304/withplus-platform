@@ -9273,16 +9273,37 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
 
 app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, status, admin_email, personal_point_rate, community_point_rate, landing_template, settlement_commission_rate, business_number, settlement_tax_method } = req.body;
+    const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, status, admin_email, personal_point_rate, community_point_rate, landing_template, settlement_commission_rate, business_number, settlement_tax_method, bank_name, bank_account, account_holder, bank_account_verified } = req.body;
     const updates = { updated_at: new Date().toISOString() };
     let bizWarning = null;
+    // business_number/bank_account 변경 여부 판정에 기존 값이 필요하므로, 둘 중 하나라도 바뀌면 한 번만 조회해서 같이 재사용한다
+    const needsExistingLookup = business_number !== undefined || bank_account !== undefined;
+    let existingCommunityRow = null;
+    if (needsExistingLookup) {
+      const { data: existingCommunity } = await supabase.from('communities').select('business_number, bank_account').eq('id', req.params.id).maybeSingle();
+      existingCommunityRow = existingCommunity || null;
+    }
     if (business_number !== undefined) {
-      const { data: existingCommunity } = await supabase.from('communities').select('business_number').eq('id', req.params.id).maybeSingle();
-      const bizResult = await applyBusinessNumberVerification(updates, business_number, existingCommunity ? existingCommunity.business_number : undefined);
+      const bizResult = await applyBusinessNumberVerification(updates, business_number, existingCommunityRow ? existingCommunityRow.business_number : undefined);
       if (bizResult.error) {
         return res.status(bizResult.error.status).json({ error: 'Bad Request', message: bizResult.error.message, timestamp: new Date().toISOString() });
       }
       bizWarning = bizResult.warning || null;
+    }
+    // 정산금을 실제로 보낼 계좌 정보 - 계좌번호가 (기존 값 대비) 바뀌면 검증 여부를 자동으로 초기화한다(오래된/틀린 계좌를 그대로 신뢰하지 않도록).
+    // 실명조회 API 연동 전까지는 관리자가 인터넷뱅킹 등에서 직접 확인한 뒤 bank_account_verified 체크박스로만 검증한다.
+    if (bank_name !== undefined) updates.bank_name = bank_name || null;
+    if (account_holder !== undefined) updates.account_holder = account_holder || null;
+    if (bank_account !== undefined) {
+      const bankAccountChanged = !existingCommunityRow || existingCommunityRow.bank_account !== (bank_account || null);
+      updates.bank_account = bank_account || null;
+      if (bankAccountChanged) {
+        updates.bank_account_verified = false;
+        updates.bank_account_updated_at = new Date().toISOString();
+      }
+    }
+    if (bank_account_verified !== undefined && updates.bank_account_verified === undefined) {
+      updates.bank_account_verified = !!bank_account_verified;
     }
     if (name !== undefined) updates.name = String(name).trim();
     if (slug !== undefined) {
@@ -10841,15 +10862,17 @@ app.post('/api/admin/community-settlements/generate', authenticate, requireRole(
     }
 
     const { data: communities, error: commErr } = await supabase
-      .from('communities').select('id, name, settlement_commission_rate, business_number, business_number_verified').in('id', communityIds);
+      .from('communities').select('id, name, settlement_commission_rate, business_number, business_number_verified, bank_name, bank_account, account_holder').in('id', communityIds);
     if (commErr) throw commErr;
     const rateMap = {};
     const bizVerifiedMap = {};
     const nameMap = {};
+    const bankMap = {};
     (communities || []).forEach(c => {
       rateMap[c.id] = c.settlement_commission_rate != null ? Number(c.settlement_commission_rate) : 5; // 기본 5%
       bizVerifiedMap[c.id] = !!(c.business_number && c.business_number_verified);
       nameMap[c.id] = c.name;
+      bankMap[c.id] = { bank_name: c.bank_name || null, bank_account: c.bank_account || null, account_holder: c.account_holder || null };
     });
 
     const { data: existingRows, error: existErr } = await supabase
@@ -10864,6 +10887,9 @@ app.post('/api/admin/community-settlements/generate', authenticate, requireRole(
 
     let created = 0, updated = 0, skippedPaid = 0;
     const skippedNoBusinessNumber = [];
+    // 계좌 미등록 조직 - 사업자번호와 달리 정산 생성 자체를 막지는 않는다(매출 집계는 계좌 유무와 무관하게 필요한 기록이므로).
+    // 다만 이 조직들은 계좌 정보가 없어 "지급완료 처리" 시점에 서버가 거부하므로, 관리자가 놓치지 않도록 여기서 별도로 안내한다.
+    const skippedNoBankAccount = [];
     const resultRows = [];
 
     for (const communityId of communityIds) {
@@ -10872,6 +10898,11 @@ app.post('/api/admin/community-settlements/generate', authenticate, requireRole(
       if (!bizVerifiedMap[communityId]) {
         skippedNoBusinessNumber.push({ community_id: communityId, community_name: nameMap[communityId] || '(이름 없음)' });
         continue;
+      }
+
+      const bank = bankMap[communityId] || {};
+      if (!bank.bank_account) {
+        skippedNoBankAccount.push({ community_id: communityId, community_name: nameMap[communityId] || '(이름 없음)' });
       }
 
       const grossRevenue = agg[communityId].revenue;
@@ -10885,10 +10916,13 @@ app.post('/api/admin/community-settlements/generate', authenticate, requireRole(
         continue;
       }
 
+      // 계좌 정보는 정산 건 생성/재계산 시점의 조직 정보를 스냅샷으로 같이 저장한다 - 이후 조직이 계좌를 바꿔도
+      // 이미 생성된 과거 정산 기록의 송금 대상 계좌는 그대로 유지된다(재계산을 다시 돌리면 최신 계좌로 갱신됨).
       if (existing) {
         const { data, error } = await supabase.from('community_settlements_with').update({
           order_count: orderCount, gross_revenue: grossRevenue, commission_rate: commissionRate,
-          commission_amount: commissionAmount, updated_at: new Date().toISOString()
+          commission_amount: commissionAmount, updated_at: new Date().toISOString(),
+          bank_name: bank.bank_name, bank_account: bank.bank_account, account_holder: bank.account_holder
         }).eq('id', existing.id).select().single();
         if (error) throw error;
         updated++;
@@ -10897,7 +10931,8 @@ app.post('/api/admin/community-settlements/generate', authenticate, requireRole(
         const { data, error } = await supabase.from('community_settlements_with').insert([{
           community_id: communityId, period_start: startDate, period_end: endDate,
           order_count: orderCount, gross_revenue: grossRevenue, commission_rate: commissionRate,
-          commission_amount: commissionAmount, status: 'pending', created_by: req.user.id
+          commission_amount: commissionAmount, status: 'pending', created_by: req.user.id,
+          bank_name: bank.bank_name, bank_account: bank.bank_account, account_holder: bank.account_holder
         }]).select().single();
         if (error) throw error;
         created++;
@@ -10905,7 +10940,7 @@ app.post('/api/admin/community-settlements/generate', authenticate, requireRole(
       }
     }
 
-    res.json({ success: true, data: { created, updated, skippedPaid, skippedNoBusinessNumber, rows: resultRows }, timestamp: new Date().toISOString() });
+    res.json({ success: true, data: { created, updated, skippedPaid, skippedNoBusinessNumber, skippedNoBankAccount, rows: resultRows }, timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error generating community settlements:', err);
     res.status(500).json({ error: 'Failed to generate community settlements', message: err.message, timestamp: new Date().toISOString() });
@@ -10955,19 +10990,27 @@ app.get('/api/admin/community-settlements', authenticate, async (req, res) => {
 app.patch('/api/admin/community-settlements/:id/status', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { id } = req.params;
-    const { status } = req.body || {};
+    const { status, payout_memo } = req.body || {};
     if (!['pending', 'paid', 'cancelled'].includes(status)) {
       return res.status(400).json({ error: 'Bad Request', message: "status는 'pending', 'paid', 'cancelled' 중 하나여야 합니다", timestamp: new Date().toISOString() });
     }
     const update = { status };
+    // 관리자가 실제 송금(인터넷뱅킹 등)을 처리하면서 남기는 메모 (예: "국민은행 앱, 거래번호 12345") - 지급완료 처리가 아니어도 언제든 갱신 가능
+    if (payout_memo !== undefined) update.payout_memo = payout_memo || null;
     if (status === 'paid') {
       update.paid_at = new Date().toISOString();
-      // 지급완료 시점에 분양조직의 세무처리 방식을 스냅샷으로 반영: 원천징수 3.3% 자동계산 또는 세금계산서 발행대기 표시
-      const { data: existing } = await supabase.from('community_settlements_with').select('community_id, commission_amount').eq('id', id).maybeSingle();
-      if (existing) {
-        const { data: community } = await supabase.from('communities').select('settlement_tax_method').eq('id', existing.community_id).maybeSingle();
-        Object.assign(update, computeSettlementTaxFields(existing.commission_amount, community?.settlement_tax_method));
+      const { data: existing } = await supabase.from('community_settlements_with').select('community_id, commission_amount, bank_account').eq('id', id).maybeSingle();
+      if (!existing) {
+        return res.status(404).json({ error: 'Not Found', message: '정산 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
       }
+      // 실제로 돈을 보낼 계좌 정보가 이 정산 건에 스냅샷되어 있지 않으면 지급완료 처리를 막는다 - 정산 생성 시점에 조직에 계좌가
+      // 없었거나, 이후에야 계좌가 등록된 경우다. "분양 조직 관리"에서 계좌를 등록한 뒤 정산을 다시 생성(재계산)하면 반영된다.
+      if (!existing.bank_account) {
+        return res.status(400).json({ error: 'Bad Request', message: '이 정산 건에는 송금할 계좌 정보가 없습니다. 분양 조직 관리에서 계좌를 등록한 뒤, 해당 기간 정산을 다시 생성(재계산)하면 계좌 정보가 반영됩니다.', timestamp: new Date().toISOString() });
+      }
+      // 지급완료 시점에 분양조직의 세무처리 방식을 스냅샷으로 반영: 원천징수 3.3% 자동계산 또는 세금계산서 발행대기 표시
+      const { data: community } = await supabase.from('communities').select('settlement_tax_method').eq('id', existing.community_id).maybeSingle();
+      Object.assign(update, computeSettlementTaxFields(existing.commission_amount, community?.settlement_tax_method));
     } else {
       update.paid_at = null;
     }
@@ -10980,6 +11023,65 @@ app.patch('/api/admin/community-settlements/:id/status', authenticate, requireRo
   } catch (err) {
     console.error('Error updating community settlement status:', err);
     res.status(500).json({ error: 'Failed to update community settlement status', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 송금대상 CSV 다운로드 - "지급완료 처리" 전에 관리자가 은행 인터넷뱅킹의 "대량이체" 화면에 참고해서 직접 입력하거나
+// 엑셀로 열어 확인하는 용도다. 은행마다 대량이체 양식이 달라 자동 업로드는 지원하지 않으며, 실제 송금은 관리자가 수행한다.
+app.get('/api/admin/community-settlements/payout-csv', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { status, communityId, ids } = req.query;
+    let query = supabase.from('community_settlements_with').select('*').order('period_start', { ascending: false });
+    if (ids) {
+      const idList = String(ids).split(',').map(s => s.trim()).filter(Boolean);
+      if (idList.length === 0) {
+        return res.status(400).json({ error: 'Bad Request', message: 'ids가 비어 있습니다', timestamp: new Date().toISOString() });
+      }
+      query = query.in('id', idList);
+    } else {
+      query = query.eq('status', status || 'pending');
+      if (communityId) query = query.eq('community_id', communityId);
+    }
+    const { data: rows, error } = await query;
+    if (error) throw error;
+
+    const communityIds = [...new Set((rows || []).map(r => r.community_id))];
+    const { data: communityRows } = communityIds.length
+      ? await supabase.from('communities').select('id, name').in('id', communityIds)
+      : { data: [] };
+    const nameMap = {};
+    (communityRows || []).forEach(c => { nameMap[c.id] = c.name; });
+    const statusLabelMap = { pending: '정산대기', paid: '지급완료', cancelled: '취소' };
+
+    const csvEscape = (v) => {
+      const s = (v === null || v === undefined) ? '' : String(v);
+      return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ['조직명', '은행명', '계좌번호', '예금주', '지급액', '정산시작일', '정산종료일', '상태'];
+    const lines = [header.join(',')];
+    (rows || []).forEach(r => {
+      const amount = (r.net_payment_amount !== null && r.net_payment_amount !== undefined) ? r.net_payment_amount : r.commission_amount;
+      lines.push([
+        csvEscape(nameMap[r.community_id] || ''),
+        csvEscape(r.bank_name || ''),
+        csvEscape(r.bank_account || ''),
+        csvEscape(r.account_holder || ''),
+        csvEscape(amount),
+        csvEscape(r.period_start),
+        csvEscape(r.period_end),
+        csvEscape(statusLabelMap[r.status] || r.status)
+      ].join(','));
+    });
+    // 엑셀에서 한글이 깨지지 않도록 UTF-8 BOM을 CSV 맨 앞에 붙인다
+    const csv = '\uFEFF' + lines.join('\r\n');
+
+    const filename = `community-settlements-payout-${new Date().toISOString().slice(0, 10)}.csv`;
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.send(csv);
+  } catch (err) {
+    console.error('Error generating community settlements payout CSV:', err);
+    res.status(500).json({ error: 'Failed to generate payout CSV', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 

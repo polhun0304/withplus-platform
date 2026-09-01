@@ -796,6 +796,26 @@
                     </div>
                     <div class="hint">기존 디자인(클래식)을 포함해 3가지 중 선택할 수 있습니다. 로고/색상/소개글 등 실제 데이터는 그대로 유지되고 레이아웃만 바뀝니다. <a href="#" id="cmf-template-preview-link" target="_blank" style="display:none;">지금 저장된 랜딩페이지 미리보기 →</a></div>
                 </div>
+                <div class="field">
+                    <label>정산 지급 계좌 - 은행명</label>
+                    <input type="text" id="cmf-bank-name" placeholder="예: 국민은행 (선택)">
+                </div>
+                <div class="field">
+                    <label>정산 지급 계좌 - 계좌번호</label>
+                    <input type="text" id="cmf-bank-account" placeholder="'-' 없이 숫자만 입력 (선택)">
+                    <div class="hint">이 조직에 현금 정산금을 실제로 송금할 계좌입니다. 계좌번호를 새로 입력하거나 변경하면 아래 검증 상태가 자동으로 미검증으로 초기화됩니다 - 인터넷뱅킹 등에서 실제 계좌가 맞는지 확인한 뒤 검증 완료로 체크해주세요.</div>
+                </div>
+                <div class="field">
+                    <label>정산 지급 계좌 - 예금주명</label>
+                    <input type="text" id="cmf-account-holder" placeholder="계좌 명의자 이름 (선택)">
+                </div>
+                <div class="field" id="cmf-bank-verified-field" style="display:none;">
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-weight:normal;">
+                        <input type="checkbox" id="cmf-bank-verified" style="width:18px; height:18px; position:static; opacity:1;">
+                        이 계좌 정보를 관리자가 직접 확인했습니다 (검증 완료로 표시)
+                    </label>
+                    <div class="hint" id="cmf-bank-verified-meta"></div>
+                </div>
                 <div class="field" id="cmf-status-field" style="display:none;">
                     <label>상태</label>
                     <select id="cmf-status">
@@ -1925,6 +1945,31 @@
                 return { ok: res.ok, status: res.status, json };
             }
 
+            // 서버가 만들어주는 파일(CSV 등)을 그대로 다운로드한다 - authedFetch와 달리 응답을 JSON으로 파싱하지 않고 파일로 저장한다.
+            async function downloadAuthedFile(path, filename) {
+                try {
+                    const token = await WithPlus.getAccessToken();
+                    const res = await fetch(path, { headers: { 'Authorization': 'Bearer ' + token } });
+                    if (!res.ok) {
+                        let msg = '다운로드에 실패했습니다';
+                        try { const j = await res.json(); msg = j.message || msg; } catch (e) {}
+                        alert(msg);
+                        return;
+                    }
+                    const blob = await res.blob();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(url);
+                } catch (err) {
+                    alert('다운로드 중 오류가 발생했습니다: ' + err.message);
+                }
+            }
+
             // ===== 상품 관리 =====
             let currentProductSearch = '';
             let currentProductSort = 'name-asc';
@@ -3030,7 +3075,7 @@
                         area.innerHTML = `
                             <p style="color:var(--text-gray); font-size:0.82em; margin-bottom:8px;">전체 ${csRatesAll.length}개 중 ${communities.length}개 표시</p>
                             <table>
-                                <thead><tr><th>조직명</th><th>사업자등록번호</th><th>검증 상태</th><th>수수료율</th><th>정산 세무처리</th><th></th></tr></thead>
+                                <thead><tr><th>조직명</th><th>사업자등록번호</th><th>검증 상태</th><th>수수료율</th><th>정산 세무처리</th><th>송금 계좌</th><th></th></tr></thead>
                                 <tbody>
                                     ${communities.map(c => `
                                     <tr>
@@ -3041,11 +3086,14 @@
                                             : `<span class="badge inactive">미등록</span>`}</td>
                                         <td data-label="수수료율"><input type="number" class="cs-rate-input" data-id="${c.id}" value="${c.settlement_commission_rate != null ? c.settlement_commission_rate : ''}" placeholder="5" min="0" max="100" step="0.1" style="width:70px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px;">%</td>
                                         <td data-label="정산 세무처리">${TAX_METHOD_SELECT_HTML('cs-tax-method-input', c.id, c.settlement_tax_method)}</td>
+                                        <td data-label="송금 계좌">${c.bank_account
+                                            ? (c.bank_account_verified ? `<span class="badge active">✅ 등록·검증됨</span>` : `<span class="badge inactive">⚠️ 등록됨(미검증)</span>`)
+                                            : `<span class="badge inactive">🚫 미등록</span>`}</td>
                                         <td><button class="btn btn-secondary cs-save-btn" data-id="${c.id}" style="padding:6px 10px; font-size:0.82em;">저장</button></td>
                                     </tr>`).join('')}
                                 </tbody>
                             </table>
-                            <p style="color:var(--text-gray); font-size:0.8em; margin-top:8px;">사업자등록번호를 입력하고 저장하면 국세청 상태조회로 실시간 검증됩니다(폐업 상태면 저장이 거부됩니다). <strong>정산은 검증까지 완료된 조직만 대상이 됩니다.</strong> 수수료율을 비워두면 기본값 5%가 적용됩니다. 🧾 <strong>원천징수(3.3%)</strong>: 개인사업자 조직에 지급 시 자동 원천징수+영수증 발급. <strong>세금계산서 발행</strong>: 법인 조직은 전액 지급 후 별도로 세금계산서를 받습니다.</p>`;
+                            <p style="color:var(--text-gray); font-size:0.8em; margin-top:8px;">사업자등록번호를 입력하고 저장하면 국세청 상태조회로 실시간 검증됩니다(폐업 상태면 저장이 거부됩니다). <strong>정산은 검증까지 완료된 조직만 대상이 됩니다.</strong> 수수료율을 비워두면 기본값 5%가 적용됩니다. 🧾 <strong>원천징수(3.3%)</strong>: 개인사업자 조직에 지급 시 자동 원천징수+영수증 발급. <strong>세금계산서 발행</strong>: 법인 조직은 전액 지급 후 별도로 세금계산서를 받습니다. 💳 <strong>송금 계좌</strong>는 "🏢 분양 조직 관리" 탭의 조직 수정 화면에서 등록/수정합니다 - 계좌가 없으면 정산 건은 생성되어도 "지급완료 처리"는 할 수 없습니다.</p>`;
 
                         area.querySelectorAll('.cs-save-btn').forEach(btn => {
                             btn.addEventListener('click', async () => {
@@ -3094,7 +3142,7 @@
                             }
                             area.innerHTML = `
                                 <table>
-                                    <thead><tr><th>조직</th><th>기간</th><th>매출액</th><th>수수료율</th><th>정산액</th><th>주문건수</th><th>상태</th><th>처리</th></tr></thead>
+                                    <thead><tr><th>조직</th><th>기간</th><th>매출액</th><th>수수료율</th><th>정산액</th><th>주문건수</th><th>송금계좌</th><th>상태</th><th>처리</th></tr></thead>
                                     <tbody>
                                         ${rows.map(r => `
                                         <tr>
@@ -3104,10 +3152,13 @@
                                             <td data-label="수수료율">${r.commission_rate}%</td>
                                             <td data-label="정산액"><strong>${Number(r.commission_amount).toLocaleString()}원</strong></td>
                                             <td data-label="주문건수">${r.order_count.toLocaleString()}건</td>
+                                            <td data-label="송금계좌">${r.bank_account
+                                                ? `${WithPlus.escapeHtml(r.bank_name || '')} ${WithPlus.escapeHtml(r.bank_account)}<br><span style="color:var(--text-gray); font-size:0.85em;">예금주: ${WithPlus.escapeHtml(r.account_holder || '-')}</span>`
+                                                : `<span class="badge inactive">🚫 계좌 미등록</span>`}</td>
                                             <td data-label="상태"><span class="badge ${SETTLEMENT_STATUS_CLASS[r.status] || ''}">${SETTLEMENT_STATUS_LABEL[r.status] || r.status}</span></td>
                                             <td data-label="처리">
                                                 ${r.status === 'pending' ? `<button class="btn btn-secondary cs-mark-paid" data-id="${r.id}" style="padding:6px 10px; font-size:0.82em;">지급완료 처리</button> <button class="btn btn-secondary cs-cancel" data-id="${r.id}" style="padding:6px 10px; font-size:0.82em;">취소</button>` : ''}
-                                                ${r.status === 'paid' ? `<span style="color:var(--text-gray); font-size:0.82em;">${r.paid_at ? new Date(r.paid_at).toLocaleDateString('ko-KR') + ' 지급' : ''}</span>` : ''}
+                                                ${r.status === 'paid' ? `<span style="color:var(--text-gray); font-size:0.82em;">${r.paid_at ? new Date(r.paid_at).toLocaleDateString('ko-KR') + ' 지급' : ''}${r.payout_memo ? ' · 메모: ' + WithPlus.escapeHtml(r.payout_memo) : ''}</span>` : ''}
                                                 ${settlementTaxInfoHTML(r)}
                                                 ${settlementTaxActionHTML(r, 'community')}
                                             </td>
@@ -3123,8 +3174,13 @@
                             });
                             area.querySelectorAll('.cs-mark-paid').forEach(btn => {
                                 btn.addEventListener('click', async () => {
-                                    if (!confirm('이 건을 지급완료로 처리하시겠습니까?')) return;
-                                    const { ok, json } = await authedFetch(`/api/admin/community-settlements/${btn.dataset.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'paid' }) });
+                                    const row = rows.find(r => String(r.id) === String(btn.dataset.id));
+                                    const acctInfo = row && row.bank_account
+                                        ? `${row.bank_name || ''} ${row.bank_account} (예금주: ${row.account_holder || '-'})`
+                                        : '⚠️ 이 정산 건에는 계좌 정보가 없습니다. 서버에서 지급완료 처리가 거부됩니다.';
+                                    const memo = prompt(`아래 계좌로 실제 송금을 완료하셨다면 확인을 눌러 지급완료로 처리하세요.\n\n송금계좌: ${acctInfo}\n\n송금 메모(은행 앱/거래번호 등, 선택 - 비워도 됩니다):`, '');
+                                    if (memo === null) return; // 취소
+                                    const { ok, json } = await authedFetch(`/api/admin/community-settlements/${btn.dataset.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'paid', payout_memo: memo || null }) });
                                     if (!ok || !json.success) { alert(json.message || '처리 중 오류가 발생했습니다'); return; }
                                     loadCsTable();
                                 });
@@ -3192,7 +3248,9 @@
                                         <option value="paid">지급완료</option>
                                         <option value="cancelled">취소</option>
                                     </select>
+                                    <button class="btn btn-secondary" id="cs-payout-csv-btn">📥 송금대상(정산대기) CSV 다운로드</button>
                                 </div>
+                                <p style="color:var(--text-gray); font-size:0.8em; margin:-6px 0 10px;">CSV는 정산대기 상태 건의 조직명·은행명·계좌번호·예금주·지급액을 담고 있습니다. 은행 인터넷뱅킹의 "대량이체" 화면에 참고해서 직접 입력하거나 엑셀로 열어 확인하는 용도이며, 실제 송금은 관리자가 은행에서 직접 처리해야 합니다(자동 이체 기능이 아닙니다).</p>
                                 <div id="cs-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                                 ` : ''}`;
 
@@ -3220,15 +3278,21 @@
                                 msgArea.innerHTML = `<div style="margin-top:10px; font-size:0.88em; padding:10px 12px; border-radius:8px; background:#f8f9fb;">생성 중...</div>`;
                                 const { ok, json } = await authedFetch('/api/admin/community-settlements/generate', { method: 'POST', body: JSON.stringify({ startDate: start, endDate: end }) });
                                 if (!ok || !json.success) { msgArea.innerHTML = `<div style="margin-top:10px; font-size:0.88em; padding:10px 12px; border-radius:8px; background:#FDECEA; color:#C62828;">${WithPlus.escapeHtml(json.message || '정산 생성 중 오류가 발생했습니다')}</div>`; return; }
-                                const { created, updated, skippedPaid, skippedNoBusinessNumber } = json.data;
+                                const { created, updated, skippedPaid, skippedNoBusinessNumber, skippedNoBankAccount } = json.data;
                                 const skipNote = (skippedNoBusinessNumber && skippedNoBusinessNumber.length)
                                     ? `<br>⚠️ 사업자등록 미등록/미검증으로 제외됨: ${skippedNoBusinessNumber.map(s => WithPlus.escapeHtml(s.community_name)).join(', ')}`
                                     : '';
-                                msgArea.innerHTML = `<div style="margin-top:10px; font-size:0.88em; padding:10px 12px; border-radius:8px; background:#E8F5E9; color:#2E7D32;">신규 ${created}건, 갱신 ${updated}건${skippedPaid ? `, 이미 지급완료되어 건드리지 않음 ${skippedPaid}건` : ''} 처리되었습니다.${skipNote}</div>`;
+                                const bankNote = (skippedNoBankAccount && skippedNoBankAccount.length)
+                                    ? `<br>💳 계좌 미등록(정산은 생성됐지만 계좌를 등록하기 전까지는 지급완료 처리할 수 없습니다): ${skippedNoBankAccount.map(s => WithPlus.escapeHtml(s.community_name)).join(', ')}`
+                                    : '';
+                                msgArea.innerHTML = `<div style="margin-top:10px; font-size:0.88em; padding:10px 12px; border-radius:8px; background:#E8F5E9; color:#2E7D32;">신규 ${created}건, 갱신 ${updated}건${skippedPaid ? `, 이미 지급완료되어 건드리지 않음 ${skippedPaid}건` : ''} 처리되었습니다.${skipNote}${bankNote}</div>`;
                                 loadCsTable();
                             });
 
                             document.getElementById('cs-status-filter').addEventListener('change', loadCsTable);
+                            document.getElementById('cs-payout-csv-btn').addEventListener('click', () => {
+                                downloadAuthedFile('/api/admin/community-settlements/payout-csv?status=pending', `송금대상_분양조직정산_${new Date().toISOString().slice(0, 10)}.csv`);
+                            });
                         } catch (err) {
                             area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
                         }
@@ -6042,6 +6106,16 @@
                         document.getElementById('cmf-admin-email').value = community.admin_email || '';
                         document.getElementById('cmf-personal-rate').value = (community.personal_point_rate !== null && community.personal_point_rate !== undefined) ? (Number(community.personal_point_rate) * 100) : '';
                         document.getElementById('cmf-community-rate').value = (community.community_point_rate !== null && community.community_point_rate !== undefined) ? (Number(community.community_point_rate) * 100) : '';
+                        document.getElementById('cmf-bank-name').value = community.bank_name || '';
+                        document.getElementById('cmf-bank-account').value = community.bank_account || '';
+                        document.getElementById('cmf-account-holder').value = community.account_holder || '';
+                        document.getElementById('cmf-bank-verified').checked = !!community.bank_account_verified;
+                        document.getElementById('cmf-bank-verified-field').style.display = 'block';
+                        document.getElementById('cmf-bank-verified-meta').textContent = !community.bank_account
+                            ? '계좌가 아직 등록되지 않았습니다.'
+                            : (community.bank_account_verified
+                                ? ('✅ 검증됨' + (community.bank_account_updated_at ? ' · ' + new Date(community.bank_account_updated_at).toLocaleDateString('ko-KR') + ' 등록/변경' : ''))
+                                : '⚠️ 계좌가 등록되어 있지만 아직 관리자가 확인하지 않았습니다.');
                         document.getElementById('cmf-status').value = community.status || 'active';
                         document.getElementById('cmf-status-field').style.display = 'block';
                         setSelectedTemplate(community.landing_template || 'classic');
@@ -6052,6 +6126,8 @@
                         document.getElementById('cmf-id').value = '';
                         document.getElementById('cmf-personal-rate').value = '';
                         document.getElementById('cmf-community-rate').value = '';
+                        document.getElementById('cmf-bank-verified-field').style.display = 'none';
+                        document.getElementById('cmf-bank-verified').checked = false;
                         document.getElementById('cmf-status-field').style.display = 'none';
                         setSelectedTemplate('classic');
                         previewLink.style.display = 'none';
@@ -6086,9 +6162,16 @@
                         landing_template: getSelectedTemplate(),
                         // 비워두면 null -> 서버가 플랫폼 기본 적립율을 따르도록 처리
                         personal_point_rate: personalRateInput === '' ? null : parseFloat(personalRateInput) / 100,
-                        community_point_rate: communityRateInput === '' ? null : parseFloat(communityRateInput) / 100
+                        community_point_rate: communityRateInput === '' ? null : parseFloat(communityRateInput) / 100,
+                        bank_name: document.getElementById('cmf-bank-name').value.trim(),
+                        bank_account: document.getElementById('cmf-bank-account').value.trim(),
+                        account_holder: document.getElementById('cmf-account-holder').value.trim()
                     };
-                    if (id) payload.status = document.getElementById('cmf-status').value;
+                    if (id) {
+                        payload.status = document.getElementById('cmf-status').value;
+                        // 계좌번호를 이번에 바꿨다면 서버가 어차피 미검증으로 초기화하므로, 체크박스 값은 "계좌를 안 바꿨을 때"만 실제로 반영된다
+                        payload.bank_account_verified = document.getElementById('cmf-bank-verified').checked;
+                    }
 
                     const submitBtn = document.getElementById('cmf-submit');
                     submitBtn.disabled = true;
