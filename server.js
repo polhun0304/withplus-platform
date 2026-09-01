@@ -7197,6 +7197,66 @@ app.get('/api/admin/inventory/floorplan', authenticate, requireRole(['provider',
   }
 });
 
+// ---- 2D 디지털트윈: "랙에 있는 물건찾기" - 상품명/바코드로 검색해 어느 랙에 배정되어 있는지 조회 ----
+// 여러 상품이 매칭될 수 있고, 한 상품이 여러 로케이션에 배정될 수도 있으므로 (상품, 로케이션) 쌍을 모두 반환한다.
+// 프론트엔드는 이 결과의 floor/sub_level/grid_x/grid_y로 디지털트윈 화면의 층을 전환하고 해당 랙으로 확대/이동한다.
+app.get('/api/admin/inventory/find-product-location', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
+    if (!q) {
+      return res.json({ success: true, data: [], message: '검색어를 입력해주세요', timestamp: new Date().toISOString() });
+    }
+    const [{ data: byName, error: nameErr }, { data: byBarcode, error: barcodeErr }] = await Promise.all([
+      supabase.from('products_with').select('id, name, barcode, supplier_id').ilike('name', `%${q}%`).limit(20),
+      supabase.from('products_with').select('id, name, barcode, supplier_id').ilike('barcode', `%${q}%`).limit(20)
+    ]);
+    if (nameErr) throw nameErr;
+    if (barcodeErr) throw barcodeErr;
+    const productMap = new Map();
+    (byName || []).forEach(p => productMap.set(p.id, p));
+    (byBarcode || []).forEach(p => productMap.set(p.id, p));
+    let products = Array.from(productMap.values());
+    if (!isAdminRole(req.userRole)) products = products.filter(p => p.supplier_id === req.user.id);
+    if (!products.length) {
+      return res.json({ success: true, data: [], message: `"${q}"와(과) 일치하는 상품을 찾을 수 없습니다`, timestamp: new Date().toISOString() });
+    }
+    const productIds = products.map(p => p.id);
+    const { data: assignments, error: assignErr } = await supabase
+      .from('product_location_assignments_with')
+      .select('product_id, variant_id, location_id, is_primary, warehouse_locations_with(code, floor, sub_level, grid_x, grid_y, zone)')
+      .in('product_id', productIds);
+    if (assignErr) throw assignErr;
+    const productById = new Map(products.map(p => [p.id, p]));
+    const results = (assignments || [])
+      .filter(a => a.warehouse_locations_with && productById.has(a.product_id))
+      .map(a => {
+        const p = productById.get(a.product_id);
+        const loc = a.warehouse_locations_with;
+        return {
+          product_id: a.product_id,
+          product_name: p.name,
+          barcode: p.barcode,
+          variant_id: a.variant_id,
+          is_primary: a.is_primary,
+          location_id: a.location_id,
+          location_code: loc.code,
+          floor: loc.floor || 1,
+          sub_level: loc.sub_level || 1,
+          grid_x: loc.grid_x,
+          grid_y: loc.grid_y,
+          zone: loc.zone
+        };
+      });
+    if (!results.length) {
+      return res.json({ success: true, data: [], message: `"${q}" 상품은 찾았지만 창고 로케이션에 배정되어 있지 않습니다`, timestamp: new Date().toISOString() });
+    }
+    res.json({ success: true, data: results, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error finding product location:', err);
+    res.status(500).json({ error: 'Failed to find product location', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 // ---- 장비(PDA/AGV) — is_simulated=true: 실제 하드웨어와 연동되지 않는 데모/시뮬레이션 데이터입니다 ----
 app.get('/api/admin/wms/equipment', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {

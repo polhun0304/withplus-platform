@@ -1628,9 +1628,22 @@
                             <button class="btn btn-secondary wms-shape-btn" data-shape="conveyor" style="padding:6px 10px; font-size:0.82em;">▬ 컨베이어벨트</button>
                             <span style="font-size:0.8em; color:var(--text-gray);">(추가 후 드래그로 위치 이동)</span>
                         </div>
+                        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:10px;">
+                            <input type="text" id="wms-twin-find-input" placeholder="🔍 상품명 또는 바코드로 랙 찾기" style="padding:7px 10px; border:1px solid var(--border-color); border-radius:6px; font-size:0.85em; min-width:220px; flex:0 1 260px;">
+                            <button class="btn btn-secondary" id="wms-twin-find-btn" style="padding:7px 14px; font-size:0.85em;">물건찾기</button>
+                            <button class="btn btn-secondary" id="wms-twin-find-prev" style="display:none; padding:6px 10px; font-size:0.8em;">◀ 이전</button>
+                            <button class="btn btn-secondary" id="wms-twin-find-next" style="display:none; padding:6px 10px; font-size:0.8em;">다음 ▶</button>
+                            <span id="wms-twin-find-status" style="font-size:0.82em; color:var(--text-gray);"></span>
+                            <span style="flex:1;"></span>
+                            <button class="btn btn-secondary" id="wms-twin-zoom-out" style="padding:6px 12px; font-size:0.85em;" title="축소">➖</button>
+                            <span id="wms-twin-zoom-label" style="font-size:0.82em; color:var(--text-gray); min-width:44px; text-align:center;">100%</span>
+                            <button class="btn btn-secondary" id="wms-twin-zoom-in" style="padding:6px 12px; font-size:0.85em;" title="확대">➕</button>
+                            <button class="btn btn-secondary" id="wms-twin-zoom-reset" style="padding:6px 12px; font-size:0.85em;">100%</button>
+                            <button class="btn btn-secondary" id="wms-twin-zoom-fit" style="padding:6px 12px; font-size:0.85em;">🔎 전체보기</button>
+                        </div>
                         <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start;">
-                            <canvas id="wms-twin-canvas" width="800" height="500" style="border:1px solid var(--border-color); border-radius:8px; background:#FAFAFA; max-width:100%;"></canvas>
-                            <div id="wms-twin-control-panel" style="display:none; min-width:220px; border:1px solid var(--border-color); border-radius:8px; padding:14px; background:#fff;">
+                            <canvas id="wms-twin-canvas" width="900" height="650" style="border:1px solid var(--border-color); border-radius:8px; background:#FAFAFA; width:100%; height:650px; max-width:100%; flex:1 1 600px; min-width:320px; cursor:grab; touch-action:none;"></canvas>
+                            <div id="wms-twin-control-panel" style="display:none; min-width:220px; flex:0 0 240px; border:1px solid var(--border-color); border-radius:8px; padding:14px; background:#fff;">
                                 <h4 style="margin:0 0 10px;">📐 선택한 랙 속성</h4>
                                 <div id="wms-twin-control-body" style="display:flex; flex-direction:column; gap:8px;"></div>
                             </div>
@@ -4123,7 +4136,21 @@
                         conveyor: { widthCm: 300, depthCm: 100, heightCm: 80, fill: '#E8F5E9', stroke: '#2E7D32', label: '컨베이어벨트' }
                     };
                     let wmsExtraFloors = []; // "+ 층 추가"로 생성했지만 아직 로케이션이 없는 층 번호
-                    let wmsTwinRenderState = null; // { cellSize, padding, scale, locations } - 마우스 좌표→그리드 변환용
+                    let wmsTwinRenderState = null; // { cellSize, padding, zoom, panX, panY, locations } - 마우스 좌표→그리드 변환용
+                    const WMS_TWIN_CELL_SIZE = 90; // 랙 1칸(100cm)의 기본 픽셀 크기 - 랙이 잘 보이도록 넉넉하게 고정(auto-fit 축소 없음)
+                    const WMS_TWIN_PADDING = 50;
+                    const WMS_TWIN_ZOOM_MIN = 0.3;
+                    const WMS_TWIN_ZOOM_MAX = 3;
+                    let wmsTwinZoom = 1;      // 사용자 확대/축소 배율
+                    let wmsTwinPanX = 0;      // 화면 이동(팬) 오프셋 (px)
+                    let wmsTwinPanY = 0;
+                    let wmsTwinLastLocations = []; // 최근 렌더에 쓰인 로케이션 목록(리사이즈/줌 재렌더용 캐시)
+                    let wmsTwinLastEquipment = [];
+                    let wmsTwinHighlightLocId = null; // "물건찾기"로 강조 표시 중인 로케이션 id
+                    let wmsTwinHighlightTimer = null;
+                    let wmsTwinFindResults = []; // 최근 "물건찾기" 검색 결과
+                    let wmsTwinFindIndex = 0;
+                    let wmsTwinResizeTimer = null;
 
                     function renderWmsTwinFloorTabs(floorsData) {
                         const tabsArea = document.getElementById('wms-twin-floor-tabs');
@@ -4137,6 +4164,7 @@
                                 wmsCurrentSubLevel = 1; // 층을 바꾸면 그 층의 1단부터 보여준다
                                 wmsExtraSubLevels = [];
                                 wmsSelectedLocationId = null;
+                                wmsTwinZoom = 1; wmsTwinPanX = 0; wmsTwinPanY = 0; // 층 전환 시 보기 상태 초기화
                                 renderWmsTwinControlPanel(null);
                                 loadWmsTwin();
                             });
@@ -4156,6 +4184,7 @@
                             btn.addEventListener('click', () => {
                                 wmsCurrentSubLevel = Number(btn.dataset.sublevel);
                                 wmsSelectedLocationId = null;
+                                wmsTwinZoom = 1; wmsTwinPanX = 0; wmsTwinPanY = 0; // 단 전환 시 보기 상태 초기화
                                 renderWmsTwinControlPanel(null);
                                 loadWmsTwin();
                             });
@@ -4206,16 +4235,28 @@
                         });
                     }
 
+                    // 캔버스 표시 크기와 내부 해상도가 다를 수 있어(반응형 캔버스) 좌표를 항상 캔버스 내부 픽셀 기준으로 변환한다.
+                    function wmsTwinGetCanvasPos(e, canvas) {
+                        const rect = canvas.getBoundingClientRect();
+                        const scaleX = rect.width ? canvas.width / rect.width : 1;
+                        const scaleY = rect.height ? canvas.height / rect.height : 1;
+                        return { px: (e.clientX - rect.left) * scaleX, py: (e.clientY - rect.top) * scaleY };
+                    }
+
+                    // 캔버스 픽셀 좌표(px,py) → 줌/팬을 반영한 "월드" 좌표로 변환 후 랙 하나를 찾아낸다.
+                    // wmsDrawTwinFrame이 그릴 때 쓰는 변환(translate(panX,panY) → scale(zoom))과 반드시 같은 공식을 써야 한다.
                     function wmsTwinHitTest(px, py) {
                         if (!wmsTwinRenderState) return null;
-                        const { cellSize, padding, scale, locations } = wmsTwinRenderState;
+                        const { cellSize, padding, zoom, panX, panY, locations } = wmsTwinRenderState;
+                        const wx = (px - panX) / zoom;
+                        const wy = (py - panY) / zoom;
                         for (let i = locations.length - 1; i >= 0; i--) {
                             const l = locations[i];
-                            const x = padding + Number(l.grid_x) * cellSize * scale;
-                            const y = padding + Number(l.grid_y) * cellSize * scale;
-                            const w = Number(l.width || 1) * cellSize * scale;
-                            const h = Number(l.height || 1) * cellSize * scale;
-                            if (px >= x && px <= x + w && py >= y && py <= y + h) return l;
+                            const x = padding + Number(l.grid_x) * cellSize;
+                            const y = padding + Number(l.grid_y) * cellSize;
+                            const w = Number(l.width || 1) * cellSize;
+                            const h = Number(l.height || 1) * cellSize;
+                            if (wx >= x && wx <= x + w && wy >= y && wy <= y + h) return l;
                         }
                         return null;
                     }
@@ -4224,50 +4265,67 @@
                         const canvas = document.getElementById('wms-twin-canvas');
                         const ctx = canvas.getContext('2d');
                         ctx.clearRect(0, 0, canvas.width, canvas.height);
+                        const cellSize = WMS_TWIN_CELL_SIZE, padding = WMS_TWIN_PADDING;
                         if (locations.length === 0) {
                             ctx.fillStyle = '#999';
                             ctx.font = '16px sans-serif';
                             ctx.fillText('이 층에 등록된 로케이션이 없습니다. 편집 모드에서 랙을 추가해보세요.', 20, 40);
-                            wmsTwinRenderState = { cellSize: 60, padding: 40, scale: 1, locations: [] };
+                            wmsTwinRenderState = { cellSize, padding, zoom: wmsTwinZoom, panX: wmsTwinPanX, panY: wmsTwinPanY, locations: [] };
                             return;
                         }
-                        const cellSize = 60, padding = 40;
-                        const maxX = Math.max(...locations.map(l => Number(l.grid_x) + Number(l.width || 1))) + 1;
-                        const maxY = Math.max(...locations.map(l => Number(l.grid_y) + Number(l.height || 1))) + 1;
-                        const scale = Math.min((canvas.width - padding * 2) / (maxX * cellSize), (canvas.height - padding * 2) / (maxY * cellSize), 1);
-                        wmsTwinRenderState = { cellSize, padding, scale, locations };
+                        // 예전에는 전체 랙을 고정 캔버스 안에 다 우겨넣도록 scale을 강제로 축소했지만(auto-fit),
+                        // 그러면 랙이 826개+ 규모에서 점처럼 작아져 알아볼 수 없다. 이제 셀 크기는 고정하고
+                        // 대신 사용자가 휠/버튼으로 조절하는 wmsTwinZoom + 드래그로 조절하는 팬(pan)으로 원하는 부분을 확대해서 본다.
+                        wmsTwinRenderState = { cellSize, padding, zoom: wmsTwinZoom, panX: wmsTwinPanX, panY: wmsTwinPanY, locations };
+
+                        ctx.save();
+                        ctx.translate(wmsTwinPanX, wmsTwinPanY);
+                        ctx.scale(wmsTwinZoom, wmsTwinZoom);
 
                         locations.forEach(l => {
                             const preset = WMS_SHAPE_PRESET[l.shape] || WMS_SHAPE_PRESET.rect;
-                            const x = padding + Number(l.grid_x) * cellSize * scale;
-                            const y = padding + Number(l.grid_y) * cellSize * scale;
-                            const w = Number(l.width || 1) * cellSize * scale;
-                            const h = Number(l.height || 1) * cellSize * scale;
+                            const x = padding + Number(l.grid_x) * cellSize;
+                            const y = padding + Number(l.grid_y) * cellSize;
+                            const w = Number(l.width || 1) * cellSize;
+                            const h = Number(l.height || 1) * cellSize;
+                            const isHighlighted = wmsTwinHighlightLocId === l.id;
                             ctx.fillStyle = l.is_obstacle ? '#BDBDBD' : preset.fill;
-                            ctx.strokeStyle = l.is_obstacle ? '#757575' : preset.stroke;
-                            ctx.lineWidth = (wmsEditMode && l.id === wmsSelectedLocationId) ? 3 : 1;
+                            ctx.strokeStyle = isHighlighted ? '#E53935' : (l.is_obstacle ? '#757575' : preset.stroke);
+                            ctx.lineWidth = (isHighlighted ? 5 : ((wmsEditMode && l.id === wmsSelectedLocationId) ? 3 : 1)) / wmsTwinZoom;
                             ctx.fillRect(x, y, w, h);
                             ctx.strokeRect(x, y, w, h);
-                            ctx.lineWidth = 1;
+                            ctx.lineWidth = 1 / wmsTwinZoom;
                             ctx.fillStyle = '#333';
-                            ctx.font = `${Math.max(9, 11 * scale)}px sans-serif`;
-                            ctx.fillText(l.code, x + 4, y + 16);
+                            ctx.font = '13px sans-serif';
+                            ctx.fillText(l.code, x + 6, y + 20);
                         });
 
                         (equipment || []).forEach(eq => {
                             if (!eq.warehouse_locations_with) return;
                             if ((eq.warehouse_locations_with.floor || 1) !== wmsCurrentFloor) return;
                             if ((eq.warehouse_locations_with.sub_level || 1) !== wmsCurrentSubLevel) return;
-                            const x = padding + Number(eq.warehouse_locations_with.grid_x) * cellSize * scale + (cellSize * scale) / 2;
-                            const y = padding + Number(eq.warehouse_locations_with.grid_y) * cellSize * scale + (cellSize * scale) / 2;
+                            const x = padding + Number(eq.warehouse_locations_with.grid_x) * cellSize + cellSize / 2;
+                            const y = padding + Number(eq.warehouse_locations_with.grid_y) * cellSize + cellSize / 2;
                             ctx.beginPath();
-                            ctx.arc(x, y, 8, 0, Math.PI * 2);
+                            ctx.arc(x, y, 8 / wmsTwinZoom, 0, Math.PI * 2);
                             ctx.fillStyle = eq.equipment_type === 'agv' ? '#1976D2' : '#F57C00';
                             ctx.fill();
                             ctx.fillStyle = '#333';
                             ctx.font = '10px sans-serif';
                             ctx.fillText(eq.name, x + 10, y + 4);
                         });
+
+                        ctx.restore();
+                    }
+
+                    // 캔버스 내부 해상도를 화면에 보이는 컨테이너 폭에 맞춰 키운다 (고정 800x500 → 반응형 + 세로로도 더 크게)
+                    function wmsSizeTwinCanvasToContainer() {
+                        const canvas = document.getElementById('wms-twin-canvas');
+                        if (!canvas) return;
+                        const w = Math.max(360, Math.floor(canvas.clientWidth || (canvas.parentElement ? canvas.parentElement.clientWidth : 0) || 900));
+                        const h = 650;
+                        if (canvas.width !== w) canvas.width = w;
+                        if (canvas.height !== h) canvas.height = h;
                     }
 
                     async function loadWmsTwin() {
@@ -4279,8 +4337,12 @@
                             if (!ok || !json.success) throw new Error(json.message || '평면도를 불러오지 못했습니다');
                             const { locations, equipment, floors } = json.data;
                             wmsLastFloorsData = floors || [];
+                            wmsTwinLastLocations = locations || [];
+                            wmsTwinLastEquipment = equipment || [];
+                            wmsSizeTwinCanvasToContainer();
                             renderWmsTwinFloorTabs(floors);
                             renderWmsTwinSubLevelTabs(floors);
+                            wmsTwinUpdateZoomLabel();
                             wmsDrawTwinFrame(locations, equipment);
                             if (wmsSelectedLocationId) {
                                 const sel = locations.find(l => l.id === wmsSelectedLocationId);
@@ -4288,7 +4350,7 @@
                                 if (!sel) wmsSelectedLocationId = null;
                             }
                             const eqOnFloor = (equipment || []).filter(eq => eq.warehouse_locations_with && (eq.warehouse_locations_with.floor || 1) === wmsCurrentFloor && (eq.warehouse_locations_with.sub_level || 1) === wmsCurrentSubLevel);
-                            legend.innerHTML = `분홍/파랑/노랑/초록 칸: 선반(랙) 종류별 표시 · 회색 칸: 장애물(벽/기둥) · 🔵 파란점: AGV 로봇 · 🟠 주황점: PDA 단말기 (${wmsCurrentFloor}층 ${wmsCurrentSubLevel}단, 총 ${locations.length}개 로케이션, ${eqOnFloor.length}개 장비)${wmsEditMode ? ' · ✏️ 편집 모드: 랙을 드래그해 이동하거나 클릭해 속성을 수정하세요. (클릭으로 선택 후 ↑↓←→ 방향키로도 1칸씩 이동 가능)' : ''}`;
+                            legend.innerHTML = `분홍/파랑/노랑/초록 칸: 선반(랙) 종류별 표시 · 회색 칸: 장애물(벽/기둥) · 🔵 파란점: AGV 로봇 · 🟠 주황점: PDA 단말기 (${wmsCurrentFloor}층 ${wmsCurrentSubLevel}단, 총 ${locations.length}개 로케이션, ${eqOnFloor.length}개 장비) · 🖱️ 휠: 확대/축소, 드래그: 화면 이동${wmsEditMode ? ' · ✏️ 편집 모드: 랙을 드래그해 이동하거나 클릭해 속성을 수정하세요. (클릭으로 선택 후 ↑↓←→ 방향키로도 1칸씩 이동 가능)' : ''}`;
                         } catch (err) {
                             legend.innerHTML = `<span style="color:#C62828;">⚠️ ${WithPlus.escapeHtml(err.message)}</span>`;
                         }
@@ -4303,7 +4365,7 @@
                         btn.textContent = wmsEditMode ? '✅ 편집 모드 끄기' : '✏️ 편집 모드 켜기';
                         btn.className = wmsEditMode ? 'btn btn-primary' : 'btn btn-secondary';
                         if (toolbox) toolbox.style.display = wmsEditMode ? 'flex' : 'none';
-                        if (canvas) canvas.style.cursor = wmsEditMode ? 'grab' : 'default';
+                        if (canvas) canvas.style.cursor = 'grab';
                         if (!wmsEditMode) { wmsSelectedLocationId = null; renderWmsTwinControlPanel(null); }
                         loadWmsTwin();
                     });
@@ -4315,6 +4377,7 @@
                         wmsCurrentFloor = next;
                         wmsCurrentSubLevel = 1; // 새 층은 1단부터 시작
                         wmsExtraSubLevels = [];
+                        wmsTwinZoom = 1; wmsTwinPanX = 0; wmsTwinPanY = 0;
                         loadWmsTwin();
                     });
 
@@ -4328,6 +4391,7 @@
                         if (next > 5) { alert('한 층에는 최대 5단까지만 만들 수 있습니다.'); return; }
                         wmsExtraSubLevels.push(next);
                         wmsCurrentSubLevel = next;
+                        wmsTwinZoom = 1; wmsTwinPanX = 0; wmsTwinPanY = 0;
                         loadWmsTwin();
                     });
 
@@ -4348,51 +4412,71 @@
                         });
                     });
 
-                    // ---- 캔버스 드래그(이동) & 클릭(선택) ----
+                    // ---- 캔버스 드래그(이동) & 클릭(선택) & 휠(확대/축소) ----
+                    // 편집 모드: 드래그=랙 이동, 클릭=선택(기존 동작 그대로 유지). 편집 모드가 아닐 때: 드래그=화면 팬(이동) — 서로 충돌하지 않도록 분리.
                     (function setupWmsTwinCanvasInteraction() {
                         const canvas = document.getElementById('wms-twin-canvas');
                         if (!canvas) return;
-                        let dragInfo = null;
+                        let dragInfo = null; // 편집모드: 랙 드래그 이동
+                        let panInfo = null;  // 비편집모드: 화면 팬
                         canvas.addEventListener('mousedown', (e) => {
-                            if (!wmsEditMode) return;
-                            const rect = canvas.getBoundingClientRect();
-                            const px = e.clientX - rect.left, py = e.clientY - rect.top;
-                            const hit = wmsTwinHitTest(px, py);
-                            if (!hit) return;
-                            dragInfo = { id: hit.id, startPx: px, startPy: py, origGridX: Number(hit.grid_x), origGridY: Number(hit.grid_y), moved: false };
+                            const { px, py } = wmsTwinGetCanvasPos(e, canvas);
+                            if (wmsEditMode) {
+                                const hit = wmsTwinHitTest(px, py);
+                                if (!hit) return;
+                                dragInfo = { id: hit.id, startPx: px, startPy: py, origGridX: Number(hit.grid_x), origGridY: Number(hit.grid_y), moved: false };
+                            } else {
+                                panInfo = { startPx: px, startPy: py, startPanX: wmsTwinPanX, startPanY: wmsTwinPanY, moved: false };
+                            }
                             canvas.style.cursor = 'grabbing';
                         });
                         canvas.addEventListener('mousemove', (e) => {
-                            if (!dragInfo) return;
-                            const rect = canvas.getBoundingClientRect();
-                            const px = e.clientX - rect.left, py = e.clientY - rect.top;
-                            if (Math.abs(px - dragInfo.startPx) > 3 || Math.abs(py - dragInfo.startPy) > 3) dragInfo.moved = true;
+                            if (dragInfo) {
+                                const { px, py } = wmsTwinGetCanvasPos(e, canvas);
+                                if (Math.abs(px - dragInfo.startPx) > 3 || Math.abs(py - dragInfo.startPy) > 3) dragInfo.moved = true;
+                            } else if (panInfo) {
+                                const { px, py } = wmsTwinGetCanvasPos(e, canvas);
+                                const dx = px - panInfo.startPx, dy = py - panInfo.startPy;
+                                if (Math.abs(dx) > 3 || Math.abs(dy) > 3) panInfo.moved = true;
+                                wmsTwinPanX = panInfo.startPanX + dx;
+                                wmsTwinPanY = panInfo.startPanY + dy;
+                                wmsDrawTwinFrame(wmsTwinLastLocations, wmsTwinLastEquipment);
+                            }
                         });
                         canvas.addEventListener('mouseup', async (e) => {
-                            if (!dragInfo) return;
-                            canvas.style.cursor = 'grab';
-                            const rect = canvas.getBoundingClientRect();
-                            const px = e.clientX - rect.left, py = e.clientY - rect.top;
-                            const { cellSize, scale } = wmsTwinRenderState || { cellSize: 60, scale: 1 };
-                            if (!dragInfo.moved) {
-                                // 클릭으로 취급 → 속성 패널에 선택
-                                wmsSelectedLocationId = dragInfo.id;
-                                loadWmsTwin();
-                            } else {
-                                const dxCells = Math.round((px - dragInfo.startPx) / (cellSize * scale));
-                                const dyCells = Math.round((py - dragInfo.startPy) / (cellSize * scale));
-                                const newGridX = Math.max(0, dragInfo.origGridX + dxCells);
-                                const newGridY = Math.max(0, dragInfo.origGridY + dyCells);
-                                const { ok, json } = await authedFetch(`/api/admin/inventory/locations/${dragInfo.id}`, {
-                                    method: 'PUT', body: JSON.stringify({ grid_x: newGridX, grid_y: newGridY })
-                                });
-                                if (!ok) alert(json.message || '이동 실패');
-                                wmsSelectedLocationId = dragInfo.id;
-                                loadWmsTwin();
+                            if (dragInfo) {
+                                canvas.style.cursor = 'grab';
+                                const { px, py } = wmsTwinGetCanvasPos(e, canvas);
+                                const { cellSize, zoom } = wmsTwinRenderState || { cellSize: WMS_TWIN_CELL_SIZE, zoom: 1 };
+                                if (!dragInfo.moved) {
+                                    // 클릭으로 취급 → 속성 패널에 선택
+                                    wmsSelectedLocationId = dragInfo.id;
+                                    loadWmsTwin();
+                                } else {
+                                    const dxCells = Math.round((px - dragInfo.startPx) / (cellSize * zoom));
+                                    const dyCells = Math.round((py - dragInfo.startPy) / (cellSize * zoom));
+                                    const newGridX = Math.max(0, dragInfo.origGridX + dxCells);
+                                    const newGridY = Math.max(0, dragInfo.origGridY + dyCells);
+                                    const { ok, json } = await authedFetch(`/api/admin/inventory/locations/${dragInfo.id}`, {
+                                        method: 'PUT', body: JSON.stringify({ grid_x: newGridX, grid_y: newGridY })
+                                    });
+                                    if (!ok) alert(json.message || '이동 실패');
+                                    wmsSelectedLocationId = dragInfo.id;
+                                    loadWmsTwin();
+                                }
+                                dragInfo = null;
+                            } else if (panInfo) {
+                                canvas.style.cursor = 'grab';
+                                panInfo = null;
                             }
-                            dragInfo = null;
                         });
-                        canvas.addEventListener('mouseleave', () => { dragInfo = null; });
+                        canvas.addEventListener('mouseleave', () => { dragInfo = null; panInfo = null; });
+                        canvas.addEventListener('wheel', (e) => {
+                            e.preventDefault();
+                            const { px, py } = wmsTwinGetCanvasPos(e, canvas);
+                            const factor = e.deltaY < 0 ? 1.15 : (1 / 1.15);
+                            wmsTwinSetZoom(wmsTwinZoom * factor, px, py);
+                        }, { passive: false });
                     })();
 
                     // ---- 방향키로 랙 이동: 편집모드에서 랙을 클릭해 선택한 뒤 ↑↓←→ 키로 1칸씩 이동 ----
@@ -4425,6 +4509,150 @@
                             wmsArrowMoveBusy = false;
                         }
                     });
+
+                    // ---- 줌/팬 컨트롤 ----
+                    function wmsTwinClampZoom(z) {
+                        return Math.min(WMS_TWIN_ZOOM_MAX, Math.max(WMS_TWIN_ZOOM_MIN, z));
+                    }
+
+                    function wmsTwinUpdateZoomLabel() {
+                        const label = document.getElementById('wms-twin-zoom-label');
+                        if (label) label.textContent = `${Math.round(wmsTwinZoom * 100)}%`;
+                    }
+
+                    // 캔버스 픽셀 좌표(anchorPx, anchorPy)가 확대/축소 후에도 화면에서 같은 지점을 가리키도록 팬을 보정한다.
+                    function wmsTwinSetZoom(newZoom, anchorPx, anchorPy) {
+                        const canvas = document.getElementById('wms-twin-canvas');
+                        if (!canvas) return;
+                        const clamped = wmsTwinClampZoom(newZoom);
+                        if (clamped === wmsTwinZoom) return;
+                        const ax = anchorPx !== undefined ? anchorPx : canvas.width / 2;
+                        const ay = anchorPy !== undefined ? anchorPy : canvas.height / 2;
+                        const worldX = (ax - wmsTwinPanX) / wmsTwinZoom;
+                        const worldY = (ay - wmsTwinPanY) / wmsTwinZoom;
+                        wmsTwinZoom = clamped;
+                        wmsTwinPanX = ax - worldX * wmsTwinZoom;
+                        wmsTwinPanY = ay - worldY * wmsTwinZoom;
+                        wmsTwinUpdateZoomLabel();
+                        wmsDrawTwinFrame(wmsTwinLastLocations, wmsTwinLastEquipment);
+                    }
+
+                    function wmsTwinResetView() {
+                        wmsTwinZoom = 1;
+                        wmsTwinPanX = 0;
+                        wmsTwinPanY = 0;
+                        wmsTwinUpdateZoomLabel();
+                        wmsDrawTwinFrame(wmsTwinLastLocations, wmsTwinLastEquipment);
+                    }
+
+                    function wmsTwinFitToView() {
+                        const canvas = document.getElementById('wms-twin-canvas');
+                        if (!canvas || !wmsTwinLastLocations.length) { wmsTwinResetView(); return; }
+                        const cellSize = WMS_TWIN_CELL_SIZE, padding = WMS_TWIN_PADDING;
+                        const maxX = Math.max(...wmsTwinLastLocations.map(l => Number(l.grid_x) + Number(l.width || 1)));
+                        const maxY = Math.max(...wmsTwinLastLocations.map(l => Number(l.grid_y) + Number(l.height || 1)));
+                        const worldW = padding * 2 + maxX * cellSize;
+                        const worldH = padding * 2 + maxY * cellSize;
+                        const fitZoom = wmsTwinClampZoom(Math.min(canvas.width / worldW, canvas.height / worldH));
+                        wmsTwinZoom = fitZoom;
+                        wmsTwinPanX = (canvas.width - worldW * fitZoom) / 2;
+                        wmsTwinPanY = (canvas.height - worldH * fitZoom) / 2;
+                        wmsTwinUpdateZoomLabel();
+                        wmsDrawTwinFrame(wmsTwinLastLocations, wmsTwinLastEquipment);
+                    }
+
+                    document.getElementById('wms-twin-zoom-in')?.addEventListener('click', () => wmsTwinSetZoom(wmsTwinZoom * 1.25));
+                    document.getElementById('wms-twin-zoom-out')?.addEventListener('click', () => wmsTwinSetZoom(wmsTwinZoom / 1.25));
+                    document.getElementById('wms-twin-zoom-reset')?.addEventListener('click', () => wmsTwinResetView());
+                    document.getElementById('wms-twin-zoom-fit')?.addEventListener('click', () => wmsTwinFitToView());
+
+                    // 창(윈도우) 크기 변경 시 캔버스도 컨테이너 폭에 맞춰 다시 리사이즈 (2D 디지털트윈 탭이 보이는 중일 때만)
+                    window.addEventListener('resize', () => {
+                        clearTimeout(wmsTwinResizeTimer);
+                        wmsTwinResizeTimer = setTimeout(() => {
+                            const panel = document.getElementById('wms-tab-twin');
+                            if (!panel || !panel.classList.contains('active')) return;
+                            wmsSizeTwinCanvasToContainer();
+                            wmsDrawTwinFrame(wmsTwinLastLocations, wmsTwinLastEquipment);
+                        }, 200);
+                    });
+
+                    // ---- "랙에 있는 물건찾기": 상품명/바코드로 검색해 해당 랙으로 층 전환 + 줌/팬 이동 + 강조 표시 ----
+                    async function wmsTwinRunFind() {
+                        const input = document.getElementById('wms-twin-find-input');
+                        const status = document.getElementById('wms-twin-find-status');
+                        const prevBtn = document.getElementById('wms-twin-find-prev');
+                        const nextBtn = document.getElementById('wms-twin-find-next');
+                        const q = ((input && input.value) || '').trim();
+                        if (prevBtn) prevBtn.style.display = 'none';
+                        if (nextBtn) nextBtn.style.display = 'none';
+                        if (!q) { if (status) status.textContent = '상품명 또는 바코드를 입력해주세요'; return; }
+                        if (status) status.textContent = '검색 중...';
+                        try {
+                            const { ok, json } = await authedFetch(`/api/admin/inventory/find-product-location?q=${encodeURIComponent(q)}`);
+                            if (!ok || !json.success) throw new Error((json && json.message) || '검색에 실패했습니다');
+                            wmsTwinFindResults = json.data || [];
+                            wmsTwinFindIndex = 0;
+                            if (!wmsTwinFindResults.length) {
+                                if (status) status.textContent = (json && json.message) || `"${q}"에 대한 결과를 찾을 수 없습니다`;
+                                return;
+                            }
+                            if (wmsTwinFindResults.length > 1) {
+                                if (prevBtn) prevBtn.style.display = '';
+                                if (nextBtn) nextBtn.style.display = '';
+                            }
+                            await wmsTwinGoToFindResult(0);
+                        } catch (err) {
+                            if (status) status.textContent = `⚠️ ${err.message}`;
+                        }
+                    }
+
+                    async function wmsTwinGoToFindResult(idx) {
+                        if (!wmsTwinFindResults.length) return;
+                        wmsTwinFindIndex = ((idx % wmsTwinFindResults.length) + wmsTwinFindResults.length) % wmsTwinFindResults.length;
+                        const r = wmsTwinFindResults[wmsTwinFindIndex];
+                        const status = document.getElementById('wms-twin-find-status');
+                        if (status) {
+                            status.textContent = `"${r.product_name || ''}" → ${r.location_code} (${r.floor}층 ${r.sub_level}단) · ${wmsTwinFindResults.length}건 중 ${wmsTwinFindIndex + 1}번째`;
+                        }
+                        const needsReload = r.floor !== wmsCurrentFloor || r.sub_level !== wmsCurrentSubLevel || !wmsTwinLastLocations.length;
+                        wmsCurrentFloor = r.floor || 1;
+                        wmsCurrentSubLevel = r.sub_level || 1;
+                        wmsSelectedLocationId = null;
+                        if (needsReload) await loadWmsTwin();
+                        wmsTwinFocusLocation(r.location_id, r.grid_x, r.grid_y);
+                    }
+
+                    function wmsTwinFocusLocation(locationId, fallbackGridX, fallbackGridY) {
+                        const canvas = document.getElementById('wms-twin-canvas');
+                        if (!canvas) return;
+                        const cellSize = WMS_TWIN_CELL_SIZE, padding = WMS_TWIN_PADDING;
+                        const loc = wmsTwinLastLocations.find(l => l.id === locationId);
+                        const gx = loc ? Number(loc.grid_x) : Number(fallbackGridX || 0);
+                        const gy = loc ? Number(loc.grid_y) : Number(fallbackGridY || 0);
+                        const w = loc ? Number(loc.width || 1) : 1;
+                        const h = loc ? Number(loc.height || 1) : 1;
+                        const centerWorldX = padding + gx * cellSize + (w * cellSize) / 2;
+                        const centerWorldY = padding + gy * cellSize + (h * cellSize) / 2;
+                        wmsTwinZoom = wmsTwinClampZoom(1.6);
+                        wmsTwinPanX = canvas.width / 2 - centerWorldX * wmsTwinZoom;
+                        wmsTwinPanY = canvas.height / 2 - centerWorldY * wmsTwinZoom;
+                        wmsTwinUpdateZoomLabel();
+                        wmsTwinHighlightLocId = locationId;
+                        wmsDrawTwinFrame(wmsTwinLastLocations, wmsTwinLastEquipment);
+                        if (wmsTwinHighlightTimer) clearTimeout(wmsTwinHighlightTimer);
+                        wmsTwinHighlightTimer = setTimeout(() => {
+                            wmsTwinHighlightLocId = null;
+                            wmsDrawTwinFrame(wmsTwinLastLocations, wmsTwinLastEquipment);
+                        }, 4000);
+                    }
+
+                    document.getElementById('wms-twin-find-btn')?.addEventListener('click', wmsTwinRunFind);
+                    document.getElementById('wms-twin-find-input')?.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter') { e.preventDefault(); wmsTwinRunFind(); }
+                    });
+                    document.getElementById('wms-twin-find-prev')?.addEventListener('click', () => wmsTwinGoToFindResult(wmsTwinFindIndex - 1));
+                    document.getElementById('wms-twin-find-next')?.addEventListener('click', () => wmsTwinGoToFindResult(wmsTwinFindIndex + 1));
 
                     // ---- 5) AGV 시뮬레이션 대시보드 (admin 전용) ----
                     async function loadWmsEquipment() {
