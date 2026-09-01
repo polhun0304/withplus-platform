@@ -91,6 +91,7 @@
             padding: 24px 20px; border-top: 1px solid var(--border-color); font-size: 0.82em; color: var(--text-gray);
         }
         .classic-footer strong { color: var(--text-dark); }
+        .classic-footer .biz-info { margin-top: 10px; font-size: 0.92em; line-height: 1.7; }
         .classic-footer .powered-by { margin-top: 14px; font-size: 0.85em; }
         .classic-footer .powered-by a { color: var(--primary-color); text-decoration: none; font-weight: 700; }
 
@@ -141,6 +142,7 @@
 
         .modern-footer { padding: 22px 20px 28px; font-size: 0.78em; color: #888; border-top: 3px solid #111; }
         .modern-footer strong { color: #111; }
+        .modern-footer .biz-info { margin-top: 8px; line-height: 1.7; }
         .modern-footer .m-powered-by { margin-top: 12px; font-size: 0.95em; }
         .modern-footer .m-powered-by a { text-decoration: none; font-weight: 700; }
 
@@ -184,6 +186,7 @@
 
         .warm-footer { padding: 30px 20px; text-align: center; background: var(--bg-light); font-size: 0.82em; color: #777; }
         .warm-footer strong { color: #333; display: block; margin-bottom: 6px; font-size: 1.05em; }
+        .warm-footer .biz-info { margin-top: 6px; line-height: 1.7; }
         .warm-footer .w-powered-by { margin-top: 12px; }
         .warm-footer .w-powered-by a { text-decoration: none; font-weight: 700; }
     </style>
@@ -235,6 +238,18 @@
             const heroTitle = community.hero_title || '함께할수록 더 큰 나눔이 됩니다';
             const heroSubtitle = community.hero_subtitle || 'WITH+에서 쇼핑하고 적립된 혜택이 공동체를 위해 사용됩니다.';
             const totalPointsText = Number(community.total_points_earned || 0).toLocaleString('ko-KR') + '원';
+
+            // 랜딩페이지 하단에 표시할 사업자정보 - 서버가 business_info_mode에 따라 이미 "이 조직 자체 정보" 또는
+            // "WITH+ 플랫폼 정보" 중 실제 표시값을 계산해 community.resolved_business_info로 내려준다.
+            // 세 템플릿(classic/modern/warm) 모두 같은 내용을 각자의 footer 스타일(.biz-info)로 보여준다.
+            const bizInfo = community.resolved_business_info || {};
+            const bizInfoHtml = (bizInfo.company_name || bizInfo.business_number || bizInfo.address) ? `
+                <div class="biz-info">
+                    ${bizInfo.company_name ? WithPlus.escapeHtml(bizInfo.company_name) : ''}${bizInfo.ceo_name ? ' | 대표: ' + WithPlus.escapeHtml(bizInfo.ceo_name) : ''}${bizInfo.business_number ? ' | 사업자등록번호: ' + WithPlus.escapeHtml(bizInfo.business_number) : ''}${bizInfo.mail_order_registration_number ? ' | 통신판매업신고: ' + WithPlus.escapeHtml(bizInfo.mail_order_registration_number) : ''}<br>
+                    ${bizInfo.address ? WithPlus.escapeHtml(bizInfo.address) + '<br>' : ''}
+                    ${bizInfo.phone ? '대표전화: ' + WithPlus.escapeHtml(bizInfo.phone) : ''}${bizInfo.phone && bizInfo.email ? ' | ' : ''}${bizInfo.email ? '이메일: ' + WithPlus.escapeHtml(bizInfo.email) : ''}
+                    ${bizInfo.privacy_officer_name ? '<br>개인정보보호책임자: ' + WithPlus.escapeHtml(bizInfo.privacy_officer_name) + (bizInfo.privacy_officer_position ? ' (' + WithPlus.escapeHtml(bizInfo.privacy_officer_position) + ')' : '') + (bizInfo.privacy_officer_contact ? ' · ' + WithPlus.escapeHtml(bizInfo.privacy_officer_contact) : '') : ''}
+                </div>` : '';
 
             document.title = `${community.name}와 함께하는 WITH+`;
 
@@ -335,6 +350,7 @@
                     <strong>${WithPlus.escapeHtml(community.name)}</strong><br>
                     ${community.address ? WithPlus.escapeHtml(community.address) + '<br>' : ''}
                     ${community.phone ? WithPlus.escapeHtml(community.phone) : ''}${community.phone && community.website_url ? ' · ' : ''}${community.website_url ? WithPlus.escapeHtml(community.website_url) : ''}
+                    ${bizInfoHtml}
                     <div class="powered-by">WITH+는 ${WithPlus.escapeHtml(community.name)}와 함께 하나님의 사랑을 전하는 사역에 동참합니다.<br>Powered by <a href="/">WITH+</a></div>
                 </footer>`;
             }
@@ -436,6 +452,7 @@
                     <strong>${WithPlus.escapeHtml(community.name)}</strong><br>
                     ${community.address ? WithPlus.escapeHtml(community.address) + '<br>' : ''}
                     ${community.phone ? WithPlus.escapeHtml(community.phone) : ''}${community.phone && community.website_url ? ' · ' : ''}${community.website_url ? WithPlus.escapeHtml(community.website_url) : ''}
+                    ${bizInfoHtml}
                     <div class="m-powered-by">WITH+는 ${WithPlus.escapeHtml(community.name)}와 함께 하나님의 사랑을 전하는 사역에 동참합니다.<br>Powered by <a href="/" style="color:${primaryColor};">WITH+</a></div>
                 </footer>`;
             }
@@ -517,6 +534,7 @@
                     <strong>${WithPlus.escapeHtml(community.name)}</strong>
                     ${community.address ? WithPlus.escapeHtml(community.address) + '<br>' : ''}
                     ${community.phone ? WithPlus.escapeHtml(community.phone) : ''}${community.phone && community.website_url ? ' · ' : ''}${community.website_url ? WithPlus.escapeHtml(community.website_url) : ''}
+                    ${bizInfoHtml}
                     <div class="w-powered-by">🤍 WITH+는 ${WithPlus.escapeHtml(community.name)}와 함께 하나님의 사랑을 전하는 사역에 동참합니다.<br>Powered by <a href="/" style="color:${primaryColor};">WITH+</a></div>
                 </footer>`;
             }

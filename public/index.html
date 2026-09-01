@@ -1406,16 +1406,10 @@
         </div>
     </section>
 
-    <!-- RECOMMENDED PRODUCTS -->
-    <section class="products-section">
-        <div class="section-header">
-            <h2 class="section-title" id="recommended-title">💎 추천 상품</h2>
-        </div>
-        <p id="recommended-subtitle" style="font-size:0.85em; color:var(--text-gray); margin:-10px 0 16px;"></p>
-        <div class="product-grid" id="recommended-products-grid">
-            <!-- JS로 실제 상품 데이터가 채워집니다 -->
-        </div>
-    </section>
+    <!-- PERSONALIZED HOME SECTIONS -->
+    <!-- 개인화 추천 섹션들은 /api/me/home-sections가 내려주는 순서/개수 그대로 여기 채워진다.
+         섹션 추가/순서 변경/알고리즘 교체는 서버 쪽만 바꾸면 되고 이 페이지는 다시 손댈 필요가 없다. -->
+    <div id="home-sections-container"></div>
 
     <!-- RECENTLY VIEWED -->
     <section class="recently-viewed" id="recently-viewed-section" style="display:none;">
@@ -1483,9 +1477,9 @@
                 </div>
 
                 <p>
-                    <strong>WITH+ (삼육오이사) | 대표: 최창훈 | 사업자번호: 255-31-01883</strong><br>
-                    주소: 서울 서초구 논현로17길 3, 3층<br>
-                    대표전화: 010-6202-0304 | 이메일: polhun0304@naver.com<br>
+                    <strong><span id="pub-biz-company-name">WITH+ (삼육오이사)</span> | 대표: <span id="pub-biz-ceo-name">최창훈</span> | 사업자번호: <span id="pub-biz-business-number">255-31-01883</span></strong><br>
+                    주소: <span id="pub-biz-address">서울 서초구 논현로17길 3, 3층</span><br>
+                    대표전화: <span id="pub-biz-phone">010-6202-0304</span> | 이메일: <span id="pub-biz-email">polhun0304@naver.com</span><br>
                     호스팅제공자: AWS<br>
                     <br>
                     &copy; 2024-2026 WITH+ Co., Ltd. All Rights Reserved.
@@ -1500,6 +1494,27 @@
         (async function () {
             WithPlus.initHeader();
             WithPlus.initCategoryNav(); // 상단 카테고리 메뉴/카테고리 둘러보기 그리드를 실제 카테고리 데이터로 렌더링 (분양 조직 방문자는 그 조직의 노출 설정 반영)
+
+            // ============================================
+            // 하단 사업자정보: 관리자 설정 화면(⚙️ 설정 > 사업자 정보)에서 입력한 값을 그대로 표시한다.
+            // 실패하거나 값이 비어있으면 위 HTML에 이미 채워둔 현재 실제 값을 그대로 유지한다(빈 값으로 덮어쓰지 않음).
+            // ============================================
+            (async function loadPublicBusinessInfo() {
+                try {
+                    const { ok, json } = await WithPlus.fetchJSON('/api/public/business-info');
+                    if (!ok || !json.success || !json.data) return;
+                    const info = json.data;
+                    const setIfPresent = (id, value) => {
+                        if (value) document.getElementById(id).textContent = value;
+                    };
+                    setIfPresent('pub-biz-company-name', info.company_name);
+                    setIfPresent('pub-biz-ceo-name', info.ceo_name);
+                    setIfPresent('pub-biz-business-number', info.business_number);
+                    setIfPresent('pub-biz-address', info.address);
+                    setIfPresent('pub-biz-phone', info.phone);
+                    setIfPresent('pub-biz-email', info.email);
+                } catch (e) { /* 실패해도 위 HTML의 기본값을 그대로 보여준다 */ }
+            })();
 
             // ============================================
             // 베스트 상품: 실제 API에서 로드 (평점순)
@@ -1524,45 +1539,41 @@
             }
 
             // ============================================
-            // 🎯 개인화 추천 (쇼핑 큐레이션)
-            // - 로그인 회원: 구매/찜 이력 기반 개인화 추천 (신호가 없으면 정직하게 베스트셀러로 대체)
-            // - 비회원: 지금 잘 팔리는 상품(베스트셀러)을 보여준다 (예전처럼 "최신 등록순"으로 아무거나 채우지 않음)
-            // ============================================
+            // 🎯 개인화 홈 화면 (섹션형)
+            // /api/me/home-sections가 { section_key, title, subtitle, products } 배열을 그대로 내려주므로
+            // 이 화면은 "순서대로 렌더링"만 한다 - 알고리즘이 바뀌거나 섹션이 늘어나도 이 함수는 그대로 둔다.
+            // 비로그인 방문자도 인기 상품 섹션을 받도록 optionalAuth 엔드포인트라 토큰 없이도 호출 가능하다.
             async function loadRecommendedProducts() {
-                const recoGrid = document.getElementById('recommended-products-grid');
-                const titleEl = document.getElementById('recommended-title');
-                const subtitleEl = document.getElementById('recommended-subtitle');
-                if (!recoGrid) return;
+                const container = document.getElementById('home-sections-container');
+                if (!container) return;
                 try {
-                    const session = await WithPlus.getSession();
-                    let json;
-                    if (session) {
-                        const token = await WithPlus.getAccessToken();
-                        const res = await fetch('/api/me/recommendations?limit=8', { headers: { Authorization: 'Bearer ' + token } });
-                        json = await res.json();
-                        if (!res.ok || !json.success) throw new Error(json.message || '추천 상품을 불러오지 못했습니다');
-                        if (json.basis === 'personalized') {
-                            titleEl.textContent = '💎 회원님을 위한 추천';
-                            subtitleEl.textContent = '구매·찜 이력을 바탕으로 골라봤어요';
-                        } else {
-                            titleEl.textContent = '💎 추천 상품';
-                            subtitleEl.textContent = '아직 구매·찜 이력이 없어서, 지금 인기 있는 상품을 보여드려요';
-                        }
-                    } else {
-                        const { ok, json: popularJson } = await WithPlus.fetchJSON('/api/recommendations/popular?limit=8');
-                        if (!ok || !popularJson.success) throw new Error('추천 상품을 불러오지 못했습니다');
-                        json = popularJson;
-                        titleEl.textContent = '💎 지금 인기 있는 상품';
-                        subtitleEl.textContent = '로그인하면 회원님 맞춤 추천으로 바뀌어요';
-                    }
+                    const token = await WithPlus.getAccessToken();
+                    const headers = {};
+                    if (token) headers['Authorization'] = 'Bearer ' + token;
+                    // 실시간 개인화(제안서 5절) - 이번 세션에서 방금 본 상품("최근 본 상품")을 함께 보내서,
+                    // 서버 이력에 아직 반영 안 됐어도 지금 홈 화면에 곧바로 신호로 반영되게 한다.
+                    const recentIds = (WithPlus.getRecentlyViewed() || []).slice(0, 5);
+                    const recentParam = recentIds.length > 0 ? `&session_recent_ids=${recentIds.map(encodeURIComponent).join(',')}` : '';
+                    const res = await fetch(`/api/me/home-sections?limit=8${recentParam}`, { headers });
+                    const json = await res.json();
+                    if (!res.ok || !json.success) throw new Error(json.message || '추천 상품을 불러오지 못했습니다');
 
-                    if (!json.data || json.data.length === 0) {
-                        recoGrid.innerHTML = '<p style="grid-column:1/-1; text-align:center; color:var(--text-gray); padding:40px 0;">아직 추천할 상품이 충분하지 않습니다.</p>';
-                        return;
-                    }
-                    recoGrid.innerHTML = json.data.map(WithPlus.renderProductCard).join('');
+                    const sections = json.sections || [];
+                    if (sections.length === 0) { container.innerHTML = ''; return; }
+
+                    container.innerHTML = sections.map(sec => `
+                        <section class="products-section">
+                            <div class="section-header">
+                                <h2 class="section-title">${WithPlus.escapeHtml(sec.title)}</h2>
+                            </div>
+                            ${sec.subtitle ? `<p style="font-size:0.85em; color:var(--text-gray); margin:-10px 0 16px;">${WithPlus.escapeHtml(sec.subtitle)}</p>` : ''}
+                            <div class="product-grid">${sec.products.map(WithPlus.renderProductCard).join('')}</div>
+                        </section>
+                    `).join('');
+                    WithPlus.syncWishlistHearts && WithPlus.syncWishlistHearts();
+                    WithPlus.attachProductCardInteractions && WithPlus.attachProductCardInteractions();
                 } catch (err) {
-                    recoGrid.innerHTML = `<p style="grid-column:1/-1; text-align:center; color:var(--text-gray); padding:40px 0;">추천 상품을 불러오는 중 문제가 발생했습니다: ${WithPlus.escapeHtml(err.message)}</p>`;
+                    container.innerHTML = `<section class="products-section"><p style="grid-column:1/-1; text-align:center; color:var(--text-gray); padding:40px 0;">추천 상품을 불러오는 중 문제가 발생했습니다: ${WithPlus.escapeHtml(err.message)}</p></section>`;
                 }
             }
 

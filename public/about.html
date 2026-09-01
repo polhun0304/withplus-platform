@@ -101,12 +101,12 @@
 
             <h2>회사 정보</h2>
             <table>
-                <tr><th>상호</th><td>삼육오이사 (WITH+)</td></tr>
-                <tr><th>대표자</th><td>최창훈</td></tr>
-                <tr><th>사업자등록번호</th><td>255-31-01883</td></tr>
-                <tr><th>통신판매업신고번호</th><td class="placeholder">[통신판매업 신고 진행 예정 — 신고 완료 즉시 게시]</td></tr>
-                <tr><th>주소</th><td>서울 서초구 논현로17길 3, 3층</td></tr>
-                <tr><th>대표전화 / 이메일</th><td>010-6202-0304 / polhun0304@naver.com</td></tr>
+                <tr><th>상호</th><td><span id="pub-biz-company-name">삼육오이사 (WITH+)</span></td></tr>
+                <tr><th>대표자</th><td><span id="pub-biz-ceo-name">최창훈</span></td></tr>
+                <tr><th>사업자등록번호</th><td><span id="pub-biz-business-number">255-31-01883</span></td></tr>
+                <tr><th>통신판매업신고번호</th><td><span id="pub-biz-mail-order-number" class="placeholder">[통신판매업 신고 진행 예정 — 신고 완료 즉시 게시]</span></td></tr>
+                <tr><th>주소</th><td><span id="pub-biz-address">서울 서초구 논현로17길 3, 3층</span></td></tr>
+                <tr><th>대표전화 / 이메일</th><td><span id="pub-biz-phone">010-6202-0304</span> / <span id="pub-biz-email">polhun0304@naver.com</span></td></tr>
             </table>
             <p style="font-size:0.85em;color:var(--text-gray);">통신판매업신고가 완료되는 대로 실제 신고번호로 교체됩니다. 자세한 이용조건은 <a href="/terms" style="color:var(--primary-color);">이용약관</a>을 참고해주세요.</p>
 
@@ -122,6 +122,30 @@
     <script>
         if (window.WithPlus && WithPlus.initHeader) { WithPlus.initHeader(); }
         function toggleFaq(el) { el.parentElement.classList.toggle('open'); }
+
+        // 사업자정보(회사 정보 표): 관리자 설정 화면(⚙️ 설정 > 사업자 정보)에서 입력한 값을 그대로 표시한다.
+        // 실패하거나 값이 비어있으면 위 HTML에 이미 채워둔 현재 실제 값을 그대로 유지한다(빈 값으로 덮어쓰지 않음).
+        (async function loadPublicBusinessInfo() {
+            try {
+                const { ok, json } = await WithPlus.fetchJSON('/api/public/business-info');
+                if (!ok || !json.success || !json.data) return;
+                const info = json.data;
+                const setIfPresent = (id, value) => {
+                    if (value) document.getElementById(id).textContent = value;
+                };
+                setIfPresent('pub-biz-company-name', info.company_name);
+                setIfPresent('pub-biz-ceo-name', info.ceo_name);
+                setIfPresent('pub-biz-business-number', info.business_number);
+                setIfPresent('pub-biz-address', info.address);
+                setIfPresent('pub-biz-phone', info.phone);
+                setIfPresent('pub-biz-email', info.email);
+                if (info.mail_order_registration_number) {
+                    const el = document.getElementById('pub-biz-mail-order-number');
+                    el.textContent = info.mail_order_registration_number;
+                    el.classList.remove('placeholder');
+                }
+            } catch (e) { /* 실패해도 위 HTML의 기본값을 그대로 보여준다 */ }
+        })();
     </script>
 </body>
 </html>

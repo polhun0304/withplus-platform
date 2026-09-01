@@ -9504,9 +9504,41 @@ app.get('/api/communities/:slug', async (req, res) => {
       .filter(o => !['cancelled', 'refunded'].includes(o.status))
       .reduce((sum, o) => sum + Number(o.community_earned_points || 0), 0);
 
+    // 랜딩페이지 하단에 표시할 사업자정보 - communities.business_info_mode에 따라 "이 조직 자체 정보" 또는
+    // "WITH+ 플랫폼 정보" 중 실제로 보여줄 값을 서버가 미리 계산해 내려준다(프론트는 모드 분기를 몰라도 됨).
+    let resolvedBusinessInfo;
+    if (community.business_info_mode === 'own') {
+      resolvedBusinessInfo = {
+        company_name: community.business_name || community.name || '',
+        ceo_name: community.ceo_name || '',
+        business_number: community.business_number || '',
+        mail_order_registration_number: community.mail_order_registration_number || '',
+        address: community.address || '',
+        phone: community.phone || '',
+        email: community.contact_email || '',
+        privacy_officer_name: community.privacy_officer_name || '',
+        privacy_officer_position: community.privacy_officer_position || '',
+        privacy_officer_contact: community.privacy_officer_contact || ''
+      };
+    } else {
+      const platformInfo = await getPlatformBusinessInfo();
+      resolvedBusinessInfo = {
+        company_name: platformInfo.company_name || '',
+        ceo_name: platformInfo.ceo_name || '',
+        business_number: platformInfo.business_number || '',
+        mail_order_registration_number: platformInfo.mail_order_registration_number || '',
+        address: platformInfo.address || '',
+        phone: platformInfo.phone || '',
+        email: platformInfo.email || '',
+        privacy_officer_name: platformInfo.privacy_officer_name || '',
+        privacy_officer_position: platformInfo.privacy_officer_position || '',
+        privacy_officer_contact: platformInfo.privacy_officer_contact || ''
+      };
+    }
+
     res.json({
       success: true,
-      data: { ...community, member_count: memberCount || 0, total_points_earned: totalPointsEarned },
+      data: { ...community, member_count: memberCount || 0, total_points_earned: totalPointsEarned, resolved_business_info: resolvedBusinessInfo },
       timestamp: new Date().toISOString()
     });
   } catch (err) {
@@ -9673,10 +9705,12 @@ function parsePointRateInput(value) {
 
 // 분양 랜딩페이지 디자인 템플릿 - DB CHECK 제약과 동일한 허용값 목록 (여기서 먼저 걸러야 깔끔한 400 메시지를 줄 수 있음)
 const LANDING_TEMPLATES = ['classic', 'modern', 'warm'];
+// 이 조직 랜딩페이지에 표시할 사업자정보를 "WITH+ 플랫폼 정보"로 할지 "이 조직 자체 정보"로 할지 - communities.business_info_mode CHECK 제약과 동일
+const BUSINESS_INFO_MODES = ['platform', 'own'];
 
 app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, admin_email, personal_point_rate, community_point_rate, landing_template, business_number } = req.body;
+    const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, admin_email, personal_point_rate, community_point_rate, landing_template, business_number, business_info_mode, business_name, ceo_name, mail_order_registration_number, privacy_officer_name, privacy_officer_position, privacy_officer_contact } = req.body;
     if (!name || !slug) {
       return res.status(400).json({ error: 'Bad Request', message: 'Required fields: name, slug', timestamp: new Date().toISOString() });
     }
@@ -9686,6 +9720,9 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
     }
     if (landing_template !== undefined && !LANDING_TEMPLATES.includes(landing_template)) {
       return res.status(400).json({ error: 'Bad Request', message: `landing_template은 ${LANDING_TEMPLATES.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+    }
+    if (business_info_mode !== undefined && !BUSINESS_INFO_MODES.includes(business_info_mode)) {
+      return res.status(400).json({ error: 'Bad Request', message: `business_info_mode는 ${BUSINESS_INFO_MODES.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
     }
 
     // 이 조직을 담당할 관리자를 이메일로 지정 (WITH+에 이미 가입된 회원이어야 함) - 이 사람만 /api/community-admin/* 로 이 조직 데이터를 볼 수 있다
@@ -9737,6 +9774,13 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
         personal_point_rate: personalRate.present ? personalRate.value : null,
         community_point_rate: communityRate.present ? communityRate.value : null,
         landing_template: landing_template || 'classic',
+        business_info_mode: business_info_mode || 'platform',
+        business_name: business_name || null,
+        ceo_name: ceo_name || null,
+        mail_order_registration_number: mail_order_registration_number || null,
+        privacy_officer_name: privacy_officer_name || null,
+        privacy_officer_position: privacy_officer_position || null,
+        privacy_officer_contact: privacy_officer_contact || null,
         status: 'active'
       }])
       .select()
@@ -9768,7 +9812,7 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
 
 app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, status, admin_email, personal_point_rate, community_point_rate, landing_template, settlement_commission_rate, business_number, settlement_tax_method, bank_name, bank_account, account_holder, bank_account_verified } = req.body;
+    const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, status, admin_email, personal_point_rate, community_point_rate, landing_template, settlement_commission_rate, business_number, settlement_tax_method, bank_name, bank_account, account_holder, bank_account_verified, business_info_mode, business_name, ceo_name, mail_order_registration_number, privacy_officer_name, privacy_officer_position, privacy_officer_contact } = req.body;
     const updates = { updated_at: new Date().toISOString() };
     let bizWarning = null;
     // business_number/bank_account 변경 여부 판정에 기존 값이 필요하므로, 둘 중 하나라도 바뀌면 한 번만 조회해서 같이 재사용한다
@@ -9879,6 +9923,21 @@ app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super
       }
       updates.settlement_tax_method = settlement_tax_method;
     }
+    // 랜딩페이지 하단 사업자정보를 "WITH+ 플랫폼 정보"로 보여줄지 "이 조직 자체 정보"로 보여줄지 선택
+    if (business_info_mode !== undefined) {
+      if (!BUSINESS_INFO_MODES.includes(business_info_mode)) {
+        return res.status(400).json({ error: 'Bad Request', message: `business_info_mode는 ${BUSINESS_INFO_MODES.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+      }
+      updates.business_info_mode = business_info_mode;
+    }
+    // 이 조직 자체 사업자정보(business_info_mode가 'own'일 때 표시됨) - business_number/address/phone/contact_email은
+    // 원천징수 등 기존 용도와 겸용이라 위에서 이미 처리되므로 여기서는 신규 필드만 다룬다
+    if (business_name !== undefined) updates.business_name = business_name || null;
+    if (ceo_name !== undefined) updates.ceo_name = ceo_name || null;
+    if (mail_order_registration_number !== undefined) updates.mail_order_registration_number = mail_order_registration_number || null;
+    if (privacy_officer_name !== undefined) updates.privacy_officer_name = privacy_officer_name || null;
+    if (privacy_officer_position !== undefined) updates.privacy_officer_position = privacy_officer_position || null;
+    if (privacy_officer_contact !== undefined) updates.privacy_officer_contact = privacy_officer_contact || null;
 
     const { data, error } = await supabase
       .from('communities')
@@ -10364,6 +10423,93 @@ app.put('/api/community-admin/point-rates', authenticate, async (req, res) => {
   } catch (err) {
     console.error('Error updating community-admin point rates:', err);
     res.status(500).json({ error: 'Failed to update point rates', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 분양 조직 담당 관리자: 자기 조직의 "자체 사업자정보"(랜딩페이지 하단 표시용)를 직접 입력/조회
+// business_info_mode 자체는 본부 관리자만 바꿀 수 있다(담당자는 플랫폼 정보 표시 <-> 자체 정보 표시를 스스로 전환할 수 없음) -
+// GET은 현재 모드를 그대로 알려줘서 프론트가 "아직 활성화 안됨" 안내를 보여줄 수 있게 하고, PUT은 모드가 'own'이 아니면 거절한다.
+app.get('/api/community-admin/business-info', authenticate, async (req, res) => {
+  try {
+    const community = await getMyManagedCommunity(req.user.id);
+    if (!community) {
+      return res.status(403).json({ error: 'Forbidden', message: '담당하고 있는 분양 조직이 없습니다', timestamp: new Date().toISOString() });
+    }
+    res.json({
+      success: true,
+      data: {
+        business_info_mode: community.business_info_mode || 'platform',
+        business_name: community.business_name || '',
+        ceo_name: community.ceo_name || '',
+        business_number: community.business_number || '',
+        mail_order_registration_number: community.mail_order_registration_number || '',
+        address: community.address || '',
+        phone: community.phone || '',
+        contact_email: community.contact_email || '',
+        privacy_officer_name: community.privacy_officer_name || '',
+        privacy_officer_position: community.privacy_officer_position || '',
+        privacy_officer_contact: community.privacy_officer_contact || ''
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching community-admin business info:', err);
+    res.status(500).json({ error: 'Failed to fetch business info', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/community-admin/business-info', authenticate, async (req, res) => {
+  try {
+    const community = await getMyManagedCommunity(req.user.id);
+    if (!community) {
+      return res.status(403).json({ error: 'Forbidden', message: '담당하고 있는 분양 조직이 없습니다', timestamp: new Date().toISOString() });
+    }
+    if (community.business_info_mode !== 'own') {
+      return res.status(400).json({ error: 'Bad Request', message: '플랫폼 관리자가 자체 사업자정보 표시를 아직 활성화하지 않았습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { business_name, ceo_name, business_number, mail_order_registration_number, address, phone, contact_email, privacy_officer_name, privacy_officer_position, privacy_officer_contact } = req.body || {};
+    const updates = { updated_at: new Date().toISOString() };
+    if (business_name !== undefined) updates.business_name = business_name || null;
+    if (ceo_name !== undefined) updates.ceo_name = ceo_name || null;
+    if (business_number !== undefined) updates.business_number = business_number || null;
+    if (mail_order_registration_number !== undefined) updates.mail_order_registration_number = mail_order_registration_number || null;
+    if (address !== undefined) updates.address = address || null;
+    if (phone !== undefined) updates.phone = phone || null;
+    if (contact_email !== undefined) updates.contact_email = contact_email || null;
+    if (privacy_officer_name !== undefined) updates.privacy_officer_name = privacy_officer_name || null;
+    if (privacy_officer_position !== undefined) updates.privacy_officer_position = privacy_officer_position || null;
+    if (privacy_officer_contact !== undefined) updates.privacy_officer_contact = privacy_officer_contact || null;
+
+    const { data, error } = await supabase
+      .from('communities')
+      .update(updates)
+      .eq('id', community.id)
+      .select()
+      .single();
+    if (error) throw error;
+
+    res.json({
+      success: true,
+      data: {
+        business_info_mode: data.business_info_mode || 'platform',
+        business_name: data.business_name || '',
+        ceo_name: data.ceo_name || '',
+        business_number: data.business_number || '',
+        mail_order_registration_number: data.mail_order_registration_number || '',
+        address: data.address || '',
+        phone: data.phone || '',
+        contact_email: data.contact_email || '',
+        privacy_officer_name: data.privacy_officer_name || '',
+        privacy_officer_position: data.privacy_officer_position || '',
+        privacy_officer_contact: data.privacy_officer_contact || ''
+      },
+      message: '사업자 정보가 저장되었습니다',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error updating community-admin business info:', err);
+    res.status(500).json({ error: 'Failed to save business info', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
@@ -11049,13 +11195,32 @@ function computeSettlementTaxFields(commissionAmount, taxMethod) {
   return { tax_method: method, withholding_tax_rate: 0, withholding_tax_amount: 0, net_payment_amount: amount, tax_invoice_status: 'not_required' };
 }
 
-// 원천징수영수증에 표시할 "원천징수의무자"(WITH+ 본사) 정보 - platform_settings(key='platform_business_info')에서 관리자가 직접 입력·관리
+// 원천징수영수증 + 공개 페이지(하단 사업자정보 푸터, 이용약관/개인정보처리방침의 사업자정보 표)에 표시할
+// "원천징수의무자"/"사업자정보" 겸용 플랫폼(WITH+ 본사) 정보 - platform_settings(key='platform_business_info')에서 관리자가 직접 입력·관리
+// 오래된 행(신규 필드 도입 이전에 저장된 값)에도 항상 모든 키가 존재하도록 여기서 빈 문자열로 채워 내려준다(undefined 방지)
+const PLATFORM_BUSINESS_INFO_DEFAULTS = {
+  company_name: '',
+  ceo_name: '',
+  business_number: '',
+  address: '',
+  mail_order_registration_number: '',
+  phone: '',
+  email: '',
+  privacy_officer_name: '',
+  privacy_officer_position: '',
+  privacy_officer_contact: ''
+};
 async function getPlatformBusinessInfo() {
   const { data } = await supabase.from('platform_settings').select('value').eq('key', 'platform_business_info').maybeSingle();
-  return (data && data.value) ? data.value : { company_name: null, ceo_name: null, business_number: null, address: null };
+  const stored = (data && data.value) ? data.value : {};
+  const info = { ...PLATFORM_BUSINESS_INFO_DEFAULTS };
+  Object.keys(PLATFORM_BUSINESS_INFO_DEFAULTS).forEach(k => {
+    if (stored[k] !== undefined && stored[k] !== null) info[k] = stored[k];
+  });
+  return info;
 }
 
-// 플랫폼(WITH+ 본사) 사업자 정보 조회 - 원천징수영수증의 "원천징수의무자" 란에 쓰인다
+// 플랫폼(WITH+ 본사) 사업자 정보 조회 - 원천징수영수증의 "원천징수의무자" 란 + 관리자 설정 화면 표시용
 app.get('/api/admin/settings/business-info', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const info = await getPlatformBusinessInfo();
@@ -11068,12 +11233,18 @@ app.get('/api/admin/settings/business-info', authenticate, requireRole(['admin',
 
 app.put('/api/admin/settings/business-info', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { company_name, ceo_name, business_number, address } = req.body || {};
+    const { company_name, ceo_name, business_number, address, mail_order_registration_number, phone, email, privacy_officer_name, privacy_officer_position, privacy_officer_contact } = req.body || {};
     const value = {
       company_name: company_name ? String(company_name).trim() : null,
       ceo_name: ceo_name ? String(ceo_name).trim() : null,
       business_number: business_number ? String(business_number).trim() : null,
-      address: address ? String(address).trim() : null
+      address: address ? String(address).trim() : null,
+      mail_order_registration_number: mail_order_registration_number ? String(mail_order_registration_number).trim() : null,
+      phone: phone ? String(phone).trim() : null,
+      email: email ? String(email).trim() : null,
+      privacy_officer_name: privacy_officer_name ? String(privacy_officer_name).trim() : null,
+      privacy_officer_position: privacy_officer_position ? String(privacy_officer_position).trim() : null,
+      privacy_officer_contact: privacy_officer_contact ? String(privacy_officer_contact).trim() : null
     };
     const { error } = await supabase.from('platform_settings').upsert({ key: 'platform_business_info', value }, { onConflict: 'key' });
     if (error) throw error;
@@ -11081,6 +11252,19 @@ app.put('/api/admin/settings/business-info', authenticate, requireRole(['admin',
   } catch (err) {
     console.error('Error saving platform business info:', err);
     res.status(500).json({ error: 'Failed to save business info', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 플랫폼(WITH+ 본사) 사업자 정보 - 공개 조회(인증 불필요). index/about/terms/privacy 등 공개 페이지 하단에
+// 법적으로 표시해야 하는 상호/대표자/사업자등록번호/통신판매업신고번호/주소/연락처/개인정보보호책임자를
+// 관리자가 입력한 값 그대로 내려준다(민감정보가 아니라 별도 필터링 없이 getPlatformBusinessInfo()를 그대로 재사용).
+app.get('/api/public/business-info', async (req, res) => {
+  try {
+    const info = await getPlatformBusinessInfo();
+    res.json({ success: true, data: info, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching public business info:', err);
+    res.status(500).json({ error: 'Failed to fetch business info', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 

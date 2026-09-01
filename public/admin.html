@@ -763,6 +763,24 @@
                     <div class="hint">여기에 지정한 이메일 계정으로 로그인하면 이 조직의 회원·주문만 볼 수 있는 전용 관리자 화면이 열립니다. 다른 조직 데이터는 볼 수 없습니다. WITH+에 먼저 일반 회원으로 가입되어 있어야 합니다.</div>
                 </div>
                 <div class="field">
+                    <label>랜딩페이지 사업자정보 표시 방식</label>
+                    <select id="cmf-business-info-mode">
+                        <option value="platform">WITH+ 플랫폼 사업자정보 사용</option>
+                        <option value="own">이 조직 자체 사업자정보 사용</option>
+                    </select>
+                    <div class="hint">랜딩페이지 하단(및 이용약관 등)에 표시되는 상호/대표자/사업자등록번호 등을 WITH+ 본사 정보로 보여줄지, 이 조직이 자체 등록한 정보로 보여줄지 선택합니다.</div>
+                </div>
+                <div id="cmf-own-biz-block" hidden>
+                    <div class="field"><label>상호</label><input type="text" id="cmf-business-name" placeholder="비워두면 조직명을 대신 사용합니다"></div>
+                    <div class="field"><label>대표자</label><input type="text" id="cmf-ceo-name" placeholder="대표자 성명"></div>
+                    <div class="field"><label>사업자등록번호</label><input type="text" id="cmf-business-number" placeholder="000-00-00000"></div>
+                    <div class="field"><label>통신판매업신고번호</label><input type="text" id="cmf-mail-order-number" placeholder="예: 2024-서울강남-00000"></div>
+                    <div class="hint" style="margin-top:-8px; margin-bottom:14px;">주소/연락처/이메일은 위의 "주소"·"연락처"·"담당자 이메일" 입력값을 그대로 사용합니다.</div>
+                    <div class="field"><label>개인정보보호책임자 성명</label><input type="text" id="cmf-privacy-officer-name" placeholder="성명"></div>
+                    <div class="field"><label>개인정보보호책임자 직책</label><input type="text" id="cmf-privacy-officer-position" placeholder="예: 담당자"></div>
+                    <div class="field"><label>개인정보보호책임자 연락처</label><input type="text" id="cmf-privacy-officer-contact" placeholder="전화 또는 이메일"></div>
+                </div>
+                <div class="field">
                     <label>이 조직 전용 개인 적립율 (%)</label>
                     <input type="number" id="cmf-personal-rate" min="0" max="50" step="0.1" placeholder="비워두면 플랫폼 기본값 적용">
                     <div class="hint">비워두면 플랫폼 전체 기본 적립율(설정 탭에서 확인 가능)을 따릅니다. 조직 담당 관리자도 본인 조직 화면에서 이 값을 직접 조정할 수 있습니다.</div>
@@ -1034,6 +1052,7 @@
                         <button class="tab-btn active" data-tab="ca-members">👥 회원 목록</button>
                         <button class="tab-btn" data-tab="ca-orders">🧾 주문 내역</button>
                         <button class="tab-btn" data-tab="ca-rates">💰 적립율 설정</button>
+                        <button class="tab-btn" data-tab="ca-business-info">🧾 사업자정보</button>
                         ${cashSettlementEnabled ? '<button class="tab-btn" data-tab="ca-settlements">💵 현금 정산</button>' : ''}
                     </div>
                     <div class="tab-panel active" id="tab-ca-members">
@@ -1044,6 +1063,9 @@
                     </div>
                     <div class="tab-panel" id="tab-ca-rates">
                         <div id="ca-rates-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                    </div>
+                    <div class="tab-panel" id="tab-ca-business-info">
+                        <div id="ca-business-info-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                     </div>
                     ${cashSettlementEnabled ? `
                     <div class="tab-panel" id="tab-ca-settlements">
@@ -1206,6 +1228,77 @@
                     }
                 }
 
+                // 이 조직의 랜딩페이지 하단에 표시되는 "자체 사업자정보" - business_info_mode는 본부 관리자만 바꿀 수 있으므로
+                // 여기서는 현재 모드를 안내만 하고, mode가 'own'일 때만 입력 폼을 보여준다.
+                async function loadCaBusinessInfo() {
+                    const el = document.getElementById('ca-business-info-area');
+                    try {
+                        const { ok, json } = await caFetch('/api/community-admin/business-info');
+                        if (!ok || !json.success) throw new Error(json.message || '사업자정보를 불러오지 못했습니다');
+                        const b = json.data;
+                        if (b.business_info_mode !== 'own') {
+                            el.innerHTML = `<div class="state-box"><div class="emoji">🔒</div><h3>아직 자체 사업자정보 표시가 활성화되지 않았습니다</h3><p>플랫폼 관리자가 자체 사업자정보 표시를 아직 활성화하지 않았습니다. 현재는 랜딩페이지에 WITH+ 플랫폼 사업자정보가 표시됩니다.</p></div>`;
+                            return;
+                        }
+                        el.innerHTML = `
+                            <div class="settings-card">
+                                <h3>🧾 "${WithPlus.escapeHtml(c.name)}" 자체 사업자정보</h3>
+                                <p class="desc">랜딩페이지 하단 등 공개 화면에 표시될 이 조직의 사업자정보입니다.</p>
+                                <form id="ca-biz-form">
+                                    <div class="field"><label>상호</label><input type="text" id="ca-biz-name" value="${WithPlus.escapeHtml(b.business_name || '')}" placeholder="비워두면 조직명을 대신 사용합니다"></div>
+                                    <div class="field"><label>대표자</label><input type="text" id="ca-biz-ceo" value="${WithPlus.escapeHtml(b.ceo_name || '')}" placeholder="대표자 성명"></div>
+                                    <div class="field"><label>사업자등록번호</label><input type="text" id="ca-biz-number" value="${WithPlus.escapeHtml(b.business_number || '')}" placeholder="000-00-00000"></div>
+                                    <div class="field"><label>통신판매업신고번호</label><input type="text" id="ca-biz-mail-order" value="${WithPlus.escapeHtml(b.mail_order_registration_number || '')}" placeholder="예: 2024-서울강남-00000"></div>
+                                    <div class="field"><label>주소</label><input type="text" id="ca-biz-address" value="${WithPlus.escapeHtml(b.address || '')}" placeholder="사업장 소재지"></div>
+                                    <div class="field"><label>전화</label><input type="text" id="ca-biz-phone" value="${WithPlus.escapeHtml(b.phone || '')}" placeholder="032-000-0000"></div>
+                                    <div class="field"><label>이메일</label><input type="email" id="ca-biz-email" value="${WithPlus.escapeHtml(b.contact_email || '')}" placeholder="contact@example.com"></div>
+                                    <div class="field"><label>개인정보보호책임자 성명</label><input type="text" id="ca-biz-po-name" value="${WithPlus.escapeHtml(b.privacy_officer_name || '')}" placeholder="성명"></div>
+                                    <div class="field"><label>개인정보보호책임자 직책</label><input type="text" id="ca-biz-po-position" value="${WithPlus.escapeHtml(b.privacy_officer_position || '')}" placeholder="예: 담당자"></div>
+                                    <div class="field"><label>개인정보보호책임자 연락처</label><input type="text" id="ca-biz-po-contact" value="${WithPlus.escapeHtml(b.privacy_officer_contact || '')}" placeholder="전화 또는 이메일"></div>
+                                    <div class="settings-msg" id="ca-biz-msg"></div>
+                                    <button type="submit" class="settings-save-btn" id="ca-biz-save-btn">저장</button>
+                                </form>
+                            </div>`;
+
+                        document.getElementById('ca-biz-form').addEventListener('submit', async (e) => {
+                            e.preventDefault();
+                            const msg = document.getElementById('ca-biz-msg');
+                            const btn = document.getElementById('ca-biz-save-btn');
+                            msg.className = 'settings-msg';
+                            btn.disabled = true;
+                            btn.textContent = '저장 중...';
+                            try {
+                                const { ok, json: putJson } = await caFetch('/api/community-admin/business-info', {
+                                    method: 'PUT',
+                                    body: JSON.stringify({
+                                        business_name: document.getElementById('ca-biz-name').value.trim(),
+                                        ceo_name: document.getElementById('ca-biz-ceo').value.trim(),
+                                        business_number: document.getElementById('ca-biz-number').value.trim(),
+                                        mail_order_registration_number: document.getElementById('ca-biz-mail-order').value.trim(),
+                                        address: document.getElementById('ca-biz-address').value.trim(),
+                                        phone: document.getElementById('ca-biz-phone').value.trim(),
+                                        contact_email: document.getElementById('ca-biz-email').value.trim(),
+                                        privacy_officer_name: document.getElementById('ca-biz-po-name').value.trim(),
+                                        privacy_officer_position: document.getElementById('ca-biz-po-position').value.trim(),
+                                        privacy_officer_contact: document.getElementById('ca-biz-po-contact').value.trim()
+                                    })
+                                });
+                                if (!ok) throw new Error(putJson.message || '저장에 실패했습니다');
+                                msg.textContent = '저장되었습니다.';
+                                msg.className = 'settings-msg success';
+                            } catch (err) {
+                                msg.textContent = err.message;
+                                msg.className = 'settings-msg error';
+                            } finally {
+                                btn.disabled = false;
+                                btn.textContent = '저장';
+                            }
+                        });
+                    } catch (err) {
+                        el.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>사업자정보를 불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                    }
+                }
+
                 const CA_SETTLEMENT_STATUS_LABEL = { pending: '정산대기', paid: '지급완료', cancelled: '취소' };
                 const CA_SETTLEMENT_STATUS_CLASS = { pending: '', paid: 'active', cancelled: 'inactive' };
 
@@ -1291,6 +1384,7 @@
                 loadCaMembers();
                 loadCaOrders();
                 loadCaRates();
+                loadCaBusinessInfo();
                 if (cashSettlementEnabled) loadCaSettlements();
             }
 
@@ -6482,6 +6576,15 @@
                         document.getElementById('cmf-website-url').value = community.website_url || '';
                         document.getElementById('cmf-contact-email').value = community.contact_email || '';
                         document.getElementById('cmf-admin-email').value = community.admin_email || '';
+                        document.getElementById('cmf-business-info-mode').value = community.business_info_mode || 'platform';
+                        document.getElementById('cmf-business-name').value = community.business_name || '';
+                        document.getElementById('cmf-ceo-name').value = community.ceo_name || '';
+                        document.getElementById('cmf-business-number').value = community.business_number || '';
+                        document.getElementById('cmf-mail-order-number').value = community.mail_order_registration_number || '';
+                        document.getElementById('cmf-privacy-officer-name').value = community.privacy_officer_name || '';
+                        document.getElementById('cmf-privacy-officer-position').value = community.privacy_officer_position || '';
+                        document.getElementById('cmf-privacy-officer-contact').value = community.privacy_officer_contact || '';
+                        document.getElementById('cmf-own-biz-block').hidden = (community.business_info_mode || 'platform') !== 'own';
                         document.getElementById('cmf-personal-rate').value = (community.personal_point_rate !== null && community.personal_point_rate !== undefined) ? (Number(community.personal_point_rate) * 100) : '';
                         document.getElementById('cmf-community-rate').value = (community.community_point_rate !== null && community.community_point_rate !== undefined) ? (Number(community.community_point_rate) * 100) : '';
                         document.getElementById('cmf-bank-name').value = community.bank_name || '';
@@ -6507,6 +6610,8 @@
                         document.getElementById('cmf-bank-verified-field').style.display = 'none';
                         document.getElementById('cmf-bank-verified').checked = false;
                         document.getElementById('cmf-status-field').style.display = 'none';
+                        document.getElementById('cmf-business-info-mode').value = 'platform';
+                        document.getElementById('cmf-own-biz-block').hidden = true;
                         setSelectedTemplate('classic');
                         previewLink.style.display = 'none';
                     }
@@ -6514,6 +6619,11 @@
                 }
                 document.getElementById('btn-new-community').addEventListener('click', () => openCommunityModal(null));
                 document.getElementById('cmf-cancel').addEventListener('click', () => communityModal.classList.remove('open'));
+                // 모드가 'own'일 때만 자체 사업자정보 입력칸을 보여준다 - 값 자체는 지워지지 않으므로(hidden일 뿐)
+                // 관리자가 select를 이리저리 바꿔도 입력해둔 내용을 잃지 않는다.
+                document.getElementById('cmf-business-info-mode').addEventListener('change', (e) => {
+                    document.getElementById('cmf-own-biz-block').hidden = e.target.value !== 'own';
+                });
 
                 cmfForm.addEventListener('submit', async (e) => {
                     e.preventDefault();
@@ -6537,6 +6647,14 @@
                         website_url: document.getElementById('cmf-website-url').value.trim(),
                         contact_email: document.getElementById('cmf-contact-email').value.trim(),
                         admin_email: document.getElementById('cmf-admin-email').value.trim(),
+                        business_info_mode: document.getElementById('cmf-business-info-mode').value,
+                        business_name: document.getElementById('cmf-business-name').value.trim(),
+                        ceo_name: document.getElementById('cmf-ceo-name').value.trim(),
+                        business_number: document.getElementById('cmf-business-number').value.trim(),
+                        mail_order_registration_number: document.getElementById('cmf-mail-order-number').value.trim(),
+                        privacy_officer_name: document.getElementById('cmf-privacy-officer-name').value.trim(),
+                        privacy_officer_position: document.getElementById('cmf-privacy-officer-position').value.trim(),
+                        privacy_officer_contact: document.getElementById('cmf-privacy-officer-contact').value.trim(),
                         landing_template: getSelectedTemplate(),
                         // 비워두면 null -> 서버가 플랫폼 기본 적립율을 따르도록 처리
                         personal_point_rate: personalRateInput === '' ? null : parseFloat(personalRateInput) / 100,
@@ -7592,13 +7710,19 @@
 
                         settingsArea.innerHTML = `
                             <div class="settings-card" style="max-width:640px;">
-                                <h3>🏢 사업자 정보 (원천징수영수증 발급자 정보)</h3>
-                                <p class="desc">공급자·분양조직에 현금 정산을 지급하고 원천징수(3.3%)영수증을 발급할 때 "원천징수의무자"란에 표시되는 WITH+ 본사의 사업자 정보입니다.</p>
+                                <h3>🏢 사업자 정보 (원천징수영수증 발급자 정보 + 공개 페이지 표시용)</h3>
+                                <p class="desc">공급자·분양조직에 현금 정산을 지급하고 원천징수(3.3%)영수증을 발급할 때 "원천징수의무자"란에 표시되며, 홈페이지 하단/이용약관/개인정보처리방침 등 공개 페이지에도 이 정보가 그대로 표시됩니다.</p>
                                 <form id="biz-info-form">
                                     <div class="field"><label>상호</label><input type="text" id="biz-company-name" value="${WithPlus.escapeHtml(bizInfo.company_name || '')}" placeholder="예: 주식회사 위드플러스"></div>
                                     <div class="field"><label>대표자</label><input type="text" id="biz-ceo-name" value="${WithPlus.escapeHtml(bizInfo.ceo_name || '')}" placeholder="대표자 성명"></div>
                                     <div class="field"><label>사업자등록번호</label><input type="text" id="biz-business-number" value="${WithPlus.escapeHtml(bizInfo.business_number || '')}" placeholder="000-00-00000"></div>
+                                    <div class="field"><label>통신판매업신고번호</label><input type="text" id="biz-mail-order-number" value="${WithPlus.escapeHtml(bizInfo.mail_order_registration_number || '')}" placeholder="예: 2024-서울강남-00000"></div>
                                     <div class="field"><label>사업장 주소</label><input type="text" id="biz-address" value="${WithPlus.escapeHtml(bizInfo.address || '')}" placeholder="사업장 소재지"></div>
+                                    <div class="field"><label>대표전화</label><input type="text" id="biz-phone" value="${WithPlus.escapeHtml(bizInfo.phone || '')}" placeholder="예: 010-0000-0000"></div>
+                                    <div class="field"><label>이메일</label><input type="text" id="biz-email" value="${WithPlus.escapeHtml(bizInfo.email || '')}" placeholder="예: contact@withplus.com"></div>
+                                    <div class="field"><label>개인정보보호책임자 성명</label><input type="text" id="biz-privacy-officer-name" value="${WithPlus.escapeHtml(bizInfo.privacy_officer_name || '')}" placeholder="성명"></div>
+                                    <div class="field"><label>개인정보보호책임자 직책</label><input type="text" id="biz-privacy-officer-position" value="${WithPlus.escapeHtml(bizInfo.privacy_officer_position || '')}" placeholder="예: 대표 겸임"></div>
+                                    <div class="field"><label>개인정보보호책임자 연락처</label><input type="text" id="biz-privacy-officer-contact" value="${WithPlus.escapeHtml(bizInfo.privacy_officer_contact || '')}" placeholder="전화 또는 이메일"></div>
                                     <div class="settings-msg" id="biz-info-msg"></div>
                                     <button type="submit" class="settings-save-btn" id="biz-info-save-btn">저장</button>
                                 </form>
@@ -7935,7 +8059,13 @@
                                         company_name: document.getElementById('biz-company-name').value.trim(),
                                         ceo_name: document.getElementById('biz-ceo-name').value.trim(),
                                         business_number: document.getElementById('biz-business-number').value.trim(),
-                                        address: document.getElementById('biz-address').value.trim()
+                                        mail_order_registration_number: document.getElementById('biz-mail-order-number').value.trim(),
+                                        address: document.getElementById('biz-address').value.trim(),
+                                        phone: document.getElementById('biz-phone').value.trim(),
+                                        email: document.getElementById('biz-email').value.trim(),
+                                        privacy_officer_name: document.getElementById('biz-privacy-officer-name').value.trim(),
+                                        privacy_officer_position: document.getElementById('biz-privacy-officer-position').value.trim(),
+                                        privacy_officer_contact: document.getElementById('biz-privacy-officer-contact').value.trim()
                                     })
                                 });
                                 if (!ok) throw new Error(json.message || '저장에 실패했습니다');
