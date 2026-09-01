@@ -360,7 +360,7 @@
                     <input type="text" id="stepup-backup-code" placeholder="백업코드 (분실 시 등)">
                 </div>
             </div>
-            <p class="msg" id="stepup-no-method-msg" hidden style="color:#C62828;">등록된 인증수단이 없습니다. 먼저 "🔐 대표자 보안설정" 화면에서 TOTP 또는 연락처를 등록해주세요.</p>
+            <p class="msg" id="stepup-no-method-msg" hidden style="color:#C62828;">등록된 인증수단이 없습니다. 설정 → 내 계정 2단계 인증에서 TOTP를 등록하거나, "🔐 대표자 보안설정" 화면에서 SMS/이메일 연락처를 등록해주세요.</p>
             <div class="msg" id="stepup-msg"></div>
             <div class="modal-actions">
                 <button type="button" class="btn btn-secondary" id="stepup-cancel">취소</button>
@@ -1911,21 +1911,9 @@
                     </div>
                     <div class="subsection-title">1️⃣ TOTP(인증 앱) 2단계 인증</div>
                     <div id="os-status-area">
+                        <p style="font-size:0.85em; color:var(--text-gray); margin:0 0 8px;">TOTP는 설정 → 내 계정 2단계 인증에서 등록한 것을 그대로 사용합니다. 인증 앱에 시크릿을 따로 또 등록할 필요가 없습니다.</p>
                         <p>상태: <span id="os-totp-status">확인 중...</span></p>
-                    </div>
-                    <button type="button" class="btn btn-secondary" id="os-totp-setup-btn">🔑 TOTP 새로 설정하기</button>
-                    <div id="os-totp-setup-area" hidden style="margin-top:12px; padding:12px; border:1px dashed var(--border-color); border-radius:8px;">
-                        <p style="font-size:0.85em;">1) 인증 앱(Google Authenticator 등)으로 아래 QR코드를 스캔하세요.</p>
-                        <img id="os-totp-qr" alt="TOTP QR코드" style="max-width:200px; display:block; margin:8px 0;">
-                        <p style="font-size:0.85em;">2) 아래 백업코드 10개를 안전한 곳에 저장하세요 (이 화면을 벗어나면 다시 볼 수 없습니다).</p>
-                        <div id="os-backup-codes-area" style="font-family:monospace; background:#FAFAFA; padding:10px; border-radius:6px; word-break:break-all; font-size:0.85em;"></div>
-                        <button type="button" class="btn btn-secondary" id="os-backup-codes-copy-btn" style="margin-top:6px;" hidden>📋 백업코드 복사하기</button>
-                        <p style="font-size:0.85em; margin-top:10px;">3) 인증 앱에 표시된 6자리 코드를 입력해 활성화를 완료하세요.</p>
-                        <div style="display:flex; gap:6px;">
-                            <input type="text" id="os-totp-confirm-code" placeholder="6자리 코드" style="flex:1;">
-                            <button type="button" class="btn btn-primary" id="os-totp-confirm-btn">활성화 확인</button>
-                        </div>
-                        <p class="msg" id="os-totp-confirm-msg"></p>
+                        <button type="button" class="btn btn-secondary" id="os-totp-goto-settings-btn" hidden>⚙️ 설정 탭에서 등록하기</button>
                     </div>
 
                     <div class="subsection-title" style="margin-top:20px;">2️⃣3️⃣ SMS / 이메일 연락처</div>
@@ -2992,7 +2980,11 @@
                     async function loadSettlementRates() {
                         const area = document.getElementById('settlement-rates-area');
                         try {
-                            const { ok, json } = await authedFetch('/api/admin/providers');
+                            // GET은 requireOwnerStepUpOrBootstrap로 보호되어 있으므로(수수료율도 마진율과
+                            // 같은 급의 민감정보) 저장된 스텝업 토큰이 있으면 함께 보낸다. 진입 게이트는 아래
+                            // settlement-manage-rates-btn 클릭 핸들러에서 이미 처리했다.
+                            const fetcher = (typeof ownerFetchOptional === 'function') ? ownerFetchOptional : authedFetch;
+                            const { ok, json } = await fetcher('/api/admin/providers');
                             if (!ok || !json.success) throw new Error(json.message || '공급자 목록을 불러오지 못했습니다');
                             const providers = json.data;
                             if (providers.length === 0) {
@@ -3019,12 +3011,21 @@
                                     const input = area.querySelector(`.rate-input[data-id="${btn.dataset.id}"]`);
                                     const taxSelect = area.querySelector(`.tax-method-input[data-id="${btn.dataset.id}"]`);
                                     const rate = Number(input.value);
-                                    const { ok, json } = await authedFetch(`/api/admin/providers/${btn.dataset.id}/commission-rate`, {
-                                        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ commission_rate: rate, settlement_tax_method: taxSelect.value })
-                                    });
-                                    if (!ok || !json.success) { alert(json.message || '수수료율 저장 중 오류가 발생했습니다'); return; }
-                                    btn.textContent = '저장됨 ✓';
-                                    setTimeout(() => { btn.textContent = '저장'; }, 1500);
+                                    try {
+                                        // 저장(PATCH)은 requireOwnerStepUp(부트스트랩 예외 없음, 원가/가격정책과
+                                        // 동일한 강한 정책)으로 보호되어 있으므로, 조회와 별개로 여기서 다시 한 번
+                                        // 스텝업을 확실히 받아둔다(가격정책 저장 버튼과 동일한 패턴).
+                                        await window.__ensureOwnerStepUp();
+                                        const { ok, json } = await ownerFetch(`/api/admin/providers/${btn.dataset.id}/commission-rate`, {
+                                            method: 'PATCH', body: JSON.stringify({ commission_rate: rate, settlement_tax_method: taxSelect.value })
+                                        });
+                                        if (!ok || !json.success) { alert(json.message || '수수료율 저장 중 오류가 발생했습니다'); return; }
+                                        btn.textContent = '저장됨 ✓';
+                                        setTimeout(() => { btn.textContent = '저장'; }, 1500);
+                                    } catch (err) {
+                                        if (err.message === 'CANCELLED') return;
+                                        alert('수수료율 저장 실패: ' + err.message);
+                                    }
                                 });
                             });
                         } catch (err) {
@@ -3032,9 +3033,22 @@
                         }
                     }
 
-                    document.getElementById('settlement-manage-rates-btn').addEventListener('click', () => {
+                    // 🔐 이 패널을 열 때(닫을 때는 해당 없음) 대표자 2단계 인증 진입 게이트를 먼저 통과해야 한다
+                    // (대표자가 2FA 수단을 하나도 등록하지 않은 부트스트랩 상태에서는 예외적으로 통과) - 은행계좌는
+                    // 아니지만 공급자별 수수료율도 마진율과 같은 급의 민감정보로 취급한다.
+                    document.getElementById('settlement-manage-rates-btn').addEventListener('click', async () => {
                         const area = document.getElementById('settlement-rates-area');
                         if (area.style.display === 'block') { area.style.display = 'none'; return; }
+                        if (typeof window.__ensureOwnerStepUpOrBootstrap === 'function') {
+                            try {
+                                await window.__ensureOwnerStepUpOrBootstrap();
+                            } catch (err) {
+                                if (err.message === 'CANCELLED') return; // 취소 시 패널을 열지 않는다
+                                area.style.display = 'block';
+                                area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>인증 확인 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                                return;
+                            }
+                        }
                         area.style.display = 'block';
                         loadSettlementRates();
                     });
@@ -3150,7 +3164,10 @@
                     async function loadCsRates() {
                         const area = document.getElementById('cs-rates-area');
                         try {
-                            const { ok, json } = await authedFetch('/api/admin/communities');
+                            // GET은 requireOwnerStepUpOrBootstrap로 보호되어 있다(사업자등록번호·은행계좌·수수료율이
+                            // 그대로 노출되므로). 진입 게이트는 community-settlements 탭 클릭 핸들러에서 이미 처리했다.
+                            const fetcher = (typeof ownerFetchOptional === 'function') ? ownerFetchOptional : authedFetch;
+                            const { ok, json } = await fetcher('/api/admin/communities');
                             if (!ok || !json.success) throw new Error(json.message || '조직 목록을 불러오지 못했습니다');
                             csRatesAll = json.data;
                             renderCsRatesTable();
@@ -3168,7 +3185,11 @@
                             const params = new URLSearchParams();
                             if (status) params.set('status', status);
                             const qs = params.toString();
-                            const { ok, json } = await authedFetch(`/api/admin/community-settlements${qs ? '?' + qs : ''}`);
+                            // 관리자 화면에서의 조회는 서버가 requireOwnerStepUpOrBootstrap와 동일한 검사를 걸어둔다
+                            // (전체 조직의 매출·수수료·은행계좌가 그대로 노출되므로) - 진입 게이트는 아래
+                            // community-settlements 탭 클릭 핸들러에서 이미 처리했다.
+                            const fetcher = (typeof ownerFetchOptional === 'function') ? ownerFetchOptional : authedFetch;
+                            const { ok, json } = await fetcher(`/api/admin/community-settlements${qs ? '?' + qs : ''}`);
                             if (!ok || !json.success) throw new Error(json.message || '정산 내역을 불러오지 못했습니다');
                             const rows = json.data;
                             if (rows.length === 0) {
@@ -3368,11 +3389,26 @@
                         }
                     }
 
-                    document.querySelector('[data-tab="community-settlements"]').addEventListener('click', () => {
-                        if (!document.getElementById('community-settlements-area').dataset.loaded) {
-                            document.getElementById('community-settlements-area').dataset.loaded = '1';
-                            loadCommunitySettlementsTab();
+                    // 🔐 조직별 매출·수수료·은행계좌가 담긴 화면이므로, 처음 진입할 때 대표자 2단계 인증을
+                    // 먼저 통과해야 한다(대표자가 2FA 수단을 하나도 등록하지 않은 부트스트랩 상태는 예외).
+                    // 취소하면 dataset.loaded를 남기지 않아 다음 클릭에서 다시 시도할 수 있다.
+                    document.querySelector('[data-tab="community-settlements"]').addEventListener('click', async () => {
+                        const area = document.getElementById('community-settlements-area');
+                        if (area.dataset.loaded) return;
+                        if (typeof window.__ensureOwnerStepUpOrBootstrap === 'function') {
+                            try {
+                                await window.__ensureOwnerStepUpOrBootstrap();
+                            } catch (err) {
+                                if (err.message === 'CANCELLED') {
+                                    area.innerHTML = `<div class="state-box"><div class="emoji">🔒</div><h3>대표자 2단계 인증이 필요합니다</h3><p>이 탭은 조직별 매출·수수료·은행계좌를 보여주므로 인증 후에만 볼 수 있습니다.</p></div>`;
+                                } else {
+                                    area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>인증 확인 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                                }
+                                return;
+                            }
                         }
+                        area.dataset.loaded = '1';
+                        loadCommunitySettlementsTab();
                     });
                 }
 
@@ -6316,8 +6352,13 @@
                     const tableArea = document.getElementById('communities-table-area');
                     tableArea.innerHTML = `<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>`;
                     try {
+                        // /api/admin/communities는 requireOwnerStepUpOrBootstrap로 보호되어 있다(사업자등록번호·
+                        // 은행계좌·수수료율이 그대로 노출되므로) - 진입 게이트는 아래 communities 탭 클릭
+                        // 핸들러에서 이미 처리했다. /api/settings/mileage-rates는 플랫폼 전역 기본값일 뿐 조직별
+                        // 민감정보가 아니므로 그대로 authedFetch를 쓴다.
+                        const fetcher = (typeof ownerFetchOptional === 'function') ? ownerFetchOptional : authedFetch;
                         const [commRes, rateRes] = await Promise.all([
-                            authedFetch('/api/admin/communities'),
+                            fetcher('/api/admin/communities'),
                             authedFetch('/api/settings/mileage-rates')
                         ]);
                         const { ok, json } = commRes;
@@ -6536,11 +6577,26 @@
                     }
                 });
 
-                document.querySelector('[data-tab="communities"]').addEventListener('click', () => {
-                    if (!document.getElementById('communities-table-area').dataset.loaded) {
-                        document.getElementById('communities-table-area').dataset.loaded = '1';
-                        loadCommunitiesAdmin();
+                // 🔐 조직별 사업자등록번호·은행계좌·적립율이 담긴 화면이므로, 처음 진입할 때 대표자 2단계
+                // 인증을 먼저 통과해야 한다(대표자가 2FA 수단을 하나도 등록하지 않은 부트스트랩 상태는 예외).
+                // 취소하면 dataset.loaded를 남기지 않아 다음 클릭에서 다시 시도할 수 있다.
+                document.querySelector('[data-tab="communities"]').addEventListener('click', async () => {
+                    const tableArea = document.getElementById('communities-table-area');
+                    if (tableArea.dataset.loaded) return;
+                    if (typeof window.__ensureOwnerStepUpOrBootstrap === 'function') {
+                        try {
+                            await window.__ensureOwnerStepUpOrBootstrap();
+                        } catch (err) {
+                            if (err.message === 'CANCELLED') {
+                                tableArea.innerHTML = `<div class="state-box"><div class="emoji">🔒</div><h3>대표자 2단계 인증이 필요합니다</h3><p>이 탭은 조직별 사업자등록번호·은행계좌를 보여주므로 인증 후에만 볼 수 있습니다.</p></div>`;
+                            } else {
+                                tableArea.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>인증 확인 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                            }
+                            return;
+                        }
                     }
+                    tableArea.dataset.loaded = '1';
+                    loadCommunitiesAdmin();
                 });
 
                 // ===== 분양 조직 담당자(다중) 관리 모달 =====
@@ -8877,6 +8933,26 @@
                 return res;
             }
 
+            // "🏢 분양 조직 관리" / "💵 분양조직 정산" / "⚙️ 공급자별 수수료율 설정"의 조회(GET) 전용 fetch.
+            // 서버가 requireOwnerStepUpOrBootstrap로 지키고 있어서(대표자가 2FA 수단을 하나도 등록하지 않은
+            // 부트스트랩 상태에서는 토큰 없이도 통과) ownerFetch처럼 "토큰이 없으면 아예 보내지 않고 막는"
+            // 방식이 아니라, 저장된 토큰이 있으면 실어 보내고 없으면 그냥 보낸다. 그래도 서버가 403을 주면
+            // (=대표자가 이미 2FA를 등록해뒀다는 뜻) 저장된 토큰을 지우고 재인증이 필요하다는 신호를 던진다.
+            async function ownerFetchOptional(path, options) {
+                const token = getStoredStepUpToken();
+                options = options || {};
+                const res = await authedFetch(path, token ? Object.assign({}, options, {
+                    headers: Object.assign({}, options.headers, { 'X-Cost-StepUp-Token': token })
+                }) : options);
+                if (res.status === 403) {
+                    clearStepUpToken();
+                    const e = new Error((res.json && res.json.message) || '대표자 2단계 인증이 필요합니다. 다시 인증해주세요.');
+                    e.stepUpRequired = true;
+                    throw e;
+                }
+                return res;
+            }
+
             const PRICING_CHANNEL_LABELS = [['online', '🛍️ 쇼핑몰'], ['live', '📺 라이브'], ['wholesale', '🏭 도매']];
 
             if (isOwner) {
@@ -8890,10 +8966,22 @@
                     return json.data;
                 }
 
+                // TOTP는 이제 "내 계정 2단계 인증"(설정 탭, Supabase Auth MFA)을 그대로 쓴다 - owner_security_with
+                // 쪽 totp_enabled 플래그가 아니라 실제로 계정에 검증된(status:'verified') TOTP factor가 있는지를
+                // 직접 확인한다. 서버 없이 클라이언트 SDK만으로 확인 가능하다(계정에 이미 로그인되어 있으므로).
+                async function hasAccountMfaTotp() {
+                    try {
+                        const client = await WithPlus.getClient();
+                        const { data, error } = await client.auth.mfa.listFactors();
+                        if (error) return false;
+                        return (data?.totp || []).some(f => f.status === 'verified');
+                    } catch (e) { return false; }
+                }
+
                 function renderStepupMethodOptions(status) {
                     const sel = document.getElementById('stepup-method');
                     const options = [];
-                    if (status.totp_enabled) options.push('<option value="totp">🔑 인증 앱(TOTP)</option>');
+                    if (status.totp_enabled) options.push('<option value="totp">🔑 인증 앱(TOTP, 설정 탭의 내 계정 2단계 인증)</option>');
                     if (status.has_phone) options.push('<option value="sms">📱 SMS</option>');
                     if (status.has_otp_email) options.push('<option value="email">📧 이메일</option>');
                     sel.innerHTML = options.join('') || '<option value="">등록된 인증수단 없음</option>';
@@ -8909,7 +8997,8 @@
                         document.getElementById('stepup-code').value = '';
                         document.getElementById('stepup-backup-code').value = '';
                         document.getElementById('stepup-request-otp-msg').textContent = '';
-                        fetchOwnerStatus().then(status => {
+                        Promise.all([fetchOwnerStatus(), hasAccountMfaTotp()]).then(([status, accountTotp]) => {
+                            status.totp_enabled = accountTotp; // 병합: TOTP 등록 여부는 이제 계정 MFA 기준으로 판단
                             renderStepupMethodOptions(status);
                         }).catch(err => {
                             document.getElementById('stepup-msg').className = 'msg error';
@@ -8922,6 +9011,21 @@
                 window.__ensureOwnerStepUp = async function ensureOwnerStepUp() {
                     const existing = getStoredStepUpToken();
                     if (existing) return existing;
+                    return await openOwnerStepUpModal();
+                };
+
+                // "🏢 분양 조직 관리" / "💵 분양조직 정산" / "⚙️ 공급자별 수수료율 설정" / "🔐 대표자 보안설정"
+                // 네 화면의 진입 게이트 전용 - __ensureOwnerStepUp과 달리, 대표자가 2FA 수단을 하나도 등록하지
+                // 않은 부트스트랩 상태에서는 모달을 띄우지 않고 그냥 통과시킨다(null 반환, 서버의
+                // requireOwnerStepUpOrBootstrap과 대칭되는 예외). 이미 저장된 유효 토큰이 있으면 그대로 재사용한다.
+                window.__ensureOwnerStepUpOrBootstrap = async function ensureOwnerStepUpOrBootstrap() {
+                    const existing = getStoredStepUpToken();
+                    if (existing) return existing;
+                    let status = null;
+                    try { status = await fetchOwnerStatus(); } catch (e) { /* 상태 조회 실패해도 아래에서 모달로 안전하게 폴백 */ }
+                    const accountTotp = await hasAccountMfaTotp();
+                    const hasAnyFactor = accountTotp || !!(status && (status.has_phone || status.has_otp_email));
+                    if (!hasAnyFactor) return null; // 부트스트랩: 등록된 인증수단이 없으면 스텝업 없이 진입 허용
                     return await openOwnerStepUpModal();
                 };
 
@@ -8955,14 +9059,35 @@
                     const btn = document.getElementById('stepup-submit');
                     btn.disabled = true;
                     try {
-                        const { ok, json } = await authedFetch('/api/admin/owner/verify-2fa', {
-                            method: 'POST',
-                            body: JSON.stringify({ method: method || 'totp', code: code || undefined, backupCode: backupCode || undefined })
-                        });
-                        if (!ok || !json.success) throw new Error(json.message || '인증에 실패했습니다');
-                        storeStepUpToken(json.data.token, json.data.expires_in);
+                        let stepupData;
+                        if (method === 'totp' && !backupCode) {
+                            // TOTP는 owner_security_with의 자체 시크릿이 아니라 "내 계정 2단계 인증"(설정 탭,
+                            // Supabase Auth MFA)을 그대로 사용한다 - 인증 앱에 시크릿을 두 번 등록하지 않아도
+                            // 되도록 하기 위한 병합. client.auth.mfa.challengeAndVerify()로 aal2 세션을 새로
+                            // 받은 뒤, 그 세션(방금 검증된 TOTP)만으로 서버에서 대표자 스텝업 토큰을 발급받는다.
+                            if (!code) throw new Error('인증 앱의 6자리 코드를 입력해주세요');
+                            const client = await WithPlus.getClient();
+                            const { data: factorsData, error: listErr } = await client.auth.mfa.listFactors();
+                            if (listErr) throw listErr;
+                            const verifiedFactor = (factorsData?.totp || []).find(f => f.status === 'verified');
+                            if (!verifiedFactor) throw new Error('설정 탭에서 내 계정 2단계 인증을 먼저 등록해주세요');
+                            const { error: verifyErr } = await client.auth.mfa.challengeAndVerify({ factorId: verifiedFactor.id, code });
+                            if (verifyErr) throw new Error(verifyErr.message || '인증 코드가 올바르지 않습니다');
+                            const { ok, json } = await authedFetch('/api/admin/owner/stepup/via-account-mfa', { method: 'POST' });
+                            if (!ok || !json.success) throw new Error(json.message || '인증에 실패했습니다');
+                            stepupData = json.data;
+                        } else {
+                            // SMS/이메일/백업코드는 기존 owner_security_with 기반 경로를 그대로 사용한다(변경 없음).
+                            const { ok, json } = await authedFetch('/api/admin/owner/verify-2fa', {
+                                method: 'POST',
+                                body: JSON.stringify({ method: method || 'totp', code: code || undefined, backupCode: backupCode || undefined })
+                            });
+                            if (!ok || !json.success) throw new Error(json.message || '인증에 실패했습니다');
+                            stepupData = json.data;
+                        }
+                        storeStepUpToken(stepupData.token, stepupData.expires_in);
                         stepupModal.classList.remove('open');
-                        if (stepupResolve) stepupResolve(json.data.token);
+                        if (stepupResolve) stepupResolve(stepupData.token);
                         stepupResolve = null; stepupReject = null;
                     } catch (err) {
                         msgEl.className = 'msg error';
@@ -9087,16 +9212,20 @@
                 });
 
                 // ===== 🔐 대표자 보안설정 =====
+                // TOTP 상태는 더 이상 owner_security_with.totp_enabled가 아니라 "내 계정 2단계 인증"(설정 탭,
+                // Supabase Auth MFA)의 실제 등록 여부로 판단한다 - hasAccountMfaTotp()는 위 스텝업 모달 코드에서
+                // 이미 정의되어 있다(client.auth.mfa.listFactors() 호출, 서버 왕복 없음).
                 async function loadOwnerSecurityTab() {
                     try {
-                        const status = await fetchOwnerStatus();
-                        document.getElementById('os-totp-status').textContent = status.totp_enabled ? '✅ 활성화됨' : '⛔ 미설정';
+                        const [status, accountTotp] = await Promise.all([fetchOwnerStatus(), hasAccountMfaTotp()]);
+                        document.getElementById('os-totp-status').textContent = accountTotp ? '✅ 활성화됨 (설정 탭의 내 계정 2단계 인증)' : '⛔ 미설정';
+                        document.getElementById('os-totp-goto-settings-btn').hidden = accountTotp;
                         document.getElementById('os-phone-status').textContent = status.has_phone ? '✅ 등록됨' : '미등록';
                         document.getElementById('os-email-status').textContent = status.has_otp_email ? '✅ 등록됨' : '미등록';
                         document.getElementById('os-backup-status').textContent = `${status.backup_codes_remaining}개 남음 (지금까지 사용 ${status.backup_codes_used_count}회)`;
                         document.getElementById('os-preferred-method').value = status.preferred_method || '';
                         const osChk = (el, ok) => { el.textContent = ok ? '✅ 등록됨' : '⛔ 미등록'; el.style.color = ok ? '#2E7D32' : '#C62828'; };
-                        osChk(document.getElementById('os-check-totp'), status.totp_enabled);
+                        osChk(document.getElementById('os-check-totp'), accountTotp);
                         osChk(document.getElementById('os-check-sms'), status.has_phone);
                         osChk(document.getElementById('os-check-email'), status.has_otp_email);
                     } catch (err) {
@@ -9104,41 +9233,11 @@
                     }
                 }
 
-                document.getElementById('os-totp-setup-btn')?.addEventListener('click', async () => {
-                    if (!confirm('새로 TOTP를 설정하면 기존 백업코드는 모두 폐기되고 10개가 새로 발급됩니다. 계속할까요?')) return;
-                    try {
-                        const { ok, json } = await authedFetch('/api/admin/owner/2fa/setup/totp', { method: 'POST' });
-                        if (!ok || !json.success) throw new Error(json.message || '설정에 실패했습니다');
-                        document.getElementById('os-totp-qr').src = json.data.qr_code_data_url;
-                        document.getElementById('os-totp-setup-area').hidden = false;
-                        document.getElementById('os-backup-codes-area').textContent = json.data.backup_codes.join('   ');
-                        const copyBtn = document.getElementById('os-backup-codes-copy-btn');
-                        copyBtn.hidden = false;
-                        copyBtn.onclick = () => {
-                            navigator.clipboard.writeText(json.data.backup_codes.join('\n'))
-                                .then(() => { copyBtn.textContent = '✅ 복사됨'; setTimeout(() => { copyBtn.textContent = '📋 백업코드 복사하기'; }, 2000); })
-                                .catch(() => alert('복사에 실패했습니다. 직접 선택해서 복사해주세요.'));
-                        };
-                    } catch (err) {
-                        alert(err.message);
-                    }
-                });
-
-                document.getElementById('os-totp-confirm-btn')?.addEventListener('click', async () => {
-                    const code = document.getElementById('os-totp-confirm-code').value.trim();
-                    const msgEl = document.getElementById('os-totp-confirm-msg');
-                    msgEl.className = 'msg';
-                    try {
-                        const { ok, json } = await authedFetch('/api/admin/owner/2fa/confirm-totp', { method: 'POST', body: JSON.stringify({ code }) });
-                        if (!ok || !json.success) throw new Error(json.message || '확인에 실패했습니다');
-                        msgEl.className = 'msg success';
-                        msgEl.textContent = '✅ TOTP가 활성화되었습니다';
-                        document.getElementById('os-totp-setup-area').hidden = true;
-                        loadOwnerSecurityTab();
-                    } catch (err) {
-                        msgEl.className = 'msg error';
-                        msgEl.textContent = err.message;
-                    }
+                // TOTP는 이제 이 화면에서 직접 설정하지 않는다 - "⚙️ 설정 탭에서 등록하기" 버튼은 설정 탭의
+                // 내 계정 2단계 인증 섹션으로 넘겨주기만 한다(다른 화면에서 탭을 넘기는 기존 패턴과 동일하게
+                // .tab-btn을 찾아 클릭한다).
+                document.getElementById('os-totp-goto-settings-btn')?.addEventListener('click', () => {
+                    document.querySelector('.tab-btn[data-tab="settings"]')?.click();
                 });
 
                 document.getElementById('os-contact-save-btn')?.addEventListener('click', async () => {
@@ -9294,7 +9393,23 @@
                     });
                 }
 
-                document.querySelector('[data-tab="owner-security"]')?.addEventListener('click', () => {
+                // 🔐 이 탭 자체는 서버에서 별도로 막혀있지 않다(GET /2fa/status는 대표자 본인이면 항상 열려
+                // 있어야 한다 - 그렇지 않으면 대표자가 2FA를 처음 등록하러 들어올 방법이 없는 닭과 달걀 문제가
+                // 생긴다). 대신 진입 자체를 프론트에서 게이트한다 - 세션을 가로챈 사람이 방금 로그인한 것만으로
+                // 곧장 SMS/이메일 연락처나 송금 방법 설정을 들여다보지 못하게 하기 위함(대표자가 아직 아무
+                // 2FA 수단도 등록하지 않은 부트스트랩 상태에서는 예외).
+                document.querySelector('[data-tab="owner-security"]')?.addEventListener('click', async () => {
+                    // loadOwnerSecurityTab()은 os-status-area 내부의 개별 엘리먼트(os-totp-status 등)만 채워
+                    // 넣고 컨테이너 자체를 교체하지 않으므로, 여기서 그 구조를 지우면 다음 진입 때(인증에
+                    // 성공해도) loadOwnerSecurityTab()이 망가진다. 그래서 다른 스텝업 버튼들과 동일하게(예:
+                    // 원가 조회, ppEnsureAndLoad) 취소 시엔 조용히 되돌아가고, 그 외 오류만 alert로 알린다.
+                    try {
+                        await window.__ensureOwnerStepUpOrBootstrap();
+                    } catch (err) {
+                        if (err.message === 'CANCELLED') return;
+                        alert('인증 확인 중 문제가 발생했습니다: ' + err.message);
+                        return;
+                    }
                     loadOwnerSecurityTab();
                 });
             }

@@ -161,6 +161,19 @@ function decodeJwtAal(token) {
   }
 }
 
+// amr(Authentication Methods Reference) 클레임 - "언제 어떤 방법으로 인증했는지"의 이력 배열
+// ({method, timestamp} 형태)이다. 대표자 스텝업을 "내 계정 2FA"(Supabase Auth MFA)로 병합할 때
+// "방금 TOTP로 aal2를 통과했는지"의 신선도를 검사하는 용도로만 쓴다(/api/admin/owner/stepup/via-account-mfa
+// 참고). decodeJwtAal과 마찬가지로 서명 검증은 이미 끝난 토큰의 클레임만 꺼내 쓰는 것이라 안전하다.
+function decodeJwtAmr(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf8'));
+    return Array.isArray(payload.amr) ? payload.amr : [];
+  } catch (e) {
+    return [];
+  }
+}
+
 const authenticate = async (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(' ')[1];
@@ -520,6 +533,61 @@ const requireOwnerStepUp = async (req, res, next) => {
   } catch (err) {
     console.error('requireOwnerStepUp 오류:', err.message);
     return deny('internal_error');
+  }
+};
+
+// 대표자가 "내 계정 2단계 인증"(Supabase Auth MFA TOTP) 또는 owner_security_with의 SMS/이메일 중
+// 최소 하나라도 등록해두었는지 확인한다. requireOwnerStepUpOrBootstrap(아래)이 "대표자가 아직 아무
+// 인증수단도 등록하지 않은 부트스트랩 상태에서는 스텝업 없이 통과시킬지"를 판단하는 데만 쓰인다.
+async function hasAnyOwnerStepUpFactor(profileId, user) {
+  const accountTotpVerified = Array.isArray(user?.factors) && user.factors.some(f => f.factor_type === 'totp' && f.status === 'verified');
+  if (accountTotpVerified) return true;
+  const { data: security } = await supabase.from('owner_security_with').select('phone, otp_email').eq('profile_id', profileId).maybeSingle();
+  return !!(security && (security.phone || security.otp_email));
+}
+
+// requireOwnerStepUp과 같은 3가지 조건(로그인 + 대표자 본인 + 유효한 스텝업 토큰)을 검사하는 로직을
+// 미들웨어가 아니라 "필요할 때 직접 호출할 수 있는 순수 함수"로도 재사용할 수 있게 뽑아둔 버전이다.
+// GET /api/admin/community-settlements처럼 "같은 엔드포인트를 관리자와 분양조직 담당자가 공유하고,
+// 관리자로 호출할 때만" 이 검사를 추가로 걸어야 하는 경우 미들웨어 체인에 넣을 수 없어서 필요하다.
+// allowBootstrap:true면 대표자가 2FA 수단을 하나도 등록하지 않은 상태에서는 토큰 없이 통과시킨다 -
+// 그렇지 않으면 대표자 본인도 "🔐 대표자 보안설정"에서 수단을 등록하기 전까지 분양 조직/정산/수수료율
+// 화면을 영원히 볼 수 없는 닭과 달걀 문제가 생기기 때문이다. (원가/마진율을 지키는 requireOwnerStepUp
+// 자체에는 이 예외가 없다 - 그 데이터가 더 민감하다고 보고 부트스트랩 여부와 무관하게 항상 강제한다.)
+async function checkOwnerStepUp(req, { allowBootstrap = false } = {}) {
+  if (!req.user) return { ok: false, status: 403, message: '로그인이 필요합니다', reason: 'not_authenticated' };
+  const { data: profile, error } = await supabase.from('profiles').select('id, role, is_owner').eq('id', req.user.id).single();
+  if (error || !profile) return { ok: false, status: 403, message: '프로필 정보를 확인할 수 없습니다', reason: 'profile_not_found' };
+  if (profile.role !== 'super_admin' || !profile.is_owner) {
+    return { ok: false, status: 403, message: '대표자 계정만 조회/수정할 수 있습니다', reason: 'not_owner' };
+  }
+  const token = req.headers['x-cost-stepup-token'];
+  if (!token) {
+    if (allowBootstrap && !(await hasAnyOwnerStepUpFactor(profile.id, req.user))) {
+      return { ok: true, profile };
+    }
+    return { ok: false, status: 403, message: '대표자 계정이 2단계 인증을 완료해야 조회/수정할 수 있습니다', reason: 'missing_token' };
+  }
+  const verified = verifyCostStepUpToken(token);
+  if (!verified.valid) return { ok: false, status: 403, message: '2단계 인증이 만료되었거나 유효하지 않습니다. 다시 인증해주세요.', reason: 'invalid_token' };
+  if (verified.payload.sub !== profile.id) return { ok: false, status: 403, message: '2단계 인증 토큰이 이 계정의 것이 아닙니다', reason: 'token_subject_mismatch' };
+  return { ok: true, profile };
+}
+
+// 🔒 분양 조직 관리 / 분양조직 정산 / 공급자별 수수료율 조회처럼 "은행계좌·수수료율 등 민감정보를 보여주는
+// 화면"의 진입 게이트. requireOwnerStepUp과 동일하지만 부트스트랩 예외(위 checkOwnerStepUp 주석 참고)가 있다.
+const requireOwnerStepUpOrBootstrap = async (req, res, next) => {
+  try {
+    const result = await checkOwnerStepUp(req, { allowBootstrap: true });
+    if (!result.ok) {
+      await logCostAudit({ profileId: req.user ? req.user.id : null, action: 'step_up_denied', detail: { reason: result.reason }, ip: getClientIp(req) });
+      return res.status(result.status).json({ error: 'Forbidden', message: result.message, timestamp: new Date().toISOString() });
+    }
+    req.ownerProfile = result.profile;
+    next();
+  } catch (err) {
+    console.error('requireOwnerStepUpOrBootstrap 오류:', err.message);
+    res.status(403).json({ error: 'Forbidden', message: '2단계 인증 확인 중 오류가 발생했습니다', timestamp: new Date().toISOString() });
   }
 };
 
@@ -5783,6 +5851,64 @@ async function handleOwnerStepUpVerify(req, res) {
 app.post('/api/admin/owner/verify-2fa', authenticate, handleOwnerStepUpVerify);
 app.post('/api/admin/owner/2fa/verify-otp', authenticate, handleOwnerStepUpVerify);
 
+// 🔐 병합된 2FA 경로 (대표자 요청사항) - "내 계정 2단계 인증"(설정 탭, Supabase Auth MFA/TOTP)을 이미
+// 등록해두었다면, 대표자 전용 owner_security_with TOTP를 따로 또 등록하지 않아도(인증 앱에 코드를 두 번
+// 등록하는 번거로움 없이) 그 계정 MFA만으로 대표자 스텝업 토큰을 받을 수 있게 한다. 방법:
+//   1) 호출자가 방금 client.auth.mfa.challengeAndVerify()로 aal2 세션을 새로 받았다는 것을,
+//      그 세션의 access_token(Authorization 헤더로 전달됨)의 aal/amr 클레임으로 직접 확인한다
+//      (jsonwebtoken 같은 별도 JWT 라이브러리를 쓰지 않는다는 파일 상단 방침과 동일하게 Buffer로 페이로드만
+//      디코딩 - authenticate가 이미 서명을 Supabase 서버에 검증받았으므로 추가 서명 검증은 필요 없다).
+//   2) amr 배열에서 method가 'totp' 또는 'mfa/totp'인 가장 최근 항목의 timestamp가 180초 이내여야 한다
+//      (오래된 aal2 세션을 재사용해 방금 인증한 것처럼 위장하는 것을 막기 위함).
+//   3) 이 계정이 실제 대표자(role==='super_admin' && is_owner===true)여야 한다.
+// 세 조건을 모두 만족하면 handleOwnerStepUpVerify와 동일하게 signCostStepUpToken()으로 같은 종류의
+// 스텝업 토큰을 발급한다 - 발급 로직 자체를 중복 구현하지 않고 그대로 재사용한다.
+// SMS/이메일/백업코드 스텝업은 이 병합과 무관하게 기존 verify-2fa/verify-otp(→ verifyOwnerFactor,
+// owner_security_with 기반) 경로를 그대로 사용한다 - Supabase Auth MFA가 TOTP만 지원하기 때문이다.
+app.post('/api/admin/owner/stepup/via-account-mfa', authenticate, async (req, res) => {
+  const ip = getClientIp(req);
+  try {
+    const { data: profile, error } = await supabase.from('profiles').select('id, role, is_owner').eq('id', req.user.id).single();
+    if (error || !profile || profile.role !== 'super_admin' || !profile.is_owner) {
+      await logCostAudit({ profileId: req.user.id, action: 'step_up_verify_failed', detail: { reason: 'not_owner', method: 'account_mfa' }, ip });
+      return res.status(403).json({ error: 'Forbidden', message: '대표자 계정만 사용할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+
+    if (req.authAal !== 'aal2') {
+      await logCostAudit({ profileId: profile.id, action: 'step_up_verify_failed', detail: { reason: 'not_aal2', method: 'account_mfa' }, ip });
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: '계정 2단계 인증(aal2) 세션이 아닙니다. 설정 탭에서 "내 계정 2단계 인증"의 인증 앱 코드를 다시 확인해주세요.',
+        reason: 'not_aal2',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const token = req.headers.authorization.split(' ')[1];
+    const amr = decodeJwtAmr(token);
+    const nowSec = Math.floor(Date.now() / 1000);
+    const recentTotpEntry = amr
+      .filter(e => e && (e.method === 'totp' || e.method === 'mfa/totp') && typeof e.timestamp === 'number')
+      .sort((a, b) => b.timestamp - a.timestamp)[0];
+    if (!recentTotpEntry || (nowSec - recentTotpEntry.timestamp) > 180) {
+      await logCostAudit({ profileId: profile.id, action: 'step_up_verify_failed', detail: { reason: 'stale_or_missing_totp_amr', method: 'account_mfa' }, ip });
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: '방금 완료한 인증 앱(TOTP) 인증이 필요합니다. 설정 탭에서 2단계 인증 코드를 다시 입력한 뒤 재시도해주세요.',
+        reason: 'fresh_totp_required',
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const stepupToken = signCostStepUpToken(profile.id);
+    await logCostAudit({ profileId: profile.id, action: 'step_up_granted', detail: { method: 'totp', via: 'account_mfa' }, ip });
+    res.json({ success: true, data: { token: stepupToken, expires_in: COST_STEPUP_TTL_SECONDS }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('계정 MFA 기반 대표자 스텝업 발급 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 // ============================================
 // 👑 대표자(is_owner) 지정 - 관리자 화면에서 완결되는 "최초 부트스트랩 + 이후 추가/해제" 흐름
 // ------------------------------------------------------------
@@ -9493,7 +9619,9 @@ app.get('/api/my/communities', authenticate, async (req, res) => {
 // ============================================
 // 커뮤니티(분양 조직) 관리 API - 관리자 전용
 // ============================================
-app.get('/api/admin/communities', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+// 조직별 사업자등록번호·수수료율·은행계좌가 그대로 포함되어 나가므로 requireOwnerStepUpOrBootstrap로
+// 대표자 전용 조회로 제한한다("🏢 분양 조직 관리" 탭과 "💵 분양조직 정산" 탭의 조직별 수수료율 섹션이 공유).
+app.get('/api/admin/communities', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
   try {
     const { data, error } = await supabase.from('communities').select('*').order('created_at', { ascending: false });
     if (error) throw error;
@@ -10957,7 +11085,9 @@ app.put('/api/admin/settings/business-info', authenticate, requireRole(['admin',
 });
 
 // 공급자(provider) 목록 + 현재 수수료율 조회 (정산 화면용)
-app.get('/api/admin/providers', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+// 공급자별 수수료율이 응답에 그대로 노출되므로(마진율과 같은 급의 민감정보) requireOwnerStepUpOrBootstrap로
+// 대표자 전용 조회로 제한한다 - "🏢 분양 조직 관리"/"💵 분양조직 정산"의 GET과 동일한 판단.
+app.get('/api/admin/providers', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('profiles')
@@ -10972,8 +11102,8 @@ app.get('/api/admin/providers', authenticate, requireRole(['admin', 'super_admin
   }
 });
 
-// 공급자별 수수료율 설정
-app.patch('/api/admin/providers/:id/commission-rate', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+// 공급자별 수수료율 설정 - requireOwnerStepUp 필수 (수수료율도 마진율과 같은 급의 민감정보)
+app.patch('/api/admin/providers/:id/commission-rate', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUp, async (req, res) => {
   try {
     const { id } = req.params;
     const rate = Number(req.body?.commission_rate);
@@ -11324,6 +11454,15 @@ app.get('/api/admin/community-settlements', authenticate, async (req, res) => {
     // 거치기 때문에 req.userRole이 채워지지 않는다(requireRole 미들웨어에서만 설정됨) - 직접 프로필을 조회한다.
     const { data: callerProfile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
     if (callerProfile && isAdminRole(callerProfile.role)) {
+      // 관리자 화면("💵 분양조직 정산" 탭)에서 조회하는 경로는 전체 조직의 매출·수수료·은행계좌가 그대로
+      // 노출되므로 대표자 전용으로 제한한다. requireRole 미들웨어로 걸 수 없는 이유는 바로 아래 else 분기
+      // (분양조직 담당자 본인 조회, 이 검사와 무관)와 같은 엔드포인트를 공유하기 때문 - checkOwnerStepUp을
+      // 관리자 분기 안에서만 직접 호출한다(requireOwnerStepUpOrBootstrap과 동일한 로직, 부트스트랩 예외 포함).
+      const stepUpResult = await checkOwnerStepUp(req, { allowBootstrap: true });
+      if (!stepUpResult.ok) {
+        await logCostAudit({ profileId: req.user.id, action: 'step_up_denied', detail: { reason: stepUpResult.reason }, ip: getClientIp(req) });
+        return res.status(stepUpResult.status).json({ error: 'Forbidden', message: stepUpResult.message, timestamp: new Date().toISOString() });
+      }
       if (communityId) query = query.eq('community_id', communityId);
     } else {
       const myCommunity = await getMyManagedCommunity(req.user.id);
