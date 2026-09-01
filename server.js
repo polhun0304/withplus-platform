@@ -11085,6 +11085,413 @@ app.get('/api/admin/community-settlements/payout-csv', authenticate, requireRole
   }
 });
 
+// ============================================
+// 🏦 분양조직 정산 자동송금 연동 (방법 B: 오픈뱅킹 / 방법 C: 정산대행 서비스)
+// ------------------------------------------------------------
+// 정산 지급에는 세 가지 방법이 있다:
+//   A) 수동 CSV(위 payout-csv) - 관리자가 은행 인터넷뱅킹 "대량이체" 화면에 직접 입력. 이미 구현됨.
+//   B) 오픈뱅킹(금융결제원) API로 자동 입금이체
+//   C) 정산대행 서비스(세틀뱅크 등) API로 자동 송금
+// 방법 B/C는 실제 은행 계좌를 움직이므로 반드시:
+//   - 기본값은 테스트모드(is_test_mode=true)이며, 테스트모드에서는 외부 API를 절대 호출하지 않고
+//     시뮬레이션 응답만 만들어 로그에 남긴다.
+//   - 설정 저장/실행 라우트는 반드시 requireOwnerStepUp(대표자 2FA 스텝업)으로 보호한다.
+//   - API 키/시크릿은 encryptOwnerSecret()/decryptOwnerSecret()로만 암호화 저장한다(새 암호화 로직 금지).
+//   - 실행 시도는 성공/실패 관계없이 전부 community_payout_transfer_log에 기록한다.
+// 정직성 안내: 오픈뱅킹/정산대행사 모두 아직 실제 계약·심사(오픈뱅킹은 이용기관 등록 심사, 정산대행은
+// 가맹계약)가 없는 상태라 실제 키로 검증하지 못했다. 아래 요청/응답 형식은 공개된 문서(금융결제원 오픈뱅킹
+// 개발가이드 - https://developers.kftc.or.kr)와 정산대행업계에서 흔히 쓰이는 "API Key 헤더 + POST 이체요청 +
+// 거래ID 응답" 패턴을 최선을 다해 반영했을 뿐, 실제 계약 후 해당 업체의 최종 API 문서로 필드명을 다시
+// 검증해야 한다(도매매 오픈API를 이런 식으로 정직하게 처리한 전례를 그대로 따른다 - 위 DOMEGGOOK_BASE 주석 참고).
+// ============================================
+
+const PAYOUT_PROVIDER_KEYS = ['openbanking', 'settlement_agency'];
+
+// 한국 주요 은행명 -> 오픈뱅킹 표준 은행코드(3자리). 오픈뱅킹 입금이체 API는 계좌를 "은행코드+계좌번호"로
+// 식별하므로, communities.bank_name에 자유 텍스트로 저장된 은행명을 코드로 변환해야 한다. 여기 없는
+// 은행명은 이체를 시도하기 전에 명확한 오류로 막는다(추측해서 잘못된 코드로 보내는 것보다 안전).
+const OPENBANKING_BANK_CODE_MAP = {
+  '한국은행': '001', 'KDB산업은행': '002', '산업은행': '002', 'IBK기업은행': '003', '기업은행': '003',
+  'KB국민은행': '004', '국민은행': '004', '수협은행': '007', 'NH농협은행': '011', '농협은행': '011',
+  '농협': '011', '우리은행': '020', 'SC제일은행': '023', '제일은행': '023', '한국씨티은행': '027',
+  '씨티은행': '027', '대구은행': '031', 'DGB대구은행': '031', '부산은행': '032', 'BNK부산은행': '032',
+  '광주은행': '034', '제주은행': '035', '전북은행': '037', '경남은행': '039', 'BNK경남은행': '039',
+  '새마을금고': '045', '신협': '048', '신협중앙회': '048', '우체국': '071', '우체국예금보험': '071',
+  'KEB하나은행': '081', '하나은행': '081', '신한은행': '088', '케이뱅크': '089', '카카오뱅크': '090',
+  '토스뱅크': '092'
+};
+
+// ---- 공용: provider 설정 조회 + JSON 시크릿 암/복호화(기존 encryptOwnerSecret/decryptOwnerSecret 재사용) ----
+async function getPayoutProvider(provider) {
+  const { data, error } = await supabase.from('community_payout_providers').select('*').eq('provider', provider).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+// encrypted_secret 컬럼에는 { client_id, client_secret, ... } 같은 JSON 객체를 문자열로 직렬화한 뒤
+// encryptOwnerSecret()로 통째로 암호화해서 저장한다 - 컬럼을 여러 개 늘리지 않고 provider마다 다른
+// 시크릿 필드 구성(오픈뱅킹은 client_id/secret/refresh_token, 정산대행은 API Key 하나)을 유연하게 담기 위함.
+function decryptPayoutSecretJSON(providerRow) {
+  if (!providerRow || !providerRow.encrypted_secret) return {};
+  try {
+    return JSON.parse(decryptOwnerSecret(providerRow.encrypted_secret));
+  } catch (err) {
+    console.error(`payout provider(${providerRow.provider}) 시크릿 복호화 실패:`, err.message);
+    throw new Error('저장된 인증정보를 복호화하지 못했습니다. 송금 방법 설정 화면에서 키를 다시 저장해주세요.');
+  }
+}
+function encryptPayoutSecretJSON(obj) {
+  return encryptOwnerSecret(JSON.stringify(obj || {}));
+}
+
+// 이체 시도 전용 상세 로그 - admin_audit_logs_with(요청 전체를 잡는 범용 감사로그)와 별개로,
+// 이체 성공/실패/테스트시뮬레이션 여부와 요청·응답 스냅샷을 전용 테이블에 남긴다. 로그 기록 자체가
+// 실패해도(네트워크 등) 원래 응답 흐름을 막지 않는다.
+async function logPayoutTransfer({ settlementId, provider, status, amount, requestSnapshot, responseSnapshot, errorMessage, executedBy }) {
+  try {
+    await supabase.from('community_payout_transfer_log').insert([{
+      settlement_id: settlementId || null,
+      provider,
+      status,
+      amount: (amount === undefined || amount === null) ? null : amount,
+      request_snapshot: requestSnapshot ? redactSensitiveFields(requestSnapshot) : null,
+      response_snapshot: responseSnapshot ? redactSensitiveFields(responseSnapshot) : null,
+      error_message: errorMessage || null,
+      executed_by: executedBy || null
+    }]);
+  } catch (err) {
+    console.error('이체 시도 로그 기록 실패:', err.message);
+  }
+}
+
+// ---- 방법 B: 오픈뱅킹(금융결제원) ----
+// config: { institution_use_code, fintech_use_num(플랫폼 출금계좌), api_env: 'testbed'|'production' }
+// secret: { client_id, client_secret, refresh_token, access_token, access_token_expires_at }
+// ⚠️ 중요한 전제: 오픈뱅킹으로 특정 계좌에 입금이체를 하려면, 그 계좌가 우리 오픈뱅킹 "이용기관"에
+// 사전 등록되어 fintech_use_num(핀테크이용번호)을 이미 발급받은 상태여야 한다(오픈뱅킹의 구조적 제약 -
+// 계좌번호만으로는 이체 불가, 반드시 출금동의 등록 절차를 먼저 거쳐야 함). 이 기능은 지금 그 등록 절차
+// (계좌 실명 확인 + 1원 인증 등)를 구현하지 않았고, community_settlements_with에도 상대 계좌의
+// fintech_use_num을 저장할 컬럼이 없다 - 즉 아래 이체 함수는 "조직 계좌가 이미 등록되어 있다"는 것을
+// 전제로만 동작하며, 실제 도입 시에는 계좌 등록(출금동의) 플로우를 별도로 먼저 구현해야 한다.
+const OPENBANKING_API_BASE = {
+  testbed: 'https://testapi.openbanking.or.kr',
+  production: 'https://openapi.kftc.or.kr'
+};
+
+async function refreshOpenBankingAccessToken(providerRow, secret) {
+  const apiBase = OPENBANKING_API_BASE[providerRow.config?.api_env] || OPENBANKING_API_BASE.testbed;
+  if (!secret.client_id || !secret.client_secret) {
+    throw new Error('오픈뱅킹 Client ID/Secret이 설정되지 않았습니다');
+  }
+  // 캐시된 access_token이 아직 유효하면(만료 60초 이상 남음) 재사용
+  if (secret.access_token && secret.access_token_expires_at && Date.now() < new Date(secret.access_token_expires_at).getTime() - 60000) {
+    return secret.access_token;
+  }
+  if (!secret.refresh_token) {
+    // 오픈뱅킹은 최초 access_token/refresh_token 발급에 사용자(대표자) 브라우저 리다이렉트 동의가 필요한
+    // OAuth2 Authorization Code 플로우를 거쳐야 한다 - 이 서버는 헤드리스라 그 최초 동의 플로우를 자체적으로
+    // 수행할 수 없다. 금융결제원 개발자센터에서 별도로 OAuth 동의를 완료해 발급받은 refresh_token을
+    // "송금 방법 설정" 화면에 직접 입력해줘야 이후 자동 갱신이 가능하다.
+    throw new Error('오픈뱅킹 refresh_token이 설정되지 않았습니다. 금융결제원 오픈뱅킹 개발자센터에서 최초 OAuth 동의를 완료한 뒤 발급받은 refresh_token을 저장해주세요.');
+  }
+  // 공개 문서 기준 토큰 갱신: POST {base}/oauth/2.0/token (application/x-www-form-urlencoded)
+  const resp = await fetch(`${apiBase}/oauth/2.0/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      client_id: secret.client_id,
+      client_secret: secret.client_secret,
+      refresh_token: secret.refresh_token,
+      scope: 'transfer'
+    }).toString(),
+    signal: AbortSignal.timeout(15000)
+  });
+  const json = await resp.json().catch(() => null);
+  if (!resp.ok || !json?.access_token) {
+    throw new Error(`오픈뱅킹 토큰 갱신 실패: ${json?.rsp_message || json?.error_description || resp.status}`);
+  }
+  const expiresInSec = Number(json.expires_in) || 3600;
+  const updatedSecret = {
+    ...secret,
+    access_token: json.access_token,
+    access_token_expires_at: new Date(Date.now() + expiresInSec * 1000).toISOString(),
+    refresh_token: json.refresh_token || secret.refresh_token // 오픈뱅킹은 갱신 시 refresh_token도 함께 재발급될 수 있음
+  };
+  // 갱신된 토큰을 다음 호출을 위해 다시 암호화해서 저장(재요청마다 매번 갱신하지 않도록)
+  try {
+    await supabase.from('community_payout_providers').update({ encrypted_secret: encryptPayoutSecretJSON(updatedSecret) }).eq('provider', 'openbanking');
+  } catch (err) {
+    console.error('오픈뱅킹 access_token 캐시 저장 실패(다음 요청에서 재갱신됨):', err.message);
+  }
+  return json.access_token;
+}
+
+// 오픈뱅킹 입금이체 실행. 필드명은 금융결제원 공개 개발가이드(입금이체 API)를 기준으로 최선을 다해
+// 구성했으나, 실제 계약/테스트베드 접근 전까지는 100% 확정할 수 없다 - 특히 bank_tran_id(이체거래고유번호)
+// 채번 규칙(이용기관코드 10자리 + 구분코드 1자리 + 일련번호 등)은 기관마다 안내받는 방식이 달라, 여기서는
+// 통상적으로 알려진 "타임스탬프 기반 유니크 문자열"로 대체했다 - 실제 연동 시 금융결제원이 안내하는
+// 정확한 채번 규칙으로 교체해야 한다.
+async function executeOpenBankingTransfer(providerRow, secret, { bankName, bankAccount, accountHolder, amount, printContent }) {
+  const apiBase = OPENBANKING_API_BASE[providerRow.config?.api_env] || OPENBANKING_API_BASE.testbed;
+  const withdrawFintechNum = providerRow.config?.fintech_use_num;
+  const institutionUseCode = providerRow.config?.institution_use_code;
+  if (!withdrawFintechNum || !institutionUseCode) {
+    throw new Error('오픈뱅킹 설정에 출금계좌 핀테크이용번호(fintech_use_num) 또는 이용기관코드가 없습니다');
+  }
+  const bankCode = OPENBANKING_BANK_CODE_MAP[String(bankName || '').trim()];
+  if (!bankCode) {
+    throw new Error(`오픈뱅킹으로 이체할 수 없는 은행명입니다: "${bankName}" (지원 은행코드 매핑에 없음 - 서버 코드의 OPENBANKING_BANK_CODE_MAP에 추가해야 합니다)`);
+  }
+  const accessToken = await refreshOpenBankingAccessToken(providerRow, secret);
+  const bankTranId = `${institutionUseCode}U${Date.now()}`.slice(0, 20); // 이용기관코드+구분코드(U)+타임스탬프, 20자 이내
+  const nowKst = new Date();
+  const body = {
+    bank_tran_id: bankTranId,
+    cntr_account_type: 'N',
+    cntr_account_num: withdrawFintechNum,
+    dps_print_content: (printContent || '분양조직정산').slice(0, 20),
+    fintech_use_num: withdrawFintechNum,
+    tran_amt: String(Math.round(Number(amount) || 0)),
+    tran_dtime: nowKst.toISOString().replace(/[-:TZ.]/g, '').slice(0, 14),
+    req_client_name: '플랫폼', // 실제 도입 시 platform_business_info의 상호명으로 대체 필요
+    req_client_bank_code: bankCode,
+    req_client_account_num: bankAccount,
+    req_client_num: institutionUseCode,
+    transfer_purpose: 'TR',
+    recv_client_name: accountHolder,
+    recv_client_bank_code: bankCode,
+    recv_client_account_num: bankAccount,
+    recv_client_fintech_use_num: '' // 수취계좌의 fintech_use_num은 별도 등록 절차가 필요(위 주석 참고) - 현재 빈 값
+  };
+  const resp = await fetch(`${apiBase}/v2.0/transfer/deposit/${withdrawFintechNum}`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20000)
+  });
+  const json = await resp.json().catch(() => null);
+  const ok = resp.ok && (json?.rsp_code === 'A0000' || json?.res_cd === '00000');
+  return { ok, httpStatus: resp.status, request: body, response: json, transactionId: json?.bank_tran_id || json?.api_tran_id || null, message: json?.rsp_message || json?.res_msg || (ok ? '성공' : '오픈뱅킹 이체 실패') };
+}
+
+// ---- 방법 C: 정산대행 서비스 (범용 어댑터) ----
+// config: { base_url, transfer_path(기본 '/transfer'), merchant_id, auth_header(기본 'Authorization'),
+//           auth_scheme(기본 'Bearer') }
+// secret: { api_key }
+// 특정 업체(세틀뱅크 등) 전용 필드명을 하드코딩하지 않고, "REST API에 API Key 인증 헤더를 붙여 수취인
+// 계좌/금액을 POST하면 거래ID를 반환한다"는 정산대행업계의 흔한 패턴을 그대로 따르는 범용 어댑터로
+// 구현했다. 실제 계약한 업체의 API 문서를 받으면 아래 요청/응답 필드명(bankCode/bankName,
+// accountNumber, amount, transactionId 등)을 그 업체 스펙에 맞게 조정해야 한다 - 지금은 어떤 업체와도
+// 계약 전이라 검증할 방법이 없었다.
+async function executeSettlementAgencyTransfer(providerRow, secret, { bankName, bankAccount, accountHolder, amount, settlementId }) {
+  const config = providerRow.config || {};
+  if (!config.base_url) throw new Error('정산대행 서비스 base_url이 설정되지 않았습니다');
+  if (!secret.api_key) throw new Error('정산대행 서비스 API Key가 설정되지 않았습니다');
+  const authHeader = config.auth_header || 'Authorization';
+  const authScheme = config.auth_scheme !== undefined ? config.auth_scheme : 'Bearer';
+  const headerValue = authScheme ? `${authScheme} ${secret.api_key}` : secret.api_key;
+  const url = `${String(config.base_url).replace(/\/$/, '')}${config.transfer_path || '/transfer'}`;
+  const body = {
+    merchantId: config.merchant_id || undefined,
+    bankName,
+    accountNumber: bankAccount,
+    accountHolder,
+    amount: Math.round(Number(amount) || 0),
+    note: `분양조직정산 ${settlementId || ''}`.trim()
+  };
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { [authHeader]: headerValue, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20000)
+  });
+  const json = await resp.json().catch(() => null);
+  // 성공 판정 기준도 업체마다 다를 수 있어(success:true, code:'0000' 등) 흔한 두 가지 형태를 방어적으로 확인
+  const ok = resp.ok && (json?.success === true || json?.status === 'success' || json?.code === '0000' || json?.resultCode === '0000');
+  const transactionId = json?.transactionId || json?.txId || json?.tranId || json?.id || null;
+  return { ok, httpStatus: resp.status, request: { ...body, headerName: authHeader }, response: json, transactionId, message: json?.message || (ok ? '성공' : '정산대행 이체 실패') };
+}
+
+// ---- 공급자 설정 CRUD (대표자 2FA 스텝업 필수) ----
+app.get('/api/admin/payout-providers', authenticate, requireOwnerStepUp, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('community_payout_providers').select('*').order('provider');
+    if (error) throw error;
+    const safe = (data || []).map(row => ({
+      provider: row.provider,
+      display_name: row.display_name,
+      is_enabled: row.is_enabled,
+      is_test_mode: row.is_test_mode,
+      config: row.config || {},
+      hasSecret: !!row.encrypted_secret,
+      updated_at: row.updated_at
+    }));
+    res.json({ success: true, data: safe, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching payout providers:', err);
+    res.status(500).json({ error: 'Failed to fetch payout providers', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/payout-providers/:provider', authenticate, requireOwnerStepUp, async (req, res) => {
+  try {
+    const { provider } = req.params;
+    if (!PAYOUT_PROVIDER_KEYS.includes(provider)) {
+      return res.status(400).json({ error: 'Bad Request', message: `지원하지 않는 provider입니다 (${PAYOUT_PROVIDER_KEYS.join(', ')} 중 하나)`, timestamp: new Date().toISOString() });
+    }
+    const { is_enabled, is_test_mode, config, secret, display_name } = req.body || {};
+    const update = { provider, updated_by: req.user.id, updated_at: new Date().toISOString() };
+    if (display_name !== undefined) update.display_name = display_name || null;
+    if (is_enabled !== undefined) update.is_enabled = !!is_enabled;
+    // is_test_mode를 아예 안 보내면 기존 값을 그대로 두고, 명시적으로 보낼 때만 바뀐다 - 신규 provider row는
+    // 마이그레이션에서 이미 true(테스트모드)로 미리 만들어 두었으므로 "실수로 누락되어 실모드가 되는" 경우는 없다.
+    if (is_test_mode !== undefined) update.is_test_mode = !!is_test_mode;
+    if (config !== undefined && typeof config === 'object') update.config = config;
+    // secret은 값이 있을 때만 새로 암호화해서 갱신(빈 값/미전달이면 기존 값 유지) - naver oauth_config PUT과 동일한 원칙
+    if (secret && typeof secret === 'object' && Object.keys(secret).length > 0) {
+      const existing = await getPayoutProvider(provider);
+      const merged = { ...(existing ? decryptPayoutSecretJSON(existing) : {}), ...secret };
+      update.encrypted_secret = encryptPayoutSecretJSON(merged);
+    }
+    const { data, error } = await supabase.from('community_payout_providers').upsert(update, { onConflict: 'provider' }).select().single();
+    if (error) throw error;
+    res.json({
+      success: true,
+      data: { provider: data.provider, display_name: data.display_name, is_enabled: data.is_enabled, is_test_mode: data.is_test_mode, config: data.config, hasSecret: !!data.encrypted_secret },
+      message: '저장되었습니다',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error saving payout provider:', err);
+    res.status(500).json({ error: 'Failed to save payout provider', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ---- 실행 공용 로직 ----
+async function runPayoutTransfer({ settlement, provider, executedBy }) {
+  const providerRow = await getPayoutProvider(provider);
+  if (!providerRow || !providerRow.is_enabled) {
+    const err = new Error(`${provider} 방식은 아직 활성화되어 있지 않습니다. 대표자 보안설정 > 송금 방법 설정에서 먼저 활성화해주세요.`);
+    err.statusCode = 400;
+    throw err;
+  }
+  const amount = (settlement.net_payment_amount !== null && settlement.net_payment_amount !== undefined) ? settlement.net_payment_amount : settlement.commission_amount;
+  if (!settlement.bank_account) {
+    const err = new Error('이 정산 건에는 송금할 계좌 정보가 없습니다');
+    err.statusCode = 400;
+    throw err;
+  }
+
+  if (providerRow.is_test_mode) {
+    // 🧪 테스트모드: 외부 API를 절대 호출하지 않는다. 시뮬레이션 성공 응답만 만들어 로그에 남기고,
+    // 정산 상태는 바꾸지 않는다(테스트모드는 실제로 지급된 게 아니므로).
+    const simulated = {
+      simulated: true, provider, amount,
+      bankName: settlement.bank_name, bankAccount: settlement.bank_account, accountHolder: settlement.account_holder,
+      note: '테스트모드 - 실제 외부 API를 호출하지 않았습니다'
+    };
+    await logPayoutTransfer({
+      settlementId: settlement.id, provider, status: 'test_simulated', amount,
+      requestSnapshot: simulated, responseSnapshot: { simulated: true, transactionId: `TEST-${Date.now()}` },
+      executedBy
+    });
+    return { testMode: true, simulated: true, message: '테스트 모드로 시뮬레이션되었습니다. 실제로 송금되지 않았으며 정산 상태도 변경되지 않았습니다.' };
+  }
+
+  // 🔴 실모드: 실제로 외부 API를 호출한다.
+  const secret = decryptPayoutSecretJSON(providerRow);
+  const transferInput = {
+    bankName: settlement.bank_name, bankAccount: settlement.bank_account, accountHolder: settlement.account_holder,
+    amount, printContent: '분양조직정산', settlementId: settlement.id
+  };
+  let result;
+  try {
+    result = provider === 'openbanking'
+      ? await executeOpenBankingTransfer(providerRow, secret, transferInput)
+      : await executeSettlementAgencyTransfer(providerRow, secret, transferInput);
+  } catch (err) {
+    await logPayoutTransfer({ settlementId: settlement.id, provider, status: 'failed', amount, requestSnapshot: transferInput, errorMessage: err.message, executedBy });
+    const wrapped = new Error(err.message);
+    wrapped.statusCode = 502;
+    throw wrapped;
+  }
+
+  if (!result.ok) {
+    await logPayoutTransfer({ settlementId: settlement.id, provider, status: 'failed', amount, requestSnapshot: result.request, responseSnapshot: result.response, errorMessage: result.message, executedBy });
+    const err = new Error(result.message || '이체에 실패했습니다');
+    err.statusCode = 502;
+    throw err;
+  }
+
+  await logPayoutTransfer({ settlementId: settlement.id, provider, status: 'success', amount, requestSnapshot: result.request, responseSnapshot: result.response, executedBy });
+
+  // 성공했을 때만 정산 상태를 지급완료로 갱신(세무처리 필드도 함께 스냅샷)
+  const { data: community } = await supabase.from('communities').select('settlement_tax_method').eq('id', settlement.community_id).maybeSingle();
+  const taxFields = computeSettlementTaxFields(settlement.commission_amount, community?.settlement_tax_method);
+  const { data: updated, error: updateErr } = await supabase.from('community_settlements_with').update({
+    status: 'paid', payout_method: provider, paid_at: new Date().toISOString(),
+    payout_memo: `${provider === 'openbanking' ? '오픈뱅킹' : '정산대행'} 자동이체 (거래ID: ${result.transactionId || '-'})`,
+    ...taxFields
+  }).eq('id', settlement.id).select().single();
+  if (updateErr) throw updateErr;
+
+  return { testMode: false, transactionId: result.transactionId, settlement: updated, message: '이체가 완료되어 지급완료로 처리되었습니다' };
+}
+
+app.post('/api/admin/community-settlements/:id/execute-transfer', authenticate, requireOwnerStepUp, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { provider } = req.body || {};
+    if (!['openbanking', 'settlement_agency'].includes(provider)) {
+      return res.status(400).json({ error: 'Bad Request', message: "provider는 'openbanking' 또는 'settlement_agency'여야 합니다", timestamp: new Date().toISOString() });
+    }
+    const { data: settlement, error } = await supabase.from('community_settlements_with').select('*').eq('id', id).maybeSingle();
+    if (error) throw error;
+    if (!settlement) return res.status(404).json({ error: 'Not Found', message: '정산 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (settlement.status !== 'pending') {
+      return res.status(400).json({ error: 'Bad Request', message: '정산대기 상태인 건만 자동이체를 실행할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+    const result = await runPayoutTransfer({ settlement, provider, executedBy: req.user.id });
+    res.json({ success: true, data: result, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error executing payout transfer:', err);
+    res.status(err.statusCode || 500).json({ error: 'Failed to execute transfer', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ---- 실행: 배치(선택 기능) ----
+app.post('/api/admin/community-settlements/execute-transfer-batch', authenticate, requireOwnerStepUp, async (req, res) => {
+  try {
+    const { ids, provider } = req.body || {};
+    if (!['openbanking', 'settlement_agency'].includes(provider)) {
+      return res.status(400).json({ error: 'Bad Request', message: "provider는 'openbanking' 또는 'settlement_agency'여야 합니다", timestamp: new Date().toISOString() });
+    }
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'ids 배열이 비어 있습니다', timestamp: new Date().toISOString() });
+    }
+    const { data: settlements, error } = await supabase.from('community_settlements_with').select('*').in('id', ids);
+    if (error) throw error;
+    const results = [];
+    for (const settlement of (settlements || [])) {
+      if (settlement.status !== 'pending') {
+        results.push({ id: settlement.id, ok: false, message: '정산대기 상태가 아니어서 건너뜀' });
+        continue;
+      }
+      try {
+        const r = await runPayoutTransfer({ settlement, provider, executedBy: req.user.id });
+        results.push({ id: settlement.id, ok: true, ...r });
+      } catch (err) {
+        results.push({ id: settlement.id, ok: false, message: err.message });
+      }
+    }
+    res.json({ success: true, data: { results, total: results.length, succeeded: results.filter(r => r.ok).length }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error executing batch payout transfer:', err);
+    res.status(500).json({ error: 'Failed to execute batch transfer', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+
 // 원천징수영수증 데이터 조회 (지급완료 + 원천징수 대상 건만) - 관리자 전용
 // 본인(공급자) 또는 관리자만 조회 가능 - authenticate만 걸고 내부에서 판정한다(정산 내역 목록 조회와 동일한 패턴).
 // 원천징수영수증은 지급받은 당사자가 본인 세무신고에 써야 하는 문서라 관리자뿐 아니라 본인도 볼 수 있어야 한다.

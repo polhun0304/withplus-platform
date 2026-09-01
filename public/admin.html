@@ -1918,6 +1918,9 @@
                     </div>
                     <button type="button" class="btn btn-primary" id="os-contact-save-btn">연락처 저장</button>
                     <p class="msg" id="os-contact-msg"></p>
+                    <div class="subsection-title" style="margin-top:24px;">🔐 송금 방법 설정 (방법 A/B/C)</div>
+                    <p style="color:var(--text-gray); font-size:0.85em;">분양조직 정산금을 실제로 송금하는 방법을 선택하고 설정합니다. 방법 A(수동 CSV)는 별도 설정 없이 "💵 분양조직 정산" 탭에서 항상 사용할 수 있고, 방법 B(오픈뱅킹)·C(정산대행 서비스)는 여기서 활성화해야 "⚡ 자동이체 실행" 버튼에서 선택할 수 있습니다. <strong>기본값은 테스트모드이며, 테스트모드에서는 실제로 송금되지 않고 시뮬레이션만 기록됩니다.</strong></p>
+                    <div id="pp-area"><div class="state-box"><div class="emoji">🔒</div><h3>불러오려면 대표자 2단계 인증이 필요합니다</h3><button type="button" class="btn btn-secondary" id="pp-load-btn">🔓 인증하고 불러오기</button></div></div>
                 </div>` : ''}
             `;
 
@@ -3157,7 +3160,7 @@
                                                 : `<span class="badge inactive">🚫 계좌 미등록</span>`}</td>
                                             <td data-label="상태"><span class="badge ${SETTLEMENT_STATUS_CLASS[r.status] || ''}">${SETTLEMENT_STATUS_LABEL[r.status] || r.status}</span></td>
                                             <td data-label="처리">
-                                                ${r.status === 'pending' ? `<button class="btn btn-secondary cs-mark-paid" data-id="${r.id}" style="padding:6px 10px; font-size:0.82em;">지급완료 처리</button> <button class="btn btn-secondary cs-cancel" data-id="${r.id}" style="padding:6px 10px; font-size:0.82em;">취소</button>` : ''}
+                                                ${r.status === 'pending' ? `<button class="btn btn-secondary cs-mark-paid" data-id="${r.id}" style="padding:6px 10px; font-size:0.82em;">지급완료 처리</button> <button class="btn btn-secondary cs-cancel" data-id="${r.id}" style="padding:6px 10px; font-size:0.82em;">취소</button>${isOwner ? ` <button class="btn btn-primary cs-auto-transfer" data-id="${r.id}" style="padding:6px 10px; font-size:0.82em;">⚡ 자동이체 실행</button>` : ''}` : ''}
                                                 ${r.status === 'paid' ? `<span style="color:var(--text-gray); font-size:0.82em;">${r.paid_at ? new Date(r.paid_at).toLocaleDateString('ko-KR') + ' 지급' : ''}${r.payout_memo ? ' · 메모: ' + WithPlus.escapeHtml(r.payout_memo) : ''}</span>` : ''}
                                                 ${settlementTaxInfoHTML(r)}
                                                 ${settlementTaxActionHTML(r, 'community')}
@@ -3191,6 +3194,41 @@
                                     const { ok, json } = await authedFetch(`/api/admin/community-settlements/${btn.dataset.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'cancelled' }) });
                                     if (!ok || !json.success) { alert(json.message || '처리 중 오류가 발생했습니다'); return; }
                                     loadCsTable();
+                                });
+                            });
+                            area.querySelectorAll('.cs-auto-transfer').forEach(btn => {
+                                btn.addEventListener('click', async () => {
+                                    const row = rows.find(r => String(r.id) === String(btn.dataset.id));
+                                    if (!row || !row.bank_account) { alert('이 정산 건에는 계좌 정보가 없어 자동이체를 실행할 수 없습니다. 분양 조직 관리에서 계좌를 등록한 뒤 정산을 다시 생성해주세요.'); return; }
+                                    try {
+                                        await window.__ensureOwnerStepUp();
+                                        const { ok, json } = await ownerFetch('/api/admin/payout-providers');
+                                        if (!ok || !json.success) throw new Error(json.message || '송금 방법 설정을 불러오지 못했습니다');
+                                        const enabledProviders = (json.data || []).filter(p => p.is_enabled);
+                                        if (enabledProviders.length === 0) {
+                                            alert('활성화된 자동이체 방법(오픈뱅킹/정산대행)이 없습니다. "🔐 대표자 보안설정" 탭의 송금 방법 설정에서 먼저 활성화해주세요.');
+                                            return;
+                                        }
+                                        const optionsText = enabledProviders.map((p, i) => `${i + 1}. ${p.provider === 'openbanking' ? '오픈뱅킹' : '정산대행 서비스'}${p.is_test_mode ? ' (🧪 테스트모드)' : ' (🔴 실모드)'}`).join('\n');
+                                        const choice = prompt(`실행할 송금 방법을 번호로 입력하세요:\n${optionsText}`, '1');
+                                        if (choice === null) return;
+                                        const picked = enabledProviders[parseInt(choice, 10) - 1];
+                                        if (!picked) { alert('잘못된 선택입니다.'); return; }
+                                        const amount = (row.net_payment_amount !== null && row.net_payment_amount !== undefined) ? row.net_payment_amount : row.commission_amount;
+                                        const confirmMsg = picked.is_test_mode
+                                            ? '🧪 테스트 모드이므로 실제로 송금되지 않습니다. 시뮬레이션 결과만 로그에 남고 정산 상태는 바뀌지 않습니다. 계속할까요?'
+                                            : `🔴 실제로 ${Number(amount).toLocaleString()}원이 "${row.bank_name || ''} ${row.bank_account} (예금주: ${row.account_holder || '-'})" 계좌로 송금됩니다. 계속하시겠습니까?`;
+                                        if (!confirm(confirmMsg)) return;
+                                        const { ok: ok2, json: json2 } = await ownerFetch(`/api/admin/community-settlements/${row.id}/execute-transfer`, {
+                                            method: 'POST', body: JSON.stringify({ provider: picked.provider })
+                                        });
+                                        if (!ok2 || !json2.success) throw new Error(json2.message || '자동이체 실행에 실패했습니다');
+                                        alert(json2.data.message || '처리되었습니다');
+                                        loadCsTable();
+                                    } catch (err) {
+                                        if (err.message === 'CANCELLED') return;
+                                        alert('자동이체 실행 실패: ' + err.message);
+                                    }
                                 });
                             });
                         } catch (err) {
@@ -8814,6 +8852,137 @@
                         msgEl.textContent = err.message;
                     }
                 });
+
+
+                // ===== 🔐 송금 방법 설정 (방법 B: 오픈뱅킹 / 방법 C: 정산대행 서비스) =====
+                const PP_LABELS = { openbanking: '🏦 방법 B: 오픈뱅킹(금융결제원)', settlement_agency: '🏢 방법 C: 정산대행 서비스' };
+
+                async function ppEnsureAndLoad() {
+                    try {
+                        await window.__ensureOwnerStepUp();
+                        await loadPayoutProviders();
+                    } catch (err) {
+                        if (err.message === 'CANCELLED') return;
+                        alert(err.message);
+                    }
+                }
+                document.getElementById('pp-load-btn')?.addEventListener('click', ppEnsureAndLoad);
+
+                async function loadPayoutProviders() {
+                    const area = document.getElementById('pp-area');
+                    area.innerHTML = `<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>`;
+                    try {
+                        const { ok, json } = await ownerFetch('/api/admin/payout-providers');
+                        if (!ok || !json.success) throw new Error(json.message || '불러오지 못했습니다');
+                        renderPayoutProviders(json.data);
+                    } catch (err) {
+                        if (err.stepUpRequired) {
+                            area.innerHTML = `<div class="state-box"><div class="emoji">🔒</div><h3>불러오려면 대표자 2단계 인증이 필요합니다</h3><button type="button" class="btn btn-secondary" id="pp-load-btn">🔓 인증하고 불러오기</button></div>`;
+                            document.getElementById('pp-load-btn')?.addEventListener('click', ppEnsureAndLoad);
+                            return;
+                        }
+                        area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                    }
+                }
+
+                function renderPayoutProviders(rows) {
+                    const area = document.getElementById('pp-area');
+                    area.innerHTML = (rows || []).map(row => renderPayoutProviderCard(row)).join('');
+                    (rows || []).forEach(row => bindPayoutProviderCard(row));
+                }
+
+                function renderPayoutProviderCard(row) {
+                    const cfg = row.config || {};
+                    const secretNote = row.hasSecret ? '저장된 값이 있습니다 (변경하려면 새 값을 입력)' : '미입력';
+                    const fields = row.provider === 'openbanking' ? `
+                        <div class="field"><label>이용기관코드 (institution_use_code)</label><input type="text" id="pp-openbanking-institution_use_code" value="${WithPlus.escapeHtml(cfg.institution_use_code || '')}"></div>
+                        <div class="field"><label>출금계좌 핀테크이용번호 (fintech_use_num, 플랫폼 계좌)</label><input type="text" id="pp-openbanking-fintech_use_num" value="${WithPlus.escapeHtml(cfg.fintech_use_num || '')}"></div>
+                        <div class="field"><label>API 환경</label>
+                            <select id="pp-openbanking-api_env">
+                                <option value="testbed" ${(!cfg.api_env || cfg.api_env === 'testbed') ? 'selected' : ''}>테스트베드 (testapi.openbanking.or.kr)</option>
+                                <option value="production" ${cfg.api_env === 'production' ? 'selected' : ''}>운영 (openapi.kftc.or.kr)</option>
+                            </select>
+                        </div>
+                        <div class="field"><label>Client ID</label><input type="text" id="pp-openbanking-secret-client_id" placeholder="${secretNote}"></div>
+                        <div class="field"><label>Client Secret</label><input type="password" id="pp-openbanking-secret-client_secret" placeholder="${secretNote}"></div>
+                        <div class="field"><label>Refresh Token (최초 OAuth 동의 후 발급받은 값을 입력)</label><input type="password" id="pp-openbanking-secret-refresh_token" placeholder="${secretNote}"></div>
+                        <p style="font-size:0.78em; color:var(--text-gray);">⚠️ 오픈뱅킹은 계좌번호만으로 이체할 수 없고, 수취 계좌가 사전에 "출금동의(핀테크이용번호 발급)" 절차를 거쳐야 합니다. 이 화면은 그 등록 절차를 대행하지 않으며, 이미 등록된 계좌에 대해서만 동작합니다.</p>
+                    ` : `
+                        <div class="field"><label>API Base URL</label><input type="text" id="pp-settlement_agency-base_url" value="${WithPlus.escapeHtml(cfg.base_url || '')}" placeholder="https://api.example-agency.com"></div>
+                        <div class="field"><label>이체 요청 경로 (transfer_path)</label><input type="text" id="pp-settlement_agency-transfer_path" value="${WithPlus.escapeHtml(cfg.transfer_path || '/transfer')}"></div>
+                        <div class="field"><label>가맹점 ID (merchant_id)</label><input type="text" id="pp-settlement_agency-merchant_id" value="${WithPlus.escapeHtml(cfg.merchant_id || '')}"></div>
+                        <div class="field"><label>인증 헤더 이름</label><input type="text" id="pp-settlement_agency-auth_header" value="${WithPlus.escapeHtml(cfg.auth_header || 'Authorization')}"></div>
+                        <div class="field"><label>인증 스킴 (예: Bearer, 비워두면 API Key만 헤더값으로 전송)</label><input type="text" id="pp-settlement_agency-auth_scheme" value="${cfg.auth_scheme !== undefined ? WithPlus.escapeHtml(cfg.auth_scheme) : 'Bearer'}"></div>
+                        <div class="field"><label>API Key</label><input type="password" id="pp-settlement_agency-secret-api_key" placeholder="${secretNote}"></div>
+                        <p style="font-size:0.78em; color:var(--text-gray);">⚠️ 특정 업체 전용이 아닌 범용 어댑터입니다. 실제 계약한 업체의 API 문서를 받으면 필드명을 그 업체 스펙에 맞게 조정해야 할 수 있습니다.</p>
+                    `;
+                    return `
+                    <div class="settings-card" style="max-width:700px; margin-bottom:16px;">
+                        <h3>${PP_LABELS[row.provider] || row.provider}</h3>
+                        <label style="display:flex; align-items:center; gap:8px; margin:6px 0; cursor:pointer;">
+                            <input type="checkbox" id="pp-${row.provider}-enabled" ${row.is_enabled ? 'checked' : ''}>
+                            <span>이 방법으로 "⚡ 자동이체 실행"에서 선택 가능하게 함 (is_enabled)</span>
+                        </label>
+                        <label style="display:flex; align-items:center; gap:8px; margin:6px 0; cursor:pointer; ${row.is_test_mode ? '' : 'color:#C62828; font-weight:600;'}">
+                            <input type="checkbox" id="pp-${row.provider}-testmode" ${row.is_test_mode ? 'checked' : ''}>
+                            <span>${row.is_test_mode ? '🧪 테스트모드 (실제 API 호출 안 함, 기본값)' : '🔴 실모드 (저장 시 실제로 은행 계좌가 움직일 수 있습니다!)'}</span>
+                        </label>
+                        ${fields}
+                        <button type="button" class="btn btn-primary pp-save-btn" data-provider="${row.provider}">저장</button>
+                        <p class="msg" id="pp-${row.provider}-msg"></p>
+                    </div>`;
+                }
+
+                function bindPayoutProviderCard(row) {
+                    const btn = document.querySelector(`.pp-save-btn[data-provider="${row.provider}"]`);
+                    if (!btn) return;
+                    btn.addEventListener('click', async () => {
+                        const msgEl = document.getElementById(`pp-${row.provider}-msg`);
+                        msgEl.className = 'msg';
+                        const isEnabled = document.getElementById(`pp-${row.provider}-enabled`).checked;
+                        const isTestMode = document.getElementById(`pp-${row.provider}-testmode`).checked;
+                        if (!isTestMode && !confirm('⚠️ 실모드로 전환하면 이후 "자동이체 실행"에서 이 방법을 고르는 순간 실제로 은행 계좌가 움직입니다. 계속할까요?')) return;
+                        let config = {};
+                        const secret = {};
+                        if (row.provider === 'openbanking') {
+                            config = {
+                                institution_use_code: document.getElementById('pp-openbanking-institution_use_code').value.trim() || null,
+                                fintech_use_num: document.getElementById('pp-openbanking-fintech_use_num').value.trim() || null,
+                                api_env: document.getElementById('pp-openbanking-api_env').value
+                            };
+                            ['client_id', 'client_secret', 'refresh_token'].forEach(k => {
+                                const v = document.getElementById(`pp-openbanking-secret-${k}`).value.trim();
+                                if (v) secret[k] = v;
+                            });
+                        } else {
+                            config = {
+                                base_url: document.getElementById('pp-settlement_agency-base_url').value.trim() || null,
+                                transfer_path: document.getElementById('pp-settlement_agency-transfer_path').value.trim() || '/transfer',
+                                merchant_id: document.getElementById('pp-settlement_agency-merchant_id').value.trim() || null,
+                                auth_header: document.getElementById('pp-settlement_agency-auth_header').value.trim() || 'Authorization',
+                                auth_scheme: document.getElementById('pp-settlement_agency-auth_scheme').value
+                            };
+                            const v = document.getElementById('pp-settlement_agency-secret-api_key').value.trim();
+                            if (v) secret.api_key = v;
+                        }
+                        btn.disabled = true;
+                        try {
+                            const { ok, json } = await ownerFetch(`/api/admin/payout-providers/${row.provider}`, {
+                                method: 'PUT',
+                                body: JSON.stringify({ is_enabled: isEnabled, is_test_mode: isTestMode, config, secret })
+                            });
+                            if (!ok || !json.success) throw new Error(json.message || '저장에 실패했습니다');
+                            msgEl.className = 'msg success';
+                            msgEl.textContent = '✅ 저장되었습니다';
+                            loadPayoutProviders();
+                        } catch (err) {
+                            msgEl.className = 'msg error';
+                            msgEl.textContent = err.message;
+                        } finally {
+                            btn.disabled = false;
+                        }
+                    });
+                }
 
                 document.querySelector('[data-tab="owner-security"]')?.addEventListener('click', () => {
                     loadOwnerSecurityTab();
