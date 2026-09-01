@@ -7115,6 +7115,98 @@ app.delete('/api/admin/inventory/locations/:id', authenticate, requireRole(['adm
   }
 });
 
+// ---- 2D 디지털트윈: 특정 로케이션(랙)의 현재 재고 내역 ----
+// 랙을 클릭했을 때 "여기에 지금 무엇이 몇 개 있는지"를 바로 보여주기 위한 조회 전용 엔드포인트.
+// stock_adjustments_with는 이력만 쌓이는 불변 원장이므로, product_id+variant_id+lot_number 조합별로
+// delta를 합산해 "현재 이 랙에 남아있는 수량"을 계산한다(다른 곳의 현재고 계산과 동일한 원리).
+// 합계가 0 이하인 조합(이미 전부 빠져나간 것)은 응답에서 제외한다.
+// 상품 정보는 원가(cost_price)가 절대 섞여 나가지 않도록 PRODUCT_SAFE_COLUMNS만 사용한다.
+app.get('/api/admin/inventory/locations/:id/contents', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: location, error: locErr } = await supabase
+      .from('warehouse_locations_with')
+      .select('id, code, zone, rack, bin, label, floor, sub_level, shape, is_obstacle, warehouse_code')
+      .eq('id', req.params.id)
+      .maybeSingle();
+    if (locErr) throw locErr;
+    if (!location) {
+      return res.status(404).json({ error: 'Not Found', message: '로케이션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: rows, error: rowsErr } = await supabase
+      .from('stock_adjustments_with')
+      .select('product_id, variant_id, lot_number, delta')
+      .eq('location_id', req.params.id);
+    if (rowsErr) throw rowsErr;
+
+    // product_id + variant_id + lot_number 조합별로 delta 합산 (SQL GROUP BY 대신 Node에서 집계)
+    const groups = new Map();
+    (rows || []).forEach(r => {
+      const key = `${r.product_id}|${r.variant_id || ''}|${r.lot_number || ''}`;
+      const g = groups.get(key) || { product_id: r.product_id, variant_id: r.variant_id || null, lot_number: r.lot_number || null, quantity: 0 };
+      g.quantity += Number(r.delta) || 0;
+      groups.set(key, g);
+    });
+    let items = Array.from(groups.values()).filter(g => g.quantity > 0);
+
+    if (!items.length) {
+      return res.json({ success: true, data: { location, items: [] }, timestamp: new Date().toISOString() });
+    }
+
+    const productIds = Array.from(new Set(items.map(i => i.product_id)));
+    const variantIds = Array.from(new Set(items.filter(i => i.variant_id).map(i => i.variant_id)));
+
+    const { data: products, error: pErr } = await supabase
+      .from('products_with')
+      .select(PRODUCT_SAFE_COLUMNS)
+      .in('id', productIds);
+    if (pErr) throw pErr;
+    const productMap = new Map((products || []).map(p => [p.id, p]));
+
+    // provider 역할은 자기 상품만 볼 수 있음 (본인 소유가 아닌 상품이 이 랙에 섞여 있으면 그 항목은 응답에서 제외)
+    if (!isAdminRole(req.userRole)) {
+      items = items.filter(i => {
+        const p = productMap.get(i.product_id);
+        return p && p.supplier_id === req.user.id;
+      });
+    }
+
+    let variantMap = new Map();
+    if (variantIds.length) {
+      const { data: variants, error: vErr } = await supabase
+        .from('product_variants_with')
+        .select('id, name, sku, barcode')
+        .in('id', variantIds);
+      if (vErr) throw vErr;
+      variantMap = new Map((variants || []).map(v => [v.id, v]));
+    }
+
+    const data = items
+      .map(i => {
+        const p = productMap.get(i.product_id);
+        if (!p) return null; // 삭제된 상품 등 - 안전하게 건너뜀
+        const v = i.variant_id ? variantMap.get(i.variant_id) : null;
+        return {
+          product_id: i.product_id,
+          product_name: p.name,
+          product_image: (p.images_urls && p.images_urls[0]) || null,
+          barcode: (v && v.barcode) || p.barcode || null,
+          variant_id: i.variant_id,
+          variant_name: v ? v.name : null,
+          lot_number: i.lot_number,
+          quantity: i.quantity
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (a.product_name || '').localeCompare(b.product_name || ''));
+
+    res.json({ success: true, data: { location, items: data }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching location contents:', err);
+    res.status(500).json({ error: 'Failed to fetch location contents', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 // 상품(옵션)-로케이션 매핑
 app.post('/api/admin/inventory/product-locations', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
@@ -7185,10 +7277,45 @@ app.get('/api/admin/inventory/floorplan', authenticate, requireRole(['provider',
       .sort((a, b) => a.floor - b.floor);
     if (!floors.length) floors = [{ floor: 1, subLevels: [1] }];
 
+    // 목록(텍스트) 보기에서 매 로케이션마다 /contents를 따로 호출하지 않도록, 이 층/단의 로케이션들에 대해
+    // 품목 종류 수(item_count)와 총 수량(total_quantity)을 미리 집계해 locations 응답에 얹어준다.
+    // (stock_adjustments_with는 이력 원장이므로 product_id+variant_id+lot_number 단위로 delta를 합산해야 "현재 수량"이 나온다 - /contents와 동일한 방식)
+    const locationIds = (locations || []).map(l => l.id);
+    let locationsWithSummary = locations || [];
+    if (locationIds.length) {
+      const { data: stockRows } = await supabase
+        .from('stock_adjustments_with')
+        .select('location_id, product_id, variant_id, lot_number, delta')
+        .in('location_id', locationIds);
+      let supplierByProduct = new Map();
+      if (!isAdminRole(req.userRole) && (stockRows || []).length) {
+        const productIdsForScope = Array.from(new Set(stockRows.map(r => r.product_id)));
+        const { data: productsForScope } = await supabase.from('products_with').select('id, supplier_id').in('id', productIdsForScope);
+        supplierByProduct = new Map((productsForScope || []).map(p => [p.id, p.supplier_id]));
+      }
+      const groupsByLocation = new Map();
+      (stockRows || []).forEach(r => {
+        if (!r.location_id) return;
+        if (!isAdminRole(req.userRole) && supplierByProduct.get(r.product_id) !== req.user.id) return; // provider는 본인 상품만 집계에 포함
+        const locGroups = groupsByLocation.get(r.location_id) || new Map();
+        const key = `${r.product_id}|${r.variant_id || ''}|${r.lot_number || ''}`;
+        locGroups.set(key, (locGroups.get(key) || 0) + (Number(r.delta) || 0));
+        groupsByLocation.set(r.location_id, locGroups);
+      });
+      locationsWithSummary = (locations || []).map(l => {
+        const locGroups = groupsByLocation.get(l.id);
+        let itemCount = 0, totalQuantity = 0;
+        if (locGroups) {
+          locGroups.forEach(qty => { if (qty > 0) { itemCount++; totalQuantity += qty; } });
+        }
+        return { ...l, item_count: itemCount, total_quantity: totalQuantity };
+      });
+    }
+
     const { data: equipment } = await supabase.from('equipment_with').select('*, warehouse_locations_with(code, grid_x, grid_y, floor, sub_level)');
     res.json({
       success: true,
-      data: { locations: locations || [], equipment: equipment || [], floors },
+      data: { locations: locationsWithSummary, equipment: equipment || [], floors },
       timestamp: new Date().toISOString()
     });
   } catch (err) {

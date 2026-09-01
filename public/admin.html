@@ -578,6 +578,18 @@
         </div>
     </div>
 
+    <!-- 2D 디지털트윈: 랙 상세(재고 내역 + 즉시 처리) 모달 -->
+    <div class="modal-overlay" id="wms-rack-detail-modal">
+        <div class="modal-box wide">
+            <h3 id="wms-rack-detail-title">📦 랙 상세</h3>
+            <div id="wms-rack-detail-meta" style="font-size:0.85em; color:var(--text-gray); margin-bottom:10px;"></div>
+            <div id="wms-rack-detail-body" style="max-height:60vh; overflow:auto;"></div>
+            <div class="modal-actions">
+                <button type="button" class="btn btn-secondary" id="wms-rack-detail-close">닫기</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 자동 쿠폰 규칙 수정 모달 -->
     <div class="modal-overlay" id="mkt-rule-edit-modal">
         <div class="modal-box">
@@ -1655,6 +1667,8 @@
                             <button class="btn btn-secondary" id="wms-twin-find-next" style="display:none; padding:6px 10px; font-size:0.8em;">다음 ▶</button>
                             <span id="wms-twin-find-status" style="font-size:0.82em; color:var(--text-gray);"></span>
                             <span style="flex:1;"></span>
+                            <button class="btn btn-primary" id="wms-twin-view-canvas-btn" style="padding:6px 12px; font-size:0.85em;">🗺️ 캔버스 보기</button>
+                            <button class="btn btn-secondary" id="wms-twin-view-list-btn" style="padding:6px 12px; font-size:0.85em;">📋 목록 보기</button>
                             <button class="btn btn-secondary" id="wms-twin-zoom-out" style="padding:6px 12px; font-size:0.85em;" title="축소">➖</button>
                             <span id="wms-twin-zoom-label" style="font-size:0.82em; color:var(--text-gray); min-width:44px; text-align:center;">100%</span>
                             <button class="btn btn-secondary" id="wms-twin-zoom-in" style="padding:6px 12px; font-size:0.85em;" title="확대">➕</button>
@@ -1663,6 +1677,7 @@
                         </div>
                         <div style="display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start;">
                             <canvas id="wms-twin-canvas" width="900" height="650" style="border:1px solid var(--border-color); border-radius:8px; background:#FAFAFA; width:100%; height:650px; max-width:100%; flex:1 1 600px; min-width:320px; cursor:grab; touch-action:none;"></canvas>
+                            <div id="wms-twin-list-area" style="display:none; flex:1 1 600px; min-width:320px;"></div>
                             <div id="wms-twin-control-panel" style="display:none; min-width:220px; flex:0 0 240px; border:1px solid var(--border-color); border-radius:8px; padding:14px; background:#fff;">
                                 <h4 style="margin:0 0 10px;">📐 선택한 랙 속성</h4>
                                 <div id="wms-twin-control-body" style="display:flex; flex-direction:column; gap:8px;"></div>
@@ -4445,7 +4460,7 @@
                             renderWmsTwinFloorTabs(floors);
                             renderWmsTwinSubLevelTabs(floors);
                             wmsTwinUpdateZoomLabel();
-                            wmsDrawTwinFrame(locations, equipment);
+                            wmsTwinRenderCurrentView();
                             if (wmsSelectedLocationId) {
                                 const sel = locations.find(l => l.id === wmsSelectedLocationId);
                                 renderWmsTwinControlPanel(sel || null);
@@ -4457,6 +4472,268 @@
                             legend.innerHTML = `<span style="color:#C62828;">⚠️ ${WithPlus.escapeHtml(err.message)}</span>`;
                         }
                     }
+
+                    // ---- 텍스트(목록) 보기 모드: 캔버스 대신 현재 층/단의 로케이션을 표로 보여준다. 캔버스 보기와 데이터(wmsTwinLastLocations)를 공유한다. ----
+                    let wmsTwinViewMode = 'canvas'; // 'canvas' | 'list'
+
+                    function wmsTwinUpdateViewToggleButtons() {
+                        const cBtn = document.getElementById('wms-twin-view-canvas-btn');
+                        const lBtn = document.getElementById('wms-twin-view-list-btn');
+                        if (cBtn) cBtn.className = wmsTwinViewMode === 'canvas' ? 'btn btn-primary' : 'btn btn-secondary';
+                        if (lBtn) lBtn.className = wmsTwinViewMode === 'list' ? 'btn btn-primary' : 'btn btn-secondary';
+                    }
+
+                    function wmsTwinRenderListView() {
+                        const listArea = document.getElementById('wms-twin-list-area');
+                        if (!listArea) return;
+                        if (!wmsTwinLastLocations.length) {
+                            listArea.innerHTML = '<div class="state-box"><div class="emoji">📭</div><h3>이 층/단에 등록된 로케이션이 없습니다.</h3></div>';
+                            return;
+                        }
+                        listArea.innerHTML = `
+                            <div style="overflow-x:auto;">
+                            <table style="width:100%;">
+                                <thead><tr><th>코드</th><th>구역</th><th>모양</th><th>장애물</th><th>품목 종류</th><th>총 수량</th></tr></thead>
+                                <tbody>
+                                    ${wmsTwinLastLocations.map(l => `
+                                        <tr class="wms-list-row" data-loc-id="${l.id}" style="cursor:pointer;">
+                                            <td data-label="코드">${WithPlus.escapeHtml(l.code)}</td>
+                                            <td data-label="구역">${WithPlus.escapeHtml(l.zone || '-')}</td>
+                                            <td data-label="모양">${(WMS_SHAPE_PRESET[l.shape] || WMS_SHAPE_PRESET.rect).label}</td>
+                                            <td data-label="장애물">${l.is_obstacle ? '⛔ 장애물' : '-'}</td>
+                                            <td data-label="품목 종류">${l.item_count != null ? l.item_count.toLocaleString() : '-'}</td>
+                                            <td data-label="총 수량">${l.total_quantity != null ? l.total_quantity.toLocaleString() : '-'}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                            </div>
+                            <p style="font-size:0.8em; color:var(--text-gray); margin-top:8px;">행을 클릭하면 그 랙의 재고 상세를 볼 수 있습니다.</p>
+                        `;
+                        listArea.querySelectorAll('.wms-list-row').forEach(row => {
+                            row.addEventListener('click', () => openWmsRackDetail(row.dataset.locId));
+                        });
+                    }
+
+                    // 캔버스 보기/목록 보기 중 현재 모드에 맞는 화면을 그린다 (둘 다 wmsTwinLastLocations/wmsTwinLastEquipment 캐시를 공유)
+                    function wmsTwinRenderCurrentView() {
+                        const canvas = document.getElementById('wms-twin-canvas');
+                        const listArea = document.getElementById('wms-twin-list-area');
+                        const legend = document.getElementById('wms-twin-legend');
+                        if (!canvas || !listArea) return;
+                        if (wmsTwinViewMode === 'list') {
+                            canvas.style.display = 'none';
+                            listArea.style.display = 'block';
+                            if (legend) legend.style.display = 'none';
+                            wmsTwinRenderListView();
+                        } else {
+                            canvas.style.display = '';
+                            listArea.style.display = 'none';
+                            if (legend) legend.style.display = '';
+                            wmsDrawTwinFrame(wmsTwinLastLocations, wmsTwinLastEquipment);
+                        }
+                    }
+
+                    document.getElementById('wms-twin-view-canvas-btn')?.addEventListener('click', () => {
+                        wmsTwinViewMode = 'canvas';
+                        wmsTwinUpdateViewToggleButtons();
+                        wmsTwinRenderCurrentView();
+                    });
+                    document.getElementById('wms-twin-view-list-btn')?.addEventListener('click', () => {
+                        wmsTwinViewMode = 'list';
+                        wmsTwinUpdateViewToggleButtons();
+                        wmsTwinRenderCurrentView();
+                    });
+
+                    // ---- 랙 상세(재고 내역 + 즉시 처리) 패널: 캔버스 보기(편집모드 아닐 때 클릭)/목록 보기(행 클릭) 공용 ----
+                    // 재고 처리 4종(입출고/이동/실사보정/불량·자가사용)은 전부 기존 /api/admin/inventory 엔드포인트를 그대로 재사용한다(새 엔드포인트 없음).
+                    let wmsRackDetailCurrentLocationId = null;
+                    let wmsAllLocationsCache = []; // "다른 랙으로 이동" 드롭다운용 - 최초 1회만 불러와 재사용
+                    let wmsRackDetailItemsCache = [];
+
+                    function wmsRackItemManageFormHtml(item, idx) {
+                        const transferOptions = wmsAllLocationsCache
+                            .filter(l => l.id !== wmsRackDetailCurrentLocationId)
+                            .map(l => `<option value="${l.id}">${WithPlus.escapeHtml(l.code)} (${l.floor || 1}층 ${l.sub_level || 1}단)</option>`)
+                            .join('');
+                        return `
+                            <div class="wms-rack-manage-panel" data-idx="${idx}" data-pid="${item.product_id}" data-vid="${item.variant_id || ''}" data-lot="${item.lot_number || ''}" style="display:flex; flex-direction:column; gap:8px; padding:10px; background:#F5F5F7; border-radius:8px; font-size:0.82em;">
+                                <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                                    <span style="min-width:110px; font-weight:600;">입출고 (스캔)</span>
+                                    <input type="number" class="wms-mng-scan-delta" placeholder="+입고 / -출고" style="width:110px; padding:6px; border:1px solid var(--border-color); border-radius:6px;">
+                                    <input type="text" class="wms-mng-scan-reason" placeholder="사유(선택)" style="width:140px; padding:6px; border:1px solid var(--border-color); border-radius:6px;">
+                                    <button type="button" class="btn btn-secondary wms-mng-scan-btn" style="padding:6px 12px;">처리</button>
+                                </div>
+                                ${isAdmin ? `
+                                <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                                    <span style="min-width:110px; font-weight:600;">다른 랙으로 이동</span>
+                                    <select class="wms-mng-transfer-to" style="padding:6px; border:1px solid var(--border-color); border-radius:6px;"><option value="">이동할 로케이션 선택...</option>${transferOptions}</select>
+                                    <input type="number" class="wms-mng-transfer-qty" placeholder="수량" min="1" style="width:80px; padding:6px; border:1px solid var(--border-color); border-radius:6px;">
+                                    <button type="button" class="btn btn-secondary wms-mng-transfer-btn" style="padding:6px 12px;">이동</button>
+                                </div>` : ''}
+                                <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                                    <span style="min-width:110px; font-weight:600;">실사 보정</span>
+                                    <input type="number" class="wms-mng-stocktake-qty" placeholder="실사로 센 전체 재고" min="0" style="width:140px; padding:6px; border:1px solid var(--border-color); border-radius:6px;">
+                                    <button type="button" class="btn btn-secondary wms-mng-stocktake-btn" style="padding:6px 12px;">보정</button>
+                                    <span style="font-size:0.85em; color:var(--text-gray); flex-basis:100%;">※ 이 상품(옵션)의 전체 재고(모든 랙 합계) 기준으로 보정됩니다 - 이 랙만의 수량이 아닙니다.</span>
+                                </div>
+                                <div style="display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+                                    <span style="min-width:110px; font-weight:600;">불량/자가사용</span>
+                                    <select class="wms-mng-writeoff-category" style="padding:6px; border:1px solid var(--border-color); border-radius:6px;">
+                                        <option value="defect">불량처리</option>
+                                        <option value="self_use">자가사용</option>
+                                    </select>
+                                    <input type="number" class="wms-mng-writeoff-qty" placeholder="수량" min="1" style="width:80px; padding:6px; border:1px solid var(--border-color); border-radius:6px;">
+                                    <button type="button" class="btn btn-secondary wms-mng-writeoff-btn" style="padding:6px 12px;">처리</button>
+                                </div>
+                                <div class="wms-mng-msg" style="font-size:0.85em;"></div>
+                            </div>
+                        `;
+                    }
+
+                    function wmsRackDetailItemsHtml(items) {
+                        if (!items.length) return '<p style="color:var(--text-gray); font-size:0.88em;">이 랙에는 현재 등록된 재고가 없습니다.</p>';
+                        return `
+                            <table style="width:100%;">
+                                <thead><tr><th>상품</th><th>옵션</th><th>LOT</th><th>수량</th><th>관리</th></tr></thead>
+                                <tbody>
+                                    ${items.map((it, idx) => `
+                                        <tr>
+                                            <td data-label="상품" style="display:flex; align-items:center; gap:8px;">
+                                                ${it.product_image ? `<img src="${WithPlus.escapeHtml(it.product_image)}" style="width:36px; height:36px; object-fit:cover; border-radius:4px; flex-shrink:0;">` : ''}
+                                                <span>${WithPlus.escapeHtml(it.product_name || '(삭제된 상품)')}</span>
+                                            </td>
+                                            <td data-label="옵션">${it.variant_name ? WithPlus.escapeHtml(it.variant_name) : '-'}</td>
+                                            <td data-label="LOT">${it.lot_number ? WithPlus.escapeHtml(it.lot_number) : '-'}</td>
+                                            <td data-label="수량"><strong>${Number(it.quantity || 0).toLocaleString()}</strong></td>
+                                            <td data-label="관리"><button type="button" class="btn btn-secondary wms-rack-item-toggle-btn" data-idx="${idx}" style="padding:5px 10px; font-size:0.8em;">관리</button></td>
+                                        </tr>
+                                        <tr class="wms-rack-item-manage-row" data-idx="${idx}" style="display:none;">
+                                            <td colspan="5">${wmsRackItemManageFormHtml(it, idx)}</td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        `;
+                    }
+
+                    function wmsRackDetailWireItemActions() {
+                        const bodyEl = document.getElementById('wms-rack-detail-body');
+                        if (!bodyEl) return;
+                        bodyEl.querySelectorAll('.wms-rack-item-toggle-btn').forEach(btn => {
+                            btn.addEventListener('click', () => {
+                                const row = bodyEl.querySelector(`.wms-rack-item-manage-row[data-idx="${btn.dataset.idx}"]`);
+                                if (row) row.style.display = row.style.display === 'none' ? '' : 'none';
+                            });
+                        });
+                        bodyEl.querySelectorAll('.wms-rack-manage-panel').forEach(panel => {
+                            const pid = panel.dataset.pid;
+                            const vid = panel.dataset.vid || null;
+                            const lot = panel.dataset.lot || null;
+                            const msgEl = panel.querySelector('.wms-mng-msg');
+
+                            const scanBtn = panel.querySelector('.wms-mng-scan-btn');
+                            if (scanBtn) scanBtn.addEventListener('click', async () => {
+                                const delta = parseInt(panel.querySelector('.wms-mng-scan-delta').value, 10);
+                                if (!Number.isFinite(delta) || delta === 0) { msgEl.textContent = '0이 아닌 정수를 입력해주세요'; return; }
+                                const reason = panel.querySelector('.wms-mng-scan-reason').value.trim();
+                                msgEl.textContent = '처리 중...';
+                                const { ok, json } = await authedFetch('/api/admin/inventory/scan', {
+                                    method: 'POST',
+                                    body: JSON.stringify({ product_id: pid, variant_id: vid, delta, location_id: wmsRackDetailCurrentLocationId, lot_number: lot || undefined, reason: reason || undefined })
+                                });
+                                if (!ok) { msgEl.textContent = `⚠️ ${json.message || '처리 실패'}`; return; }
+                                await wmsRackDetailRefreshAndSync();
+                            });
+
+                            const transferBtn = panel.querySelector('.wms-mng-transfer-btn');
+                            if (transferBtn) transferBtn.addEventListener('click', async () => {
+                                const toLoc = panel.querySelector('.wms-mng-transfer-to').value;
+                                const qty = parseInt(panel.querySelector('.wms-mng-transfer-qty').value, 10);
+                                if (!toLoc) { msgEl.textContent = '이동할 로케이션을 선택해주세요'; return; }
+                                if (!Number.isFinite(qty) || qty <= 0) { msgEl.textContent = '1 이상의 수량을 입력해주세요'; return; }
+                                msgEl.textContent = '이동 중...';
+                                const { ok, json } = await authedFetch('/api/admin/inventory/transfer', {
+                                    method: 'POST',
+                                    body: JSON.stringify({ product_id: pid, variant_id: vid, from_location_id: wmsRackDetailCurrentLocationId, to_location_id: toLoc, quantity: qty })
+                                });
+                                if (!ok) { msgEl.textContent = `⚠️ ${json.message || '이동 실패'}`; return; }
+                                await wmsRackDetailRefreshAndSync();
+                            });
+
+                            const stocktakeBtn = panel.querySelector('.wms-mng-stocktake-btn');
+                            if (stocktakeBtn) stocktakeBtn.addEventListener('click', async () => {
+                                const counted = parseInt(panel.querySelector('.wms-mng-stocktake-qty').value, 10);
+                                if (!Number.isFinite(counted) || counted < 0) { msgEl.textContent = '0 이상의 수량을 입력해주세요'; return; }
+                                msgEl.textContent = '보정 중...';
+                                const { ok, json } = await authedFetch('/api/admin/inventory/stocktake', {
+                                    method: 'POST',
+                                    body: JSON.stringify({ product_id: pid, variant_id: vid, counted_quantity: counted, location_id: wmsRackDetailCurrentLocationId })
+                                });
+                                if (!ok) { msgEl.textContent = `⚠️ ${json.message || '보정 실패'}`; return; }
+                                await wmsRackDetailRefreshAndSync();
+                            });
+
+                            const writeoffBtn = panel.querySelector('.wms-mng-writeoff-btn');
+                            if (writeoffBtn) writeoffBtn.addEventListener('click', async () => {
+                                const category = panel.querySelector('.wms-mng-writeoff-category').value;
+                                const qty = parseInt(panel.querySelector('.wms-mng-writeoff-qty').value, 10);
+                                if (!Number.isFinite(qty) || qty <= 0) { msgEl.textContent = '1 이상의 수량을 입력해주세요'; return; }
+                                msgEl.textContent = '처리 중...';
+                                const { ok, json } = await authedFetch('/api/admin/inventory/write-off', {
+                                    method: 'POST',
+                                    body: JSON.stringify({ product_id: pid, variant_id: vid, quantity: qty, category, location_id: wmsRackDetailCurrentLocationId })
+                                });
+                                if (!ok) { msgEl.textContent = `⚠️ ${json.message || '처리 실패'}`; return; }
+                                await wmsRackDetailRefreshAndSync();
+                            });
+                        });
+                    }
+
+                    async function openWmsRackDetail(locationId) {
+                        wmsRackDetailCurrentLocationId = locationId;
+                        const modal = document.getElementById('wms-rack-detail-modal');
+                        const titleEl = document.getElementById('wms-rack-detail-title');
+                        const metaEl = document.getElementById('wms-rack-detail-meta');
+                        const bodyEl = document.getElementById('wms-rack-detail-body');
+                        if (!modal || !bodyEl) return;
+                        modal.classList.add('open');
+                        titleEl.textContent = '📦 랙 상세';
+                        metaEl.textContent = '';
+                        bodyEl.innerHTML = '<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>';
+                        try {
+                            const needAllLocations = isAdmin && !wmsAllLocationsCache.length;
+                            const [contentsRes, allLocRes] = await Promise.all([
+                                authedFetch(`/api/admin/inventory/locations/${locationId}/contents`),
+                                needAllLocations ? authedFetch('/api/admin/inventory/locations') : Promise.resolve(null)
+                            ]);
+                            if (allLocRes && allLocRes.ok) wmsAllLocationsCache = allLocRes.json.data || [];
+                            const { ok, json } = contentsRes;
+                            if (!ok || !json.success) throw new Error((json && json.message) || '랙 상세를 불러오지 못했습니다');
+                            const { location, items } = json.data;
+                            wmsRackDetailItemsCache = items || [];
+                            const shapeLabel = (WMS_SHAPE_PRESET[location.shape] || WMS_SHAPE_PRESET.rect).label;
+                            titleEl.textContent = `📦 ${location.code} 상세`;
+                            metaEl.textContent = `구역: ${location.zone || '-'} · ${location.floor || 1}층 ${location.sub_level || 1}단 · ${shapeLabel}${location.is_obstacle ? ' · ⛔ 장애물' : ''}`;
+                            bodyEl.innerHTML = wmsRackDetailItemsHtml(wmsRackDetailItemsCache);
+                            wmsRackDetailWireItemActions();
+                        } catch (err) {
+                            bodyEl.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>불러오지 못했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                        }
+                    }
+
+                    // 처리 후에는 패널 내용과, 뒤에 있는 2D 캔버스/목록(품목수·수량 요약 포함)을 함께 최신 상태로 다시 불러온다.
+                    async function wmsRackDetailRefreshAndSync() {
+                        if (wmsRackDetailCurrentLocationId) await openWmsRackDetail(wmsRackDetailCurrentLocationId);
+                        await loadWmsTwin();
+                    }
+
+                    (function setupWmsRackDetailModal() {
+                        const modal = document.getElementById('wms-rack-detail-modal');
+                        const closeBtn = document.getElementById('wms-rack-detail-close');
+                        if (closeBtn) closeBtn.addEventListener('click', () => modal.classList.remove('open'));
+                        if (modal) modal.addEventListener('click', (e) => { if (e.target === modal) modal.classList.remove('open'); });
+                    })();
 
                     // ---- 편집 모드 토글 ----
                     document.getElementById('wms-twin-edit-toggle')?.addEventListener('click', () => {
@@ -4569,6 +4846,11 @@
                                 dragInfo = null;
                             } else if (panInfo) {
                                 canvas.style.cursor = 'grab';
+                                if (!panInfo.moved) {
+                                    // 편집 모드가 아닐 때 랙을 그냥 클릭(드래그 없이)하면 그 랙의 상세(재고 내역 + 즉시 처리) 패널을 연다.
+                                    const hit = wmsTwinHitTest(panInfo.startPx, panInfo.startPy);
+                                    if (hit) openWmsRackDetail(hit.id);
+                                }
                                 panInfo = null;
                             }
                         });
