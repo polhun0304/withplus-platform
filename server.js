@@ -12,6 +12,16 @@ require('dotenv').config();
 const { createClient } = require('@supabase/supabase-js');
 const cron = require('node-cron');
 
+// 대표자 전용 원가/2FA 인프라용 라이브러리
+// - bcryptjs: 백업코드/OTP 코드 해시 (네이티브 컴파일이 필요한 bcrypt 대신 순수 JS 구현을 사용 - Windows 서버에
+//   빌드 도구 없이도 설치/실행되도록 하기 위함. API는 bcrypt와 동일)
+// - otplib: TOTP(구글 OTP 앱 호환) 생성/검증
+// - qrcode: TOTP 등록용 QR코드 이미지(data URL) 생성
+const bcrypt = require('bcryptjs');
+const { authenticator } = require('otplib');
+const QRCode = require('qrcode');
+
+
 // ============================================
 // Supabase 초기화
 // ============================================
@@ -359,6 +369,162 @@ const requireRole = (allowedRoles) => async (req, res, next) => {
 const isAdminRole = (role) => role === 'admin' || role === 'super_admin';
 
 // ============================================
+// 원가(cost_price) 접근 제어 인프라
+// ------------------------------------------------------------
+// 원가와 마진율(%)은 "대표자"(profiles.is_owner === true, role === 'super_admin')로 지정된 단 하나의
+// 계정만, 그것도 대표자 전용 2단계 인증(TOTP/SMS/이메일)을 통과한 뒤 15분짜리 스텝업 토큰을 들고 있을
+// 때만 조회/수정할 수 있다. 이 토큰은 일반 로그인 세션과 별개이며(X-Cost-StepUp-Token 헤더로 전달),
+// 다른 관리자/공급자 계정은 role/is_owner 조건 자체를 통과할 수 없으므로 애초에 토큰을 발급받을 수도 없다.
+// 일반 관리자에게는 채널별 "최종 판매가"만 보이고 원가·마진율은 어떤 API 응답에도 포함되지 않는다
+// (마진율까지 노출되면 최종가와 조합해 원가를 역산할 수 있으므로 반드시 함께 숨긴다).
+// ============================================
+
+// products_with를 조회하는 모든 API가 이 화이트리스트만 select한다 - select('*')를 쓰면 앞으로 테이블에
+// 컬럼이 추가될 때마다(예: cost_price가 이번에 추가된 것처럼) 의도치 않게 새 컬럼이 응답에 새어나갈 수 있으므로,
+// "필요한 컬럼만 명시적으로 나열"하는 화이트리스트 방식으로 통일한다. cost_price는 여기 절대 포함하지 않는다.
+const PRODUCT_SAFE_COLUMNS = 'id, created_at, name, slug, description, long_description, price, discount_price, category, stock, images_urls, supplier_id, rating, review_count, status, detail_sections, vendor_id, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount, brand';
+
+function getClientIp(req) {
+  return (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim() || null;
+}
+
+// 원가 열람/수정 시도는 성공/실패를 가리지 않고 전부 감사로그에 남긴다 (실패해도 원래 요청을 막지 않는다)
+async function logCostAudit({ profileId, action, productId, detail, ip }) {
+  try {
+    await supabase.from('cost_access_audit_log_with').insert([{
+      profile_id: profileId || null,
+      action,
+      product_id: productId || null,
+      detail: detail || null,
+      ip: ip || null
+    }]);
+  } catch (err) {
+    console.error('원가 접근 감사로그 기록 실패:', err.message);
+  }
+}
+
+// 🔒 대표자 TOTP 시크릿 암호화 키 - JWT_SECRET과 동일한 폴백 철학: 미설정 시 소스에 공개된 고정값 대신
+// 프로세스 시작 시 1회 생성한 런타임 전용 랜덤 키를 쓴다(재시작하면 이전에 등록된 TOTP는 전부 무효화되지만,
+// 아무도 예측할 수 없는 값이 하드코딩된 고정값보다 안전하다). 운영 환경에서는 반드시 .env에 설정해야 한다.
+if (!process.env.OWNER_SECURITY_KEY) {
+  console.error('[SECURITY WARNING] OWNER_SECURITY_KEY 환경변수가 설정되지 않았습니다. 프로세스 시작 시 생성한 런타임 전용 임시 키를 대신 사용합니다(대표자 TOTP 암호화용). 재시작 시 기존 등록된 TOTP는 모두 무효화됩니다. 반드시 .env에 OWNER_SECURITY_KEY를 설정해주세요.');
+}
+const OWNER_SECURITY_RUNTIME_FALLBACK_KEY = crypto.randomBytes(32).toString('hex');
+function getOwnerSecurityKey() {
+  const raw = process.env.OWNER_SECURITY_KEY || OWNER_SECURITY_RUNTIME_FALLBACK_KEY;
+  return crypto.createHash('sha256').update(raw).digest(); // 임의 길이 문자열을 AES-256용 32바이트 키로 정규화
+}
+function encryptOwnerSecret(plainText) {
+  const key = getOwnerSecurityKey();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(String(plainText), 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return [iv.toString('base64'), authTag.toString('base64'), encrypted.toString('base64')].join('.');
+}
+function decryptOwnerSecret(payload) {
+  const key = getOwnerSecurityKey();
+  const parts = String(payload || '').split('.');
+  if (parts.length !== 3) throw new Error('잘못된 암호화 데이터 형식입니다');
+  const [ivB64, tagB64, dataB64] = parts;
+  const iv = Buffer.from(ivB64, 'base64');
+  const authTag = Buffer.from(tagB64, 'base64');
+  const data = Buffer.from(dataB64, 'base64');
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(authTag);
+  return Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8');
+}
+
+// 원가 열람용 스텝업 토큰 - 15분 짧은 수명. 이 코드베이스는 인증을 전부 Supabase Auth로 처리하고
+// jsonwebtoken 같은 별도 JWT 라이브러리를 쓰지 않으므로(파일 상단 주석 참고), 새 의존성을 추가하는 대신
+// 이미 쓰고 있는 HMAC-SHA256 서명 패턴(OAuth state 파라미터와 동일한 방식)으로 JWT 호환 구조
+// (header.payload.signature, base64url)를 직접 서명/검증한다.
+const COST_STEPUP_TTL_SECONDS = 15 * 60;
+function base64url(input) {
+  return Buffer.from(input).toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function base64urlDecode(input) {
+  let s = String(input).replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4) s += '=';
+  return Buffer.from(s, 'base64');
+}
+function signCostStepUpToken(profileId) {
+  const header = { alg: 'HS256', typ: 'JWT' };
+  const nowSec = Math.floor(Date.now() / 1000);
+  const payload = { sub: profileId, type: 'cost_stepup', iat: nowSec, exp: nowSec + COST_STEPUP_TTL_SECONDS };
+  const headerPart = base64url(JSON.stringify(header));
+  const payloadPart = base64url(JSON.stringify(payload));
+  const signature = crypto.createHmac('sha256', process.env.JWT_SECRET || RUNTIME_FALLBACK_SECRET)
+    .update(`${headerPart}.${payloadPart}`).digest();
+  return `${headerPart}.${payloadPart}.${base64url(signature)}`;
+}
+function verifyCostStepUpToken(token) {
+  try {
+    if (!token || typeof token !== 'string') return { valid: false, reason: 'missing' };
+    const parts = token.split('.');
+    if (parts.length !== 3) return { valid: false, reason: 'malformed' };
+    const [headerPart, payloadPart, signaturePart] = parts;
+    const expectedSig = base64url(crypto.createHmac('sha256', process.env.JWT_SECRET || RUNTIME_FALLBACK_SECRET)
+      .update(`${headerPart}.${payloadPart}`).digest());
+    const sigBuf = Buffer.from(signaturePart);
+    const expBuf = Buffer.from(expectedSig);
+    if (sigBuf.length !== expBuf.length || !crypto.timingSafeEqual(sigBuf, expBuf)) {
+      return { valid: false, reason: 'bad_signature' };
+    }
+    const payload = JSON.parse(base64urlDecode(payloadPart).toString('utf8'));
+    if (payload.type !== 'cost_stepup') return { valid: false, reason: 'wrong_type' };
+    if (!payload.exp || Math.floor(Date.now() / 1000) > payload.exp) return { valid: false, reason: 'expired' };
+    return { valid: true, payload };
+  } catch (err) {
+    return { valid: false, reason: 'parse_error' };
+  }
+}
+
+// 🔒 원가/마진율 접근 게이트. authenticate 뒤에 붙여서 쓴다. (a) role === 'super_admin' (b) profiles.is_owner
+// === true (c) X-Cost-StepUp-Token 헤더가 유효(서명+15분 이내+본인+type:'cost_stepup') 셋을 모두 만족해야
+// 통과하고, 하나라도 실패하면 무조건 403 + 감사로그(action:'step_up_denied')를 남기고 거부한다.
+const requireOwnerStepUp = async (req, res, next) => {
+  const ip = getClientIp(req);
+  const deny = async (reason, detail) => {
+    await logCostAudit({
+      profileId: req.user ? req.user.id : null,
+      action: 'step_up_denied',
+      productId: (req.params && (req.params.id || req.params.productId)) || null,
+      detail: { reason, ...(detail || {}) },
+      ip
+    });
+    return res.status(403).json({
+      error: 'Forbidden',
+      message: '원가 정보는 대표자 계정이 2단계 인증을 완료해야 조회/수정할 수 있습니다',
+      timestamp: new Date().toISOString()
+    });
+  };
+  try {
+    if (!req.user) return deny('not_authenticated');
+    const { data: profile, error } = await supabase
+      .from('profiles')
+      .select('id, role, is_owner')
+      .eq('id', req.user.id)
+      .single();
+    if (error || !profile) return deny('profile_not_found');
+    if (profile.role !== 'super_admin' || !profile.is_owner) {
+      return deny('not_owner', { role: profile.role, is_owner: !!profile.is_owner });
+    }
+    const token = req.headers['x-cost-stepup-token'];
+    if (!token) return deny('missing_token');
+    const verified = verifyCostStepUpToken(token);
+    if (!verified.valid) return deny('invalid_token', { token_reason: verified.reason });
+    if (verified.payload.sub !== profile.id) return deny('token_subject_mismatch');
+    req.ownerProfile = profile;
+    next();
+  } catch (err) {
+    console.error('requireOwnerStepUp 오류:', err.message);
+    return deny('internal_error');
+  }
+};
+
+
+// ============================================
 // 🕵️ 관리자 감사로그 (Admin Audit Log)
 // admin/super_admin이 상태를 변경하는 요청(POST/PUT/PATCH/DELETE)을 보낼 때마다
 // requireRole 통과 직후 등록되어, 응답이 실제로 나간 다음(res.on('finish')) 비동기로 기록한다.
@@ -405,7 +571,7 @@ app.get('/api/me', authenticate, async (req, res) => {
   try {
     const { data: profile, error } = await supabase
       .from('profiles')
-      .select('id, email, full_name, role')
+      .select('id, email, full_name, role, is_owner')
       .eq('id', req.user.id)
       .single();
 
@@ -1966,7 +2132,8 @@ const MODULE_REGISTRY = [
   { key: 'audit_log', category: '회원·커뮤니티', icon: '🕵️', name: '관리자 감사로그', desc: '관리자/최고관리자의 주요 API 호출(등록·수정·삭제 등 57개 엔드포인트)을 자동으로 기록합니다(최고관리자 전용, 민감정보는 마스킹). ', status: 'active', tabTarget: 'audit-log' },
   { key: 'wms', category: '재고·물류', icon: '🏭', name: '창고관리(WMS)', desc: '이벤트소싱 재고원장, 바코드/Lot 추적, 창고 로케이션(Zone-Rack-Bin), 2D 디지털트윈 평면도(다층 + 층별 최대 5단 복층 지원)와 AGV 이동 시뮬레이션까지 지원합니다.', status: 'active', tabTarget: 'wms' },
   { key: 'marketing_automation', category: '적립·혜택', icon: '📢', name: '마케팅자동화', desc: '등급/누적구매액/주문건수/미구매기간/가입일 조건으로 회원을 골라 타겟 쿠폰을 즉시 발급하는 세그먼트 캠페인과, 등급유지·구매마일스톤 조건을 매일 자동 스캔해 발급하는 자동 쿠폰 규칙을 지원합니다.', status: 'active', tabTarget: 'marketing' },
-  { key: 'supplier_settlements', category: '판매·상품 관리', icon: '💰', name: '공급자 정산 관리', desc: '기간별로 공급자(판매자)의 매출·수수료·정산금액을 자동 집계하고, 정산 처리(지급완료 표시)까지 관리합니다.', status: 'active', tabTarget: 'settlements' }
+  { key: 'supplier_settlements', category: '판매·상품 관리', icon: '💰', name: '공급자 정산 관리', desc: '기간별로 공급자(판매자)의 매출·수수료·정산금액을 자동 집계하고, 정산 처리(지급완료 표시)까지 관리합니다.', status: 'active', tabTarget: 'settlements' },
+  { key: 'live_commerce_separate', category: '라이브커머스', icon: '🎬', name: '라이브커머스(LIVE+)', desc: '실시간 라이브 방송 판매(채널·세션 관리, OmniCast 동시송출, 실시간 재고예약, 시청페이지 PG결제, FAN 공식채널 등)는 별도 서비스인 LIVE+에서 제공됩니다. 이 WITH+ 관리자 화면에는 포함되어 있지 않습니다.', status: 'active', tabTarget: null }
 ];
 
 app.get('/api/admin/modules', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
@@ -4662,7 +4829,7 @@ app.get('/api/products', optionalAuth, async (req, res) => {
     } else {
       let query = supabasePublic
         .from('products_with')
-        .select('*')
+        .select(PRODUCT_SAFE_COLUMNS)
         .eq('status', 'active');
 
       if (req.query.category) {
@@ -4818,7 +4985,7 @@ app.get('/api/products/:id', async (req, res) => {
     const { data, error } = await supabasePublic
       .from('products_with')
       .select(`
-        *,
+        ${PRODUCT_SAFE_COLUMNS},
         reviews:product_reviews(id, rating, title, comment, user_id, created_at, verified_purchase, status)
       `)
       .eq('id', id)
@@ -4993,7 +5160,7 @@ app.post('/api/products', authenticate, requireRole(['provider', 'admin', 'super
         subscription_available: !!subscription_available,
         status: 'active'
       }])
-      .select()
+      .select(PRODUCT_SAFE_COLUMNS)
       .single();
 
     if (error) {
@@ -5122,7 +5289,7 @@ app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'su
         .from('products_with')
         .update(updates)
         .eq('id', id)
-        .select()
+        .select(PRODUCT_SAFE_COLUMNS)
         .single();
       if (error) {
         if (error.code === '23503') {
@@ -5135,7 +5302,7 @@ app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'su
       }
       data = updated;
     } else {
-      const { data: current, error } = await supabase.from('products_with').select('*').eq('id', id).single();
+      const { data: current, error } = await supabase.from('products_with').select(PRODUCT_SAFE_COLUMNS).eq('id', id).single();
       if (error) throw error;
       data = current;
     }
@@ -5219,7 +5386,7 @@ app.patch('/api/products/:id/supplier', authenticate, requireRole(['admin', 'sup
     if (!['provider', 'admin', 'super_admin'].includes(targetProfile.role)) {
       return res.status(400).json({ error: 'Bad Request', message: '상품 소유 계정은 공급자(provider) 또는 관리자 계정이어야 합니다', timestamp: new Date().toISOString() });
     }
-    const { data, error } = await supabase.from('products_with').update({ supplier_id: targetProfile.id }).eq('id', req.params.id).select().maybeSingle();
+    const { data, error } = await supabase.from('products_with').update({ supplier_id: targetProfile.id }).eq('id', req.params.id).select(PRODUCT_SAFE_COLUMNS).maybeSingle();
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Not Found', message: '상품을 찾을 수 없습니다', timestamp: new Date().toISOString() });
     res.json({
@@ -5236,7 +5403,7 @@ app.patch('/api/products/:id/supplier', authenticate, requireRole(['admin', 'sup
 // 관리자/공급자용 상품 목록 (상태 무관 전체 조회 - 관리자는 전체, 공급자는 본인 상품만)
 app.get('/api/admin/products', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
-    let query = supabase.from('products_with').select('*').order('created_at', { ascending: false });
+    let query = supabase.from('products_with').select(PRODUCT_SAFE_COLUMNS).order('created_at', { ascending: false });
 
     if (!isAdminRole(req.userRole)) {
       query = query.eq('supplier_id', req.user.id);
@@ -5301,6 +5468,634 @@ async function syncProductStockFromVariants(productId) {
   const total = variants.reduce((sum, v) => sum + Number(v.stock || 0), 0);
   await supabase.from('products_with').update({ stock: total }).eq('id', productId);
 }
+
+
+// ============================================
+// 대표자 2단계 인증(2FA) - 원가 열람용 스텝업 토큰 발급
+// ------------------------------------------------------------
+// Supabase Auth 로그인 자체의 관리자 2FA(TOTP, aal2 - requireRole 안에 이미 구현됨)와는 완전히 별개다.
+// 여기 구현하는 2FA는 "로그인은 이미 끝난 대표자 계정"이 원가/마진율처럼 극히 민감한 화면에 들어갈 때
+// 한 번 더 통과해야 하는 추가 관문이며, 통과하면 15분짜리 스텝업 토큰만 내어준다(세션 자체를 바꾸지 않음).
+// ============================================
+
+function verifyTotpCode(code, secret) {
+  try {
+    return authenticator.check(String(code || '').trim(), secret);
+  } catch (err) {
+    return false;
+  }
+}
+
+// 📱 대표자 원가열람용 SMS 인증코드 발송 - 프로바이더별로 분기 가능한 얇은 wrapper.
+// 정직하게 밝히자면: 현재는 알리고(aligo) 하나만 골격을 만들어두었고 실제 API 호출은 구현되어 있지 않다.
+// (알리고의 정확한 요청 스펙 - 엔드포인트/파라미터명/발신번호 사전등록 여부 등을 확신할 수 없어 임의로
+// 구현하면 "됐다고 나오지만 실제로는 안 가는" 상태가 될 위험이 크기 때문. 그런 거짓 성공보다는 명확한 에러가 낫다)
+// SMS_PROVIDER 환경변수가 없거나 지원하지 않는 값이면 즉시 에러를 던지고, 호출부(request-otp)는 이를
+// 501 Not Implemented로 정직하게 응답한다 - 절대 발송된 것처럼 거짓 성공 응답을 만들지 않는다.
+async function sendSms(phone, code) {
+  const provider = process.env.SMS_PROVIDER;
+  if (!provider) {
+    throw new Error('SMS_PROVIDER 환경변수가 설정되지 않았습니다');
+  }
+  if (provider === 'aligo') {
+    const apiKey = process.env.ALIGO_API_KEY;
+    const userId = process.env.ALIGO_USER_ID;
+    const sender = process.env.ALIGO_SENDER;
+    if (!apiKey || !userId || !sender) {
+      throw new Error('ALIGO_API_KEY / ALIGO_USER_ID / ALIGO_SENDER 환경변수가 설정되지 않았습니다');
+    }
+    // TODO: 알리고 SMS API(https://smartsms.aligo.in/send/) 실제 연동. 정확한 요청 스펙을 확인 후
+    // axios/fetch로 POST 요청을 구현해야 한다. 지금은 뼈대만 있고 실제 발송은 되지 않는다.
+    throw new Error('aligo SMS 연동이 아직 구현되지 않았습니다 (뼈대만 준비됨, sendSms() 함수의 TODO 참고)');
+  }
+  throw new Error(`지원하지 않는 SMS_PROVIDER입니다: ${provider}`);
+}
+
+// TOTP 등록 시작 - 시크릿 생성 → 암호화 저장 → QR코드/백업코드 발급(백업코드 평문은 이 응답에서 딱 한 번만 보여준다)
+// 대표자 2FA 등록 상태 조회 - 시크릿 자체는 절대 내려주지 않고 "등록 여부/연락처 등록 여부"만 알려준다.
+// (원가 화면에서 "설정 안 됨 → 최초 설정 유도" vs "설정됨 → 코드 입력 모달"을 프론트가 분기하기 위해 필요)
+app.get('/api/admin/owner/2fa/status', authenticate, async (req, res) => {
+  try {
+    const { data: profile, error } = await supabase.from('profiles').select('id, is_owner').eq('id', req.user.id).single();
+    if (error || !profile || !profile.is_owner) {
+      return res.status(403).json({ error: 'Forbidden', message: '대표자 계정만 조회할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+    const { data: security } = await supabase.from('owner_security_with').select('totp_enabled, phone, otp_email, preferred_method, backup_codes_hashed, backup_codes_used_count').eq('profile_id', profile.id).maybeSingle();
+    res.json({
+      success: true,
+      data: {
+        totp_enabled: !!(security && security.totp_enabled),
+        has_phone: !!(security && security.phone),
+        has_otp_email: !!(security && security.otp_email),
+        preferred_method: (security && security.preferred_method) || null,
+        backup_codes_remaining: security && Array.isArray(security.backup_codes_hashed) ? security.backup_codes_hashed.length : 0,
+        backup_codes_used_count: (security && security.backup_codes_used_count) || 0
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('대표자 2FA 상태 조회 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/owner/2fa/setup/totp', authenticate, async (req, res) => {
+  const ip = getClientIp(req);
+  try {
+    const { data: profile, error } = await supabase.from('profiles').select('id, is_owner, email').eq('id', req.user.id).single();
+    if (error || !profile || !profile.is_owner) {
+      await logCostAudit({ profileId: req.user.id, action: 'totp_setup_denied', ip });
+      return res.status(403).json({ error: 'Forbidden', message: '대표자 계정만 설정할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+
+    const secret = authenticator.generateSecret();
+    const otpauthUrl = authenticator.keyuri(profile.email || req.user.email || profile.id, 'WITH+ 대표자', secret);
+    const qrDataUrl = await QRCode.toDataURL(otpauthUrl);
+
+    const backupCodesPlain = Array.from({ length: 10 }, () => crypto.randomBytes(5).toString('hex').toUpperCase());
+    const backupCodesHashed = await Promise.all(backupCodesPlain.map(c => bcrypt.hash(c, 10)));
+
+    const { error: upsertErr } = await supabase.from('owner_security_with').upsert([{
+      profile_id: profile.id,
+      totp_secret_encrypted: encryptOwnerSecret(secret),
+      totp_enabled: false,
+      backup_codes_hashed: backupCodesHashed,
+      backup_codes_used_count: 0,
+      updated_at: new Date().toISOString()
+    }], { onConflict: 'profile_id' });
+    if (upsertErr) throw upsertErr;
+
+    await logCostAudit({ profileId: profile.id, action: 'totp_setup_initiated', ip });
+
+    res.json({
+      success: true,
+      data: { qr_code_data_url: qrDataUrl, otpauth_url: otpauthUrl, backup_codes: backupCodesPlain },
+      message: '백업 코드는 이 응답에서 한 번만 표시됩니다. 반드시 안전한 곳에 저장한 뒤, 인증 앱에 QR코드를 등록하고 확인 코드를 입력해 활성화를 완료해주세요.',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('TOTP 설정 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// TOTP 등록 확정 - 최초 6자리 코드가 실제로 맞아야(=인증 앱에 정상 등록됐음을 증명해야) 활성화된다
+app.post('/api/admin/owner/2fa/confirm-totp', authenticate, async (req, res) => {
+  const ip = getClientIp(req);
+  try {
+    const { data: profile, error } = await supabase.from('profiles').select('id, is_owner').eq('id', req.user.id).single();
+    if (error || !profile || !profile.is_owner) {
+      return res.status(403).json({ error: 'Forbidden', message: '대표자 계정만 설정할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+    const { code } = req.body || {};
+    const { data: security, error: secErr } = await supabase.from('owner_security_with').select('totp_secret_encrypted').eq('profile_id', profile.id).maybeSingle();
+    if (secErr || !security || !security.totp_secret_encrypted) {
+      return res.status(400).json({ error: 'Bad Request', message: '먼저 TOTP 설정을 시작해주세요', timestamp: new Date().toISOString() });
+    }
+    let secret;
+    try {
+      secret = decryptOwnerSecret(security.totp_secret_encrypted);
+    } catch (e) {
+      return res.status(500).json({ error: 'Internal Server Error', message: '저장된 TOTP 시크릿을 복호화할 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    const valid = code && verifyTotpCode(code, secret);
+    if (!valid) {
+      await logCostAudit({ profileId: profile.id, action: 'totp_confirm_failed', ip });
+      return res.status(400).json({ error: 'Bad Request', message: '인증코드가 올바르지 않습니다', timestamp: new Date().toISOString() });
+    }
+    await supabase.from('owner_security_with').update({ totp_enabled: true, updated_at: new Date().toISOString() }).eq('profile_id', profile.id);
+    await logCostAudit({ profileId: profile.id, action: 'totp_enabled', ip });
+    res.json({ success: true, message: 'TOTP 2단계 인증이 활성화되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('TOTP 확인 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 대표자 연락처(SMS/이메일 인증용) 및 선호 인증방식 등록
+app.post('/api/admin/owner/2fa/setup/contact', authenticate, async (req, res) => {
+  try {
+    const { data: profile, error } = await supabase.from('profiles').select('id, is_owner').eq('id', req.user.id).single();
+    if (error || !profile || !profile.is_owner) {
+      return res.status(403).json({ error: 'Forbidden', message: '대표자 계정만 설정할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+    const { phone, otp_email, preferred_method } = req.body || {};
+    if (preferred_method && !['totp', 'sms', 'email'].includes(preferred_method)) {
+      return res.status(400).json({ error: 'Bad Request', message: 'preferred_method는 totp/sms/email 중 하나여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const patch = { profile_id: profile.id, updated_at: new Date().toISOString() };
+    if (phone !== undefined) patch.phone = phone ? String(phone).trim() : null;
+    if (otp_email !== undefined) patch.otp_email = otp_email ? String(otp_email).trim() : null;
+    if (preferred_method !== undefined) patch.preferred_method = preferred_method || null;
+    const { error: upsertErr } = await supabase.from('owner_security_with').upsert([patch], { onConflict: 'profile_id' });
+    if (upsertErr) throw upsertErr;
+    res.json({ success: true, message: '연락처 정보가 저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('대표자 연락처 설정 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// SMS/이메일 1회용 인증코드 발송 요청
+app.post('/api/admin/owner/2fa/request-otp', authenticate, async (req, res) => {
+  const ip = getClientIp(req);
+  try {
+    const { data: profile, error } = await supabase.from('profiles').select('id, is_owner, email').eq('id', req.user.id).single();
+    if (error || !profile || !profile.is_owner) {
+      return res.status(403).json({ error: 'Forbidden', message: '대표자 계정만 사용할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+    const { method } = req.body || {};
+    if (!['sms', 'email'].includes(method)) {
+      return res.status(400).json({ error: 'Bad Request', message: 'method는 sms 또는 email이어야 합니다', timestamp: new Date().toISOString() });
+    }
+    const { data: security } = await supabase.from('owner_security_with').select('phone, otp_email').eq('profile_id', profile.id).maybeSingle();
+
+    const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+    const codeHash = await bcrypt.hash(code, 10);
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+
+    if (method === 'email') {
+      const to = (security && security.otp_email) || profile.email || req.user.email;
+      const html = `<p>대표자 원가 열람 인증코드: <b>${code}</b></p><p>5분간 유효합니다. 본인이 요청하지 않았다면 즉시 비밀번호를 변경해주세요.</p>`;
+      const result = await sendEmail({ to, subject: '[WITH+] 대표자 원가 열람 인증코드', html, template: 'owner_cost_otp' });
+      if (!result.sent) {
+        await logCostAudit({ profileId: profile.id, action: 'otp_request_failed', detail: { method, reason: result.reason }, ip });
+        return res.status(501).json({ error: 'Not Implemented', message: '이메일 발송 설정이 안 되어 있습니다 (관리자 설정에서 SMTP 정보를 먼저 등록해주세요)', timestamp: new Date().toISOString() });
+      }
+    } else {
+      const phone = security && security.phone;
+      if (!phone) {
+        return res.status(400).json({ error: 'Bad Request', message: '먼저 대표자 연락처(휴대폰 번호)를 등록해주세요', timestamp: new Date().toISOString() });
+      }
+      try {
+        await sendSms(phone, code);
+      } catch (smsErr) {
+        await logCostAudit({ profileId: profile.id, action: 'otp_request_failed', detail: { method, reason: smsErr.message }, ip });
+        return res.status(501).json({ error: 'Not Implemented', message: 'SMS 발송이 아직 설정/구현되지 않았습니다: ' + smsErr.message, timestamp: new Date().toISOString() });
+      }
+    }
+
+    await supabase.from('owner_otp_codes_with').insert([{ profile_id: profile.id, method, code_hash: codeHash, expires_at: expiresAt }]);
+    await logCostAudit({ profileId: profile.id, action: 'otp_requested', detail: { method }, ip });
+
+    res.json({ success: true, message: `${method === 'email' ? '이메일' : 'SMS'}로 인증코드를 발송했습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('OTP 요청 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// method(totp/sms/email) 또는 backupCode 중 하나로 대표자 본인임을 증명하는 공용 검증 로직.
+// verify-2fa / verify-otp 두 엔드포인트가 이 함수를 공유한다(요구사항: "동일 응답 형식으로 통합해도 됨").
+async function verifyOwnerFactor({ profileId, method, code, backupCode }) {
+  const { data: security } = await supabase.from('owner_security_with').select('*').eq('profile_id', profileId).maybeSingle();
+
+  if (backupCode) {
+    if (!security || !Array.isArray(security.backup_codes_hashed) || security.backup_codes_hashed.length === 0) {
+      return { ok: false, reason: 'no_backup_codes' };
+    }
+    const trimmed = String(backupCode).trim();
+    for (let i = 0; i < security.backup_codes_hashed.length; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      const matched = await bcrypt.compare(trimmed, security.backup_codes_hashed[i]);
+      if (matched) {
+        const remaining = security.backup_codes_hashed.slice(0, i).concat(security.backup_codes_hashed.slice(i + 1));
+        await supabase.from('owner_security_with').update({
+          backup_codes_hashed: remaining,
+          backup_codes_used_count: (security.backup_codes_used_count || 0) + 1,
+          updated_at: new Date().toISOString()
+        }).eq('profile_id', profileId);
+        return { ok: true, via: 'backup_code' };
+      }
+    }
+    return { ok: false, reason: 'backup_code_mismatch' };
+  }
+
+  if (method === 'totp') {
+    if (!security || !security.totp_enabled || !security.totp_secret_encrypted) {
+      return { ok: false, reason: 'totp_not_enabled' };
+    }
+    if (!code) return { ok: false, reason: 'code_required' };
+    let secret;
+    try {
+      secret = decryptOwnerSecret(security.totp_secret_encrypted);
+    } catch (e) {
+      return { ok: false, reason: 'decrypt_failed' };
+    }
+    return verifyTotpCode(code, secret) ? { ok: true, via: 'totp' } : { ok: false, reason: 'totp_mismatch' };
+  }
+
+  if (method === 'sms' || method === 'email') {
+    if (!code) return { ok: false, reason: 'code_required' };
+    const { data: otpRow } = await supabase
+      .from('owner_otp_codes_with')
+      .select('*')
+      .eq('profile_id', profileId)
+      .eq('method', method)
+      .is('consumed_at', null)
+      .gte('expires_at', new Date().toISOString())
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (!otpRow) return { ok: false, reason: 'no_pending_code' };
+    if (otpRow.attempt_count >= 5) return { ok: false, reason: 'too_many_attempts' };
+    const match = await bcrypt.compare(String(code).trim(), otpRow.code_hash);
+    if (!match) {
+      await supabase.from('owner_otp_codes_with').update({ attempt_count: otpRow.attempt_count + 1 }).eq('id', otpRow.id);
+      return { ok: false, reason: 'code_mismatch' };
+    }
+    await supabase.from('owner_otp_codes_with').update({ consumed_at: new Date().toISOString() }).eq('id', otpRow.id);
+    return { ok: true, via: method };
+  }
+
+  return { ok: false, reason: 'unknown_method' };
+}
+
+async function handleOwnerStepUpVerify(req, res) {
+  const ip = getClientIp(req);
+  try {
+    const { data: profile, error } = await supabase.from('profiles').select('id, role, is_owner, email').eq('id', req.user.id).single();
+    if (error || !profile) {
+      return res.status(403).json({ error: 'Forbidden', message: '프로필을 확인할 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    if (!profile.is_owner) {
+      await logCostAudit({ profileId: profile.id, action: 'step_up_verify_failed', detail: { reason: 'not_owner' }, ip });
+      return res.status(403).json({ error: 'Forbidden', message: '대표자 계정만 사용할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+    const { method, code, backupCode } = req.body || {};
+    if (!['totp', 'sms', 'email'].includes(method)) {
+      return res.status(400).json({ error: 'Bad Request', message: 'method는 totp/sms/email 중 하나여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const result = await verifyOwnerFactor({ profileId: profile.id, method, code, backupCode });
+    if (!result.ok) {
+      await logCostAudit({ profileId: profile.id, action: 'step_up_verify_failed', detail: { method, reason: result.reason }, ip });
+      return res.status(400).json({ error: 'Bad Request', message: '인증에 실패했습니다', reason: result.reason, timestamp: new Date().toISOString() });
+    }
+    const token = signCostStepUpToken(profile.id);
+    await logCostAudit({ profileId: profile.id, action: 'step_up_granted', detail: { method, via: result.via }, ip });
+    res.json({ success: true, data: { token, expires_in: COST_STEPUP_TTL_SECONDS }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('대표자 2FA 검증 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+}
+// verify-2fa(TOTP/백업코드 중심)와 verify-otp(SMS/이메일 코드 검증)는 내부 로직이 동일하므로 같은 핸들러를 공유한다.
+app.post('/api/admin/owner/verify-2fa', authenticate, handleOwnerStepUpVerify);
+app.post('/api/admin/owner/2fa/verify-otp', authenticate, handleOwnerStepUpVerify);
+
+// ============================================
+// 채널별 가격 정책/계산
+// ------------------------------------------------------------
+// 마진율(%) 자체는 원가와 마찬가지로 대표자 2FA 스텝업 없이는 어떤 API 응답에도 포함되지 않는다.
+// 계산된 "최종 판매가"만 일반 관리자(admin/super_admin)에게 노출한다.
+// ============================================
+const PRICING_CHANNELS = ['online', 'live', 'wholesale'];
+
+// product-scope → category-scope → global-scope 순으로 적용 가능한 정책을 찾는다
+async function findPricingPolicy(channel, productId, category) {
+  if (productId) {
+    const { data: productPolicy } = await supabase
+      .from('channel_pricing_policies_with')
+      .select('*')
+      .eq('channel', channel).eq('scope', 'product').eq('product_id', productId).eq('is_active', true)
+      .maybeSingle();
+    if (productPolicy) return productPolicy;
+  }
+  if (category) {
+    const { data: categoryPolicy } = await supabase
+      .from('channel_pricing_policies_with')
+      .select('*')
+      .eq('channel', channel).eq('scope', 'category').eq('category', category).eq('is_active', true)
+      .maybeSingle();
+    if (categoryPolicy) return categoryPolicy;
+  }
+  const { data: globalPolicy } = await supabase
+    .from('channel_pricing_policies_with')
+    .select('*')
+    .eq('channel', channel).eq('scope', 'global').eq('is_active', true)
+    .maybeSingle();
+  return globalPolicy || null;
+}
+
+function roundToUnit(value, unit) {
+  const u = Number(unit) > 0 ? Number(unit) : 1;
+  return Math.round(value / u) * u;
+}
+
+// price = costPrice * (1 + margin_rate/100), rounding_unit 단위로 반올림, min_margin_rate 미만으로는 내려가지 않게 하한 적용.
+// 적용 가능한 정책이 하나도 없으면 null 반환(호출부에서 기존 products_with.price로 폴백하는 의미로 쓴다).
+async function computeChannelPrice(costPrice, channel, productId, category) {
+  if (costPrice === null || costPrice === undefined || !Number.isFinite(Number(costPrice))) return null;
+  const policy = await findPricingPolicy(channel, productId, category);
+  if (!policy) return null;
+  const cost = Number(costPrice);
+  let marginRate = Number(policy.margin_rate);
+  if (policy.min_margin_rate !== null && policy.min_margin_rate !== undefined && marginRate < Number(policy.min_margin_rate)) {
+    marginRate = Number(policy.min_margin_rate);
+  }
+  const raw = cost * (1 + marginRate / 100);
+  return Math.max(0, roundToUnit(raw, policy.rounding_unit));
+}
+
+// cost_price 또는 관련 정책이 바뀌었을 때, 수동으로 고정(is_manual_override)되지 않은 채널가만 재계산해 반영한다.
+async function recalcChannelPrices(productId, costPrice, category) {
+  for (const channel of PRICING_CHANNELS) {
+    // eslint-disable-next-line no-await-in-loop
+    const price = await computeChannelPrice(costPrice, channel, productId, category);
+    // eslint-disable-next-line no-await-in-loop
+    const { data: existing } = await supabase
+      .from('product_channel_prices_with')
+      .select('id, is_manual_override')
+      .eq('product_id', productId).eq('channel', channel).maybeSingle();
+    if (existing && existing.is_manual_override) continue; // 수동 고정된 채널가는 자동 재계산에서 건드리지 않는다
+    if (price === null) continue; // 적용할 정책이 없으면 기존 값을 그대로 둔다(조회 시 판매가로 폴백)
+    if (existing) {
+      // eslint-disable-next-line no-await-in-loop
+      await supabase.from('product_channel_prices_with').update({ price, is_manual_override: false, updated_at: new Date().toISOString() }).eq('id', existing.id);
+    } else {
+      // eslint-disable-next-line no-await-in-loop
+      await supabase.from('product_channel_prices_with').insert([{ product_id: productId, channel, price, is_manual_override: false }]);
+    }
+  }
+}
+
+// ============================================
+// 원가 조회/수정 - requireOwnerStepUp 필수 (대표자 + 2FA 스텝업 토큰)
+// ============================================
+app.get('/api/admin/products/:id/cost', authenticate, requireOwnerStepUp, async (req, res) => {
+  const ip = getClientIp(req);
+  try {
+    const { id } = req.params;
+    const { data: product, error } = await supabase.from('products_with').select('id, cost_price, category').eq('id', id).maybeSingle();
+    if (error) throw error;
+    if (!product) {
+      return res.status(404).json({ error: 'Not Found', message: '상품을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    const policies = {};
+    for (const channel of PRICING_CHANNELS) {
+      // eslint-disable-next-line no-await-in-loop
+      policies[channel] = await findPricingPolicy(channel, id, product.category);
+    }
+    await logCostAudit({ profileId: req.ownerProfile.id, action: 'view_cost', productId: id, ip });
+    res.json({
+      success: true,
+      data: {
+        product_id: id,
+        cost_price: product.cost_price,
+        policies: Object.fromEntries(PRICING_CHANNELS.map(ch => [ch, policies[ch] ? {
+          scope: policies[ch].scope,
+          margin_rate: Number(policies[ch].margin_rate),
+          rounding_unit: Number(policies[ch].rounding_unit),
+          min_margin_rate: policies[ch].min_margin_rate !== null && policies[ch].min_margin_rate !== undefined ? Number(policies[ch].min_margin_rate) : null
+        } : null]))
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('원가 조회 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/products/:id/cost', authenticate, requireOwnerStepUp, async (req, res) => {
+  const ip = getClientIp(req);
+  try {
+    const { id } = req.params;
+    const { cost_price, channel_margin_overrides } = req.body || {};
+    if (cost_price === undefined) {
+      return res.status(400).json({ error: 'Bad Request', message: 'cost_price가 필요합니다', timestamp: new Date().toISOString() });
+    }
+    const costValue = cost_price === null || cost_price === '' ? null : Number(cost_price);
+    if (costValue !== null && (!Number.isFinite(costValue) || costValue < 0)) {
+      return res.status(400).json({ error: 'Bad Request', message: 'cost_price는 0 이상의 숫자여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const { data: existing, error: findErr } = await supabase.from('products_with').select('id, category').eq('id', id).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) {
+      return res.status(404).json({ error: 'Not Found', message: '상품을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { error: updateErr } = await supabase.from('products_with').update({ cost_price: costValue }).eq('id', id);
+    if (updateErr) throw updateErr;
+
+    // 상품별 마진율 override(선택) - channel_pricing_policies_with에 scope='product' 행으로 upsert. null을 보내면 override 해제.
+    if (channel_margin_overrides && typeof channel_margin_overrides === 'object') {
+      for (const channel of PRICING_CHANNELS) {
+        const rate = channel_margin_overrides[channel];
+        if (rate === undefined) continue;
+        if (rate === null) {
+          // eslint-disable-next-line no-await-in-loop
+          await supabase.from('channel_pricing_policies_with').delete()
+            .eq('channel', channel).eq('scope', 'product').eq('product_id', id);
+          continue;
+        }
+        const marginRate = Number(rate);
+        if (!Number.isFinite(marginRate)) continue;
+        // eslint-disable-next-line no-await-in-loop
+        const { data: existingPolicy } = await supabase.from('channel_pricing_policies_with')
+          .select('id').eq('channel', channel).eq('scope', 'product').eq('product_id', id).maybeSingle();
+        if (existingPolicy) {
+          // eslint-disable-next-line no-await-in-loop
+          await supabase.from('channel_pricing_policies_with').update({ margin_rate: marginRate, updated_at: new Date().toISOString() }).eq('id', existingPolicy.id);
+        } else {
+          // eslint-disable-next-line no-await-in-loop
+          await supabase.from('channel_pricing_policies_with').insert([{ channel, scope: 'product', product_id: id, margin_rate: marginRate, rounding_unit: 10, is_active: true }]);
+        }
+      }
+    }
+
+    await recalcChannelPrices(id, costValue, existing.category);
+    await logCostAudit({ profileId: req.ownerProfile.id, action: 'edit_cost', productId: id, detail: { cost_price: costValue, channel_margin_overrides: channel_margin_overrides || null }, ip });
+
+    res.json({ success: true, message: '원가가 저장되었고 채널별 가격이 재계산되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('원가 수정 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 채널별 최종 판매가 조회/수동고정 - 일반 관리자(admin/super_admin) 가능. 원가/마진율은 절대 포함하지 않는다.
+// ============================================
+app.get('/api/admin/products/:id/channel-prices', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: product } = await supabase.from('products_with').select('id, price').eq('id', id).maybeSingle();
+    if (!product) return res.status(404).json({ error: 'Not Found', message: '상품을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const { data: rows } = await supabase.from('product_channel_prices_with').select('channel, price, is_manual_override, updated_at').eq('product_id', id);
+    const byChannel = {};
+    (rows || []).forEach(r => { byChannel[r.channel] = r; });
+    const data = PRICING_CHANNELS.map(channel => ({
+      channel,
+      price: byChannel[channel] ? Number(byChannel[channel].price) : Number(product.price),
+      is_manual_override: byChannel[channel] ? !!byChannel[channel].is_manual_override : false,
+      updated_at: byChannel[channel] ? byChannel[channel].updated_at : null
+    }));
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('채널별 가격 조회 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/products/:id/channel-prices/:channel', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { id, channel } = req.params;
+    if (!PRICING_CHANNELS.includes(channel)) {
+      return res.status(400).json({ error: 'Bad Request', message: `channel은 ${PRICING_CHANNELS.join('/')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+    }
+    const { price } = req.body || {};
+    const priceValue = Number(price);
+    if (!Number.isFinite(priceValue) || priceValue < 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'price는 0 이상의 숫자여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const { data: product } = await supabase.from('products_with').select('id').eq('id', id).maybeSingle();
+    if (!product) return res.status(404).json({ error: 'Not Found', message: '상품을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const { data: existing } = await supabase.from('product_channel_prices_with').select('id').eq('product_id', id).eq('channel', channel).maybeSingle();
+    if (existing) {
+      await supabase.from('product_channel_prices_with').update({ price: priceValue, is_manual_override: true, updated_at: new Date().toISOString() }).eq('id', existing.id);
+    } else {
+      await supabase.from('product_channel_prices_with').insert([{ product_id: id, channel, price: priceValue, is_manual_override: true }]);
+    }
+    res.json({ success: true, message: '채널가가 수동으로 고정되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('채널가 수정 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 채널가 수동고정 해제 - 다시 정책 기반 자동계산으로 되돌린다
+app.delete('/api/admin/products/:id/channel-prices/:channel', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { id, channel } = req.params;
+    if (!PRICING_CHANNELS.includes(channel)) {
+      return res.status(400).json({ error: 'Bad Request', message: `channel은 ${PRICING_CHANNELS.join('/')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+    }
+    const { data: product } = await supabase.from('products_with').select('id, cost_price, category').eq('id', id).maybeSingle();
+    if (!product) return res.status(404).json({ error: 'Not Found', message: '상품을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    await supabase.from('product_channel_prices_with').delete().eq('product_id', id).eq('channel', channel);
+    // 원가가 등록돼 있으면 정책 기반으로 다시 계산해 채워넣는다 (없으면 조회 시 판매가로 폴백)
+    if (product.cost_price !== null && product.cost_price !== undefined) {
+      await recalcChannelPrices(id, product.cost_price, product.category);
+    }
+    res.json({ success: true, message: '수동고정이 해제되고 자동계산으로 되돌아갔습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('채널가 수동고정 해제 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 전역/카테고리 마진율 정책 CRUD - requireOwnerStepUp 필수 (마진율 자체가 민감정보)
+// ============================================
+app.get('/api/admin/pricing-policies', authenticate, requireOwnerStepUp, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('channel_pricing_policies_with').select('*').order('channel').order('scope');
+    if (error) throw error;
+    await logCostAudit({ profileId: req.ownerProfile.id, action: 'view_pricing_policies', ip: getClientIp(req) });
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('가격정책 조회 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/pricing-policies', authenticate, requireOwnerStepUp, async (req, res) => {
+  const ip = getClientIp(req);
+  try {
+    const { channel, scope, category, margin_rate, rounding_unit, min_margin_rate, is_active } = req.body || {};
+    if (!PRICING_CHANNELS.includes(channel)) {
+      return res.status(400).json({ error: 'Bad Request', message: `channel은 ${PRICING_CHANNELS.join('/')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+    }
+    if (!['global', 'category'].includes(scope)) {
+      return res.status(400).json({ error: 'Bad Request', message: '이 엔드포인트는 scope가 global 또는 category인 정책만 관리합니다 (상품별 정책은 원가 저장 API에서 관리됩니다)', timestamp: new Date().toISOString() });
+    }
+    if (scope === 'category' && !category) {
+      return res.status(400).json({ error: 'Bad Request', message: 'scope가 category이면 category 값이 필요합니다', timestamp: new Date().toISOString() });
+    }
+    const marginRate = Number(margin_rate);
+    if (!Number.isFinite(marginRate)) {
+      return res.status(400).json({ error: 'Bad Request', message: 'margin_rate가 필요합니다', timestamp: new Date().toISOString() });
+    }
+    const roundingUnit = rounding_unit !== undefined && rounding_unit !== null && rounding_unit !== '' ? Number(rounding_unit) : 10;
+    const minMarginRate = min_margin_rate !== undefined && min_margin_rate !== null && min_margin_rate !== '' ? Number(min_margin_rate) : null;
+
+    let matchQuery = supabase.from('channel_pricing_policies_with').select('id').eq('channel', channel).eq('scope', scope);
+    matchQuery = scope === 'category' ? matchQuery.eq('category', category) : matchQuery.is('category', null);
+    const { data: existing } = await matchQuery.maybeSingle();
+
+    if (existing) {
+      await supabase.from('channel_pricing_policies_with').update({
+        margin_rate: marginRate, rounding_unit: roundingUnit, min_margin_rate: minMarginRate,
+        is_active: is_active === undefined ? true : !!is_active, updated_at: new Date().toISOString()
+      }).eq('id', existing.id);
+    } else {
+      const { error: insertErr } = await supabase.from('channel_pricing_policies_with').insert([{
+        channel, scope, category: scope === 'category' ? category : null,
+        margin_rate: marginRate, rounding_unit: roundingUnit, min_margin_rate: minMarginRate,
+        is_active: is_active === undefined ? true : !!is_active
+      }]);
+      if (insertErr) throw insertErr;
+    }
+
+    // 이 정책이 바뀌면 영향받는(수동 override 되지 않은) 상품들의 채널가를 다시 계산한다.
+    let affectedQuery = supabase.from('products_with').select('id, cost_price, category').eq('status', 'active').not('cost_price', 'is', null);
+    if (scope === 'category') affectedQuery = affectedQuery.eq('category', category);
+    const { data: affected } = await affectedQuery;
+    for (const p of (affected || [])) {
+      // eslint-disable-next-line no-await-in-loop
+      await recalcChannelPrices(p.id, p.cost_price, p.category);
+    }
+
+    await logCostAudit({ profileId: req.ownerProfile.id, action: 'edit_pricing_policy', detail: { channel, scope, category: category || null, margin_rate: marginRate }, ip });
+    res.json({ success: true, message: '가격정책이 저장되고 관련 상품의 채널가가 재계산되었습니다', affected_count: (affected || []).length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('가격정책 저장 오류:', err);
+    res.status(500).json({ error: 'Internal Server Error', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 
 // 옵션 목록 조회 (관리자/공급자용 - 비활성 옵션 포함)
 app.get('/api/admin/products/:productId/variants', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
@@ -10282,7 +11077,7 @@ app.get('/api/wishlist', authenticate, async (req, res) => {
     if (productIds.length > 0) {
       const { data: productRows, error: pErr } = await supabase
         .from('products_with')
-        .select('*')
+        .select(PRODUCT_SAFE_COLUMNS)
         .in('id', productIds);
       if (pErr) throw pErr;
       products = productRows || [];
@@ -10924,7 +11719,7 @@ async function getBestsellingProducts(limit, excludeIds) {
 
   if (soldIds.length === 0) return { data: [], basis: 'newest' };
 
-  const { data: products } = await supabase.from('products_with').select('*').in('id', soldIds).eq('status', 'active');
+  const { data: products } = await supabase.from('products_with').select(PRODUCT_SAFE_COLUMNS).in('id', soldIds).eq('status', 'active');
   const byId = {}; (products || []).forEach(p => { byId[p.id] = p; });
   const ordered = soldIds.map(id => byId[id]).filter(Boolean);
   return { data: ordered, basis: 'bestseller' };
@@ -11094,7 +11889,7 @@ async function pickProductsByCategoryWeight(categoryWeight, excludeIds, limit) {
   if (!categoryWeight || Object.keys(categoryWeight).length === 0) return [];
   const { data: candidates } = await supabase
     .from('products_with')
-    .select('*')
+    .select(PRODUCT_SAFE_COLUMNS)
     .eq('status', 'active')
     .in('category', Object.keys(categoryWeight));
 
@@ -11113,7 +11908,7 @@ async function pickPersonalizedProducts(signals, excludeIds, limit) {
   if (!categoryWeight || Object.keys(categoryWeight).length === 0) return [];
   const { data: candidates } = await supabase
     .from('products_with')
-    .select('*')
+    .select(PRODUCT_SAFE_COLUMNS)
     .eq('status', 'active')
     .in('category', Object.keys(categoryWeight));
 
@@ -11163,7 +11958,7 @@ async function pickCollaborativeProducts(purchasedProductIds, excludeIds, limit)
   const topIds = Object.keys(coScore).sort((a, b) => coScore[b] - coScore[a]).slice(0, limit);
   if (topIds.length === 0) return [];
 
-  const { data: products } = await supabase.from('products_with').select('*').in('id', topIds).eq('status', 'active');
+  const { data: products } = await supabase.from('products_with').select(PRODUCT_SAFE_COLUMNS).in('id', topIds).eq('status', 'active');
   const byId = {}; (products || []).forEach(p => { byId[p.id] = p; });
   return topIds.map(id => byId[id]).filter(Boolean);
 }
@@ -11274,7 +12069,7 @@ app.get('/api/me/home-sections', optionalAuth, async (req, res) => {
     const { repeat, singlePurchase } = rankRepurchaseCandidates(signals.purchaseDatesByProduct);
     const repurchaseOrdered = [...repeat.map(r => r.productId), ...singlePurchase.map(r => r.productId)].slice(0, sectionLimit);
     if (repurchaseOrdered.length > 0) {
-      const { data: repurchaseProducts } = await supabase.from('products_with').select('*').in('id', repurchaseOrdered).eq('status', 'active');
+      const { data: repurchaseProducts } = await supabase.from('products_with').select(PRODUCT_SAFE_COLUMNS).in('id', repurchaseOrdered).eq('status', 'active');
       const byId = {}; (repurchaseProducts || []).forEach(p => { byId[p.id] = p; });
       const ordered = repurchaseOrdered.map(id => byId[id]).filter(Boolean);
       if (ordered.length > 0) {
@@ -11306,7 +12101,7 @@ app.get('/api/me/home-sections', optionalAuth, async (req, res) => {
     if (interestCategories.length > 0) {
       const { data: dealCandidates } = await supabase
         .from('products_with')
-        .select('*')
+        .select(PRODUCT_SAFE_COLUMNS)
         .eq('status', 'active')
         .in('category', interestCategories)
         .or('stock.lte.20,discount_price.not.is.null');
@@ -11358,7 +12153,7 @@ app.get('/api/products/:id/supplier-products', async (req, res) => {
     const [{ data: supplierProfile }, { count: totalCount }, { data: products, error: prodErr }] = await Promise.all([
       supabase.from('profiles').select('id, full_name').eq('id', current.supplier_id).maybeSingle(),
       supabasePublic.from('products_with').select('id', { count: 'exact', head: true }).eq('supplier_id', current.supplier_id).eq('status', 'active'),
-      supabasePublic.from('products_with').select('*').eq('supplier_id', current.supplier_id).eq('status', 'active').neq('id', productId).order('created_at', { ascending: false }).limit(limit)
+      supabasePublic.from('products_with').select(PRODUCT_SAFE_COLUMNS).eq('supplier_id', current.supplier_id).eq('status', 'active').neq('id', productId).order('created_at', { ascending: false }).limit(limit)
     ]);
     if (prodErr) throw prodErr;
 
@@ -11407,7 +12202,7 @@ app.get('/api/products/:id/frequently-bought-together', async (req, res) => {
       return res.json({ success: true, data: [], timestamp: new Date().toISOString() });
     }
 
-    const { data: products } = await supabase.from('products_with').select('*').in('id', topIds).eq('status', 'active');
+    const { data: products } = await supabase.from('products_with').select(PRODUCT_SAFE_COLUMNS).in('id', topIds).eq('status', 'active');
     const byId = {}; (products || []).forEach(p => { byId[p.id] = p; });
     const ordered = topIds.map(id => byId[id]).filter(Boolean);
 
@@ -11442,7 +12237,7 @@ app.get('/api/products/:id/similar', async (req, res) => {
 
     const { data: candidates, error: candErr } = await supabasePublic
       .from('products_with')
-      .select('*')
+      .select(PRODUCT_SAFE_COLUMNS)
       .eq('status', 'active')
       .eq('category', base.category)
       .neq('id', productId);
