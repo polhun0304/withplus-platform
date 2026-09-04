@@ -6794,6 +6794,84 @@ app.post('/api/admin/low-stock-alert/run-now', authenticate, requireRole(['admin
   }
 });
 
+// ============================================
+// 🔎 상품별 검색형 재고 현황 - 미팅 요청사항 격차분석 보고서 3번 항목
+// 방송 준비 때 수기로 쓰던 엑셀(단가/위치/유통기한/최근 5회 평균 출고량/D-발주 시점)을
+// 상품명 검색으로 대체한다. 기존 product_location_assignments_with(로케이션 배정),
+// stock_adjustments_with(재고 이벤트 원장)를 그대로 조합만 해서 만든다(새 테이블 없음).
+// ============================================
+app.get('/api/admin/inventory/search', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const q = (req.query.q || '').trim();
+    if (!q) return res.json({ success: true, data: [], timestamp: new Date().toISOString() });
+
+    let productQuery = supabase
+      .from('products_with')
+      .select('id, name, price, discount_price, supply_amount, vat_amount, stock, expiry_date, spec, brand, category, supplier_id')
+      .ilike('name', `%${q}%`)
+      .eq('status', 'active')
+      .limit(30);
+    if (!isAdminRole(req.userRole)) productQuery = productQuery.eq('supplier_id', req.user.id);
+    const { data: products, error: pErr } = await productQuery;
+    if (pErr) throw pErr;
+    if (!products || products.length === 0) return res.json({ success: true, data: [], timestamp: new Date().toISOString() });
+
+    const productIds = products.map(p => p.id);
+
+    const { data: locAssignments } = await supabase
+      .from('product_location_assignments_with')
+      .select('product_id, is_primary, warehouse_locations_with(code, zone, rack, bin, label)')
+      .in('product_id', productIds)
+      .order('is_primary', { ascending: false });
+    const locByProduct = {};
+    (locAssignments || []).forEach(a => { if (!locByProduct[a.product_id]) locByProduct[a.product_id] = a.warehouse_locations_with; });
+
+    // 최근 출고(음수 delta) 이벤트를 상품별 최근순으로 최대 500건 가져와, 그룹핑 시 각 상품당 앞에서 5개만 사용한다
+    // (전체가 created_at desc 정렬이므로 그룹 내부 순서도 desc가 그대로 유지된다)
+    const { data: outEvents } = await supabase
+      .from('stock_adjustments_with')
+      .select('product_id, delta, created_at')
+      .in('product_id', productIds)
+      .lt('delta', 0)
+      .order('created_at', { ascending: false })
+      .limit(500);
+    const recentByProduct = {};
+    (outEvents || []).forEach(e => {
+      const list = recentByProduct[e.product_id] = recentByProduct[e.product_id] || [];
+      if (list.length < 5) list.push(e);
+    });
+
+    const result = products.map(p => {
+      const loc = locByProduct[p.id] || null;
+      const recent = recentByProduct[p.id] || [];
+      const totalQty = recent.reduce((s, e) => s + Math.abs(Number(e.delta) || 0), 0);
+      const avgQty = recent.length > 0 ? Math.round((totalQty / recent.length) * 10) / 10 : null;
+      let reorderDays = null;
+      if (recent.length >= 2) {
+        const newest = new Date(recent[0].created_at).getTime();
+        const oldest = new Date(recent[recent.length - 1].created_at).getTime();
+        const spanDays = Math.max((newest - oldest) / (1000 * 3600 * 24), 0.5);
+        const dailyRate = totalQty / spanDays;
+        if (dailyRate > 0) reorderDays = Math.round((Number(p.stock) || 0) / dailyRate);
+      }
+      return {
+        id: p.id, name: p.name, price: p.price, discount_price: p.discount_price,
+        supply_amount: p.supply_amount, vat_amount: p.vat_amount, stock: p.stock,
+        expiry_date: p.expiry_date, spec: p.spec, brand: p.brand, category: p.category,
+        location: loc ? { code: loc.code, zone: loc.zone, rack: loc.rack, bin: loc.bin, label: loc.label } : null,
+        recent_outbound_count: recent.length,
+        avg_outbound_qty: avgQty,
+        reorder_in_days: reorderDays
+      };
+    });
+
+    res.json({ success: true, data: result, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error searching inventory:', err);
+    res.status(500).json({ error: 'Failed to search inventory', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 
 // ============================================
 // 창고관리(WMS) API — 재고원장/바코드스캔/로케이션/디지털트윈/AGV(시뮬레이션)

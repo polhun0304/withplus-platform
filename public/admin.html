@@ -1742,6 +1742,7 @@
                     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;">
                         <button class="btn btn-secondary wms-subtab-btn active" data-wms-tab="ledger">📒 재고원장</button>
                         <button class="btn btn-secondary wms-subtab-btn" data-wms-tab="scan">📷 바코드 스캔 터미널</button>
+                        <button class="btn btn-secondary wms-subtab-btn" data-wms-tab="search">🔎 상품 검색 현황</button>
                         ${isAdmin ? '<button class="btn btn-secondary wms-subtab-btn" data-wms-tab="warehouses">🏭 창고 마스터</button>' : ''}
                         ${isAdmin ? '<button class="btn btn-secondary wms-subtab-btn" data-wms-tab="locations">📍 로케이션 관리</button>' : ''}
                         ${isAdmin ? '<button class="btn btn-secondary wms-subtab-btn" data-wms-tab="twin">🗺️ 2D 디지털트윈</button>' : ''}
@@ -1764,6 +1765,15 @@
                         </div>
                         <div id="wms-ledger-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                         <div class="panel-toolbar" id="wms-ledger-pagination" style="justify-content:center; gap:12px;"></div>
+                    </div>
+
+                    <div class="wms-subtab-panel" id="wms-tab-search">
+                        <p style="color:var(--text-gray); font-size:0.88em; margin-bottom:12px;">방송/판매 준비할 때 수기로 쓰던 엑셀(단가/위치/유통기한/최근 5회 평균 출고량/D-발주 시점)을 상품명 검색으로 대체합니다.</p>
+                        <div style="display:flex; gap:8px; max-width:420px; margin-bottom:14px;">
+                            <input type="text" id="wms-search-q" placeholder="상품명으로 검색" style="flex:1; padding:9px 12px; border:1px solid var(--border-color); border-radius:8px; font-size:0.88em;">
+                            <button class="btn btn-primary" id="wms-search-btn">검색</button>
+                        </div>
+                        <div id="wms-search-result"></div>
                     </div>
 
                     <div class="wms-subtab-panel" id="wms-tab-scan">
@@ -5351,6 +5361,33 @@
                             if (btn.dataset.wmsTab === 'agv') { loadWmsEquipment(); loadWmsAgvTasks(); }
                         });
                     });
+
+                    // ---- 🔎 상품 검색 현황 (단가/위치/유통기한/평균출고량/D-발주) ----
+                    async function runWmsSearch() {
+                        const q = document.getElementById('wms-search-q').value.trim();
+                        const resultArea = document.getElementById('wms-search-result');
+                        if (!q) { resultArea.innerHTML = ''; return; }
+                        resultArea.innerHTML = '<div class="state-box"><div class="emoji">⏳</div><h3>검색 중...</h3></div>';
+                        const { ok, json } = await authedFetch('/api/admin/inventory/search?q=' + encodeURIComponent(q));
+                        if (!ok || !json.success) { resultArea.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>검색 실패</h3></div>`; return; }
+                        const items = json.data || [];
+                        if (items.length === 0) { resultArea.innerHTML = '<div class="state-box"><div class="emoji">🔍</div><h3>검색 결과가 없습니다</h3></div>'; return; }
+                        resultArea.innerHTML = `<div style="overflow-x:auto;"><table class="data-table"><thead><tr>
+                            <th>상품명</th><th>단가</th><th>재고</th><th>위치</th><th>유통기한</th><th>최근 평균 출고량</th><th>D-발주</th>
+                        </tr></thead><tbody>
+                            ${items.map(it => `<tr>
+                                <td>${WithPlus.escapeHtml(it.name)}</td>
+                                <td>${WithPlus.formatPrice ? WithPlus.formatPrice(it.discount_price || it.price) : (it.discount_price || it.price) + '원'}</td>
+                                <td>${it.stock}${it.stock <= 5 ? ' ⚠️' : ''}</td>
+                                <td>${it.location ? WithPlus.escapeHtml(it.location.code || it.location.label || '-') : '미배정'}</td>
+                                <td>${it.expiry_date || '-'}</td>
+                                <td>${it.avg_outbound_qty !== null ? it.avg_outbound_qty + '개 (최근 ' + it.recent_outbound_count + '회)' : '데이터 부족'}</td>
+                                <td>${it.reorder_in_days !== null ? (it.reorder_in_days <= 0 ? '⚠️ 즉시 발주 필요' : 'D-' + it.reorder_in_days) : '-'}</td>
+                            </tr>`).join('')}
+                        </tbody></table></div>`;
+                    }
+                    document.getElementById('wms-search-btn')?.addEventListener('click', runWmsSearch);
+                    document.getElementById('wms-search-q')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') runWmsSearch(); });
 
                     document.querySelector('[data-tab="wms"]')?.addEventListener('click', () => {
                         if (!document.getElementById('wms-ledger-table-area').dataset.loaded) {
