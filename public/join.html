@@ -55,6 +55,10 @@
                     <label for="referral-code">추천인 코드 (선택)</label>
                     <input type="text" id="referral-code" placeholder="추천받은 코드가 있다면 입력해주세요" maxlength="20" style="text-transform:uppercase;">
                 </div>
+                <div class="field" style="display:flex; align-items:flex-start; gap:8px; background:var(--bg-light); padding:12px 14px; border-radius:8px;">
+                    <input type="checkbox" id="marketing-consent" style="width:18px; height:18px; flex-shrink:0; margin-top:2px;">
+                    <label for="marketing-consent" style="margin:0; font-size:0.82em; line-height:1.5; color:var(--text-dark);">마케팅 정보 활용에 동의합니다 (선택) — 맞춤 혜택/이벤트 안내에 활용되며, 가입 후 마이페이지에서 언제든 변경할 수 있습니다.</label>
+                </div>
                 <button type="submit" class="submit-btn" id="submit-btn">회원가입</button>
                 <div class="msg" id="msg"></div>
             </form>
@@ -115,8 +119,12 @@
                 // 입력란에 직접 타이핑했거나 URL에서 채워진 추천코드를 로컬에 저장해둔다 - 가입 직후(즉시 세션 발급)든
                 // 이메일 인증 후 나중에 로그인하는 경우든, 로그인 세션이 확인되는 시점에 서버에 등록을 시도한다(withplus-common.js).
                 const referralCode = referralInput ? referralInput.value.trim().toUpperCase() : '';
+                const marketingConsent = document.getElementById('marketing-consent').checked;
                 try {
                     if (referralCode) localStorage.setItem('withplus_pending_referral', referralCode);
+                    // 이메일 인증이 필요해 가입 즉시 세션이 나오지 않는 경우를 대비해 동의 여부를 임시 저장해두고,
+                    // 이후 실제 로그인에 성공하는 시점(login.html)에 적용한다 - 추천인코드와 동일한 패턴.
+                    if (marketingConsent) localStorage.setItem('withplus_pending_marketing_consent', '1');
                 } catch (e) { /* ignore */ }
 
                 try {
@@ -137,6 +145,16 @@
                         msg.textContent = '가입이 완료되었습니다! 이동 중...';
                         msg.className = 'msg success';
                         await WithPlus.applyPendingReferralIfAny();
+                        if (marketingConsent) {
+                            try {
+                                await fetch('/api/me/profile', {
+                                    method: 'PATCH',
+                                    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + data.session.access_token },
+                                    body: JSON.stringify({ marketing_consent: true })
+                                });
+                                localStorage.removeItem('withplus_pending_marketing_consent');
+                            } catch (e) { /* 가입 자체는 이미 완료됐으므로 동의 반영 실패는 조용히 무시 - 마이페이지에서 다시 설정 가능 */ }
+                        }
                         setTimeout(() => { location.href = '/'; }, 600);
                     } else {
                         msg.textContent = '가입이 완료되었습니다. 이메일 인증 후 로그인해주세요.';

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>내 정보 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B; --primary-dark: #B0154F;
+            --bg-white: #FFFFFF; --bg-light: #F5F5F5;
+            --text-dark: #333333; --text-gray: #666666;
+            --border-color: #E0E0E0; --success: #2E7D32;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; background: var(--bg-white); }
+        .header { background: var(--bg-white); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-main { max-width: 1200px; margin: 0 auto; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; }
+        .logo span { font-size: 0.7em; color: var(--text-gray); display: block; font-weight: normal; }
+        .icon-button { background: none; border: none; cursor: pointer; font-size: 1.3em; color: var(--text-dark); position: relative; text-decoration: none; display: inline-block; }
+        .cart-badge { position: absolute; top: -8px; right: -8px; background: var(--primary-color); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: bold; }
+
+        .page-hero { background: linear-gradient(135deg, var(--primary-color), var(--primary-dark)); color: white; padding: 40px 20px; text-align: center; }
+        .page-hero h1 { font-size: 1.7em; margin-bottom: 8px; }
+        .page-hero p { opacity: 0.95; font-size: 0.92em; }
+
+        .wrap { max-width: 560px; margin: 40px auto 80px; padding: 0 20px; }
+        .form-box { background: var(--bg-light); border-radius: 14px; padding: 28px; }
+        .field { margin-bottom: 16px; }
+        .field label { display: block; font-size: 0.88em; font-weight: 600; margin-bottom: 6px; }
+        .field input, .field select { width: 100%; padding: 11px 14px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95em; font-family: inherit; background: white; }
+        .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+
+        .consent-box { background: white; border: 1px solid var(--border-color); border-radius: 10px; padding: 16px; margin: 20px 0; }
+        .consent-box label { display: flex; align-items: flex-start; gap: 10px; font-size: 0.9em; cursor: pointer; }
+        .consent-box input[type="checkbox"] { width: 18px; height: 18px; flex-shrink: 0; margin-top: 2px; }
+        .consent-box .desc { font-size: 0.82em; color: var(--text-gray); margin-top: 8px; padding-left: 28px; }
+
+        button[type="submit"] { width: 100%; background: var(--primary-color); color: white; border: none; padding: 14px; border-radius: 8px; font-size: 1em; font-weight: 700; cursor: pointer; }
+        button[type="submit"]:hover { background: var(--primary-dark); }
+        button[type="submit"]:disabled { opacity: 0.6; cursor: not-allowed; }
+        .form-msg { margin-top: 12px; font-size: 0.88em; padding: 10px 14px; border-radius: 8px; display: none; }
+        .form-msg.error { display: block; background: #FDEAEA; color: #C62828; }
+        .form-msg.ok { display: block; background: #E8F5E9; color: var(--success); }
+        .state-box { text-align: center; padding: 50px 20px; color: var(--text-gray); }
+        .state-box .emoji { font-size: 2.5em; margin-bottom: 10px; }
+
+        .footer { background: var(--text-dark); color: rgba(255,255,255,0.7); padding: 30px 20px; text-align: center; font-size: 0.85em; }
+        .footer a { color: #FF7FA8; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-main">
+            <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+            <div style="display:flex; gap:20px; align-items:center;">
+                <a class="icon-button" id="account-link" href="/login">👤</a>
+                <a class="icon-button" href="/cart">🛒<span class="cart-badge">0</span></a>
+            </div>
+        </div>
+    </header>
+
+    <div class="page-hero">
+        <h1>👤 내 정보</h1>
+        <p>추가 정보를 입력하면 회원님께 더 맞는 혜택 안내를 받을 수 있어요 (모두 선택 입력입니다)</p>
+    </div>
+
+    <div id="my-info-app" class="wrap">
+        <div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>
+    </div>
+
+    <footer class="footer">
+        &copy; 2026 WITH+. All rights reserved. · <a href="/terms">이용약관</a> · <a href="/privacy">개인정보처리방침</a>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        const APP = document.getElementById('my-info-app');
+
+        function renderForm(profile) {
+            APP.innerHTML = `
+                <div class="form-box">
+                    <form id="my-info-form">
+                        <div class="field"><label>이름</label><input type="text" id="mi-name" value="${WithPlus.escapeHtml(profile.full_name || '')}"></div>
+                        <div class="row2">
+                            <div class="field"><label>연락처</label><input type="text" id="mi-phone" value="${WithPlus.escapeHtml(profile.phone || '')}" placeholder="010-0000-0000"></div>
+                            <div class="field"><label>생년월일</label><input type="date" id="mi-birth" value="${profile.birth_date || ''}"></div>
+                        </div>
+                        <div class="row2">
+                            <div class="field">
+                                <label>성별</label>
+                                <select id="mi-gender">
+                                    <option value="">선택 안 함</option>
+                                    <option value="F" ${profile.gender === 'F' ? 'selected' : ''}>여성</option>
+                                    <option value="M" ${profile.gender === 'M' ? 'selected' : ''}>남성</option>
+                                </select>
+                            </div>
+                            <div class="field"><label>지역</label><input type="text" id="mi-region" value="${WithPlus.escapeHtml(profile.region || '')}" placeholder="예: 서울특별시"></div>
+                        </div>
+
+                        <div class="consent-box">
+                            <label>
+                                <input type="checkbox" id="mi-consent" ${profile.marketing_consent ? 'checked' : ''}>
+                                <span><strong>마케팅 정보 활용에 동의합니다 (선택)</strong><br>맞춤 혜택/이벤트 안내를 위해 위 정보(성별·연령대·지역)를 활용하는 데 동의합니다. 동의하지 않아도 서비스 이용에는 아무 제한이 없으며, 언제든 이 페이지에서 철회할 수 있습니다.</span>
+                            </label>
+                        </div>
+
+                        <button type="submit">저장하기</button>
+                        <div class="form-msg" id="mi-msg"></div>
+                    </form>
+                </div>
+            `;
+            document.getElementById('my-info-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const btn = e.target.querySelector('button[type="submit"]');
+                const msg = document.getElementById('mi-msg');
+                msg.className = 'form-msg'; msg.textContent = '';
+                btn.disabled = true; btn.textContent = '저장 중...';
+                try {
+                    const token = await WithPlus.getAccessToken();
+                    const res = await fetch('/api/me/profile', {
+                        method: 'PATCH',
+                        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+                        body: JSON.stringify({
+                            full_name: document.getElementById('mi-name').value.trim() || null,
+                            phone: document.getElementById('mi-phone').value.trim() || null,
+                            birth_date: document.getElementById('mi-birth').value || null,
+                            gender: document.getElementById('mi-gender').value || null,
+                            region: document.getElementById('mi-region').value.trim() || null,
+                            marketing_consent: document.getElementById('mi-consent').checked
+                        })
+                    });
+                    const json = await res.json();
+                    if (!res.ok || !json.success) throw new Error(json.message || '저장에 실패했습니다');
+                    msg.className = 'form-msg ok';
+                    msg.textContent = '저장되었습니다';
+                } catch (err) {
+                    msg.className = 'form-msg error';
+                    msg.textContent = err.message;
+                } finally {
+                    btn.disabled = false; btn.textContent = '저장하기';
+                }
+            });
+        }
+
+        async function init() {
+            if (window.WithPlus && WithPlus.initHeader) { WithPlus.initHeader(); }
+            const session = await WithPlus.getSession();
+            if (!session) {
+                APP.innerHTML = `<div class="state-box"><div class="emoji">🔒</div><h3>로그인이 필요합니다</h3><a href="/login?redirect=/my-info" style="display:inline-block; margin-top:16px; background:var(--primary-color); color:white; padding:12px 28px; border-radius:8px; text-decoration:none; font-weight:600;">로그인하러 가기</a></div>`;
+                return;
+            }
+            try {
+                const token = await WithPlus.getAccessToken();
+                const res = await fetch('/api/me', { headers: { Authorization: 'Bearer ' + token } });
+                const json = await res.json();
+                if (!json.success) throw new Error('내 정보를 불러오지 못했습니다');
+                renderForm(json.data);
+            } catch (err) {
+                APP.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+            }
+        }
+        init();
+    </script>
+</body>
+</html>

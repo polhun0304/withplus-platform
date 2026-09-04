@@ -228,6 +228,22 @@
                         return;
                     }
 
+                    // 회원가입 시 이메일 인증 대기 중이라 즉시 반영하지 못했던 마케팅 동의가 있으면 지금 반영한다
+                    // (join.html 참고 - 추천인코드와 동일한 "일단 저장해두고 실제 로그인 시점에 적용" 패턴)
+                    try {
+                        if (localStorage.getItem('withplus_pending_marketing_consent') === '1') {
+                            const { data: { session: freshSession } } = await client.auth.getSession();
+                            if (freshSession) {
+                                await fetch('/api/me/profile', {
+                                    method: 'PATCH',
+                                    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + freshSession.access_token },
+                                    body: JSON.stringify({ marketing_consent: true })
+                                });
+                            }
+                            localStorage.removeItem('withplus_pending_marketing_consent');
+                        }
+                    } catch (e) { /* 로그인 자체는 이미 성공했으므로 동의 반영 실패는 조용히 무시 */ }
+
                     msg.textContent = '로그인 성공! 이동 중...';
                     msg.className = 'msg success';
                     setTimeout(() => { location.href = '/'; }, 600);

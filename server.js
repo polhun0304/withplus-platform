@@ -639,7 +639,7 @@ app.get('/api/me', authenticate, async (req, res) => {
   try {
     const { data: profile, error } = await supabase
       .from('profiles')
-      .select('id, email, full_name, role, is_owner')
+      .select('id, email, full_name, role, is_owner, phone, birth_date, gender, region, marketing_consent')
       .eq('id', req.user.id)
       .single();
 
@@ -654,6 +654,52 @@ app.get('/api/me', authenticate, async (req, res) => {
     res.json({ success: true, data: profile, timestamp: new Date().toISOString() });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch profile', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 회원 본인 정보(이름/연락처/생년월일/성별/지역) + 마케팅 정보 활용 동의 수정 - 인구통계 타겟 마케팅(관리자
+// 세그먼트 필터링)의 입력 데이터가 되는 항목들이다. 모두 선택 입력이며, marketing_consent가 true인 회원만
+// 관리자의 타겟 마케팅 발송 대상이 된다(GET/POST /api/admin/marketing-segments/*).
+app.patch('/api/me/profile', authenticate, async (req, res) => {
+  try {
+    const { full_name, phone, birth_date, gender, region, marketing_consent } = req.body;
+    const updates = { updated_at: new Date().toISOString() };
+
+    if (full_name !== undefined) updates.full_name = full_name ? String(full_name).trim() : null;
+    if (phone !== undefined) updates.phone = phone ? String(phone).trim() : null;
+    if (region !== undefined) updates.region = region ? String(region).trim() : null;
+
+    if (birth_date !== undefined) {
+      if (birth_date && !/^\d{4}-\d{2}-\d{2}$/.test(birth_date)) {
+        return res.status(400).json({ error: 'Bad Request', message: '생년월일 형식이 올바르지 않습니다 (YYYY-MM-DD)', timestamp: new Date().toISOString() });
+      }
+      updates.birth_date = birth_date || null;
+    }
+
+    if (gender !== undefined) {
+      if (gender && !['M', 'F'].includes(gender)) {
+        return res.status(400).json({ error: 'Bad Request', message: '성별 값이 올바르지 않습니다', timestamp: new Date().toISOString() });
+      }
+      updates.gender = gender || null;
+    }
+
+    if (marketing_consent !== undefined) {
+      updates.marketing_consent = !!marketing_consent;
+      updates.marketing_consent_at = new Date().toISOString(); // 동의든 철회든 시점을 감사 목적으로 매번 갱신
+    }
+
+    const { data, error } = await supabase
+      .from('profiles')
+      .update(updates)
+      .eq('id', req.user.id)
+      .select('id, email, full_name, phone, birth_date, gender, region, marketing_consent, marketing_consent_at')
+      .single();
+    if (error) throw error;
+
+    res.json({ success: true, data, message: '내 정보가 저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating own profile:', err);
+    res.status(500).json({ error: 'Failed to update profile', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
@@ -5078,6 +5124,96 @@ app.get('/api/wholesale/products', authenticate, requireRole(['wholesale', 'admi
   } catch (err) {
     console.error('Error fetching wholesale products:', err);
     res.status(500).json({ error: 'Failed to fetch wholesale products', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 인구통계 타겟 마케팅 (관리자 전용) — 미팅 요청사항 격차분석 보고서 6번 항목의 최소 버전(MVP).
+// 카카오 로그인/외부 광고매체(카카오모먼트 등) 연동까지는 아직 아니고, "마케팅 정보 활용에 동의한 회원"만을
+// 대상으로 성별/연령대/지역으로 필터링해 관리자가 직접 알림을 발송하는 내부 세그먼트 도구다.
+// 필터 조건과 무관하게 marketing_consent=true인 회원만 대상이 된다 - 동의 안 한 회원은 절대 포함되지 않는다.
+// ============================================
+function birthDateRangeFromAge(age_min, age_max) {
+  // 나이는 "생일이 지났는지"까지 정확히 계산하지 않고 연 단위로 근사한다 - 마케팅 세그먼트 용도로는 충분하다.
+  const today = new Date();
+  const yearsAgoISO = (years) => {
+    const d = new Date(today);
+    d.setFullYear(d.getFullYear() - years);
+    return d.toISOString().slice(0, 10);
+  };
+  const range = {};
+  if (age_min !== undefined && age_min !== null && age_min !== '') {
+    range.maxBirthDate = yearsAgoISO(Number(age_min)); // 나이 하한 -> 생년월일 상한(더 최근에 태어난 사람 제외)
+  }
+  if (age_max !== undefined && age_max !== null && age_max !== '') {
+    range.minBirthDate = yearsAgoISO(Number(age_max) + 1); // 나이 상한 -> 생년월일 하한
+  }
+  return range;
+}
+
+function buildMarketingSegmentQuery(reqQuery) {
+  const { gender, age_min, age_max, region } = reqQuery;
+  let query = supabase.from('profiles').select('id, email, full_name, gender, birth_date, region', { count: 'exact' }).eq('marketing_consent', true).eq('is_active', true);
+  if (gender && ['M', 'F'].includes(gender)) query = query.eq('gender', gender);
+  if (region && String(region).trim()) query = query.ilike('region', `%${String(region).trim()}%`);
+  const { minBirthDate, maxBirthDate } = birthDateRangeFromAge(age_min, age_max);
+  if (maxBirthDate) query = query.lte('birth_date', maxBirthDate);
+  if (minBirthDate) query = query.gt('birth_date', minBirthDate);
+  return query;
+}
+
+// 세그먼트 미리보기 - 실제 발송 전에 대상 인원수와 샘플을 먼저 확인
+app.get('/api/admin/marketing-segments/preview', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const query = buildMarketingSegmentQuery(req.query).order('created_at', { ascending: false }).limit(50);
+    const { data, error, count } = await query;
+    if (error) throw error;
+    res.json({ success: true, count: count ?? (data || []).length, sample: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error previewing marketing segment:', err);
+    res.status(500).json({ error: 'Failed to preview marketing segment', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 세그먼트 대상 전원에게 알림 발송 (기존 알림함 인프라 재사용 - notifications_with)
+app.post('/api/admin/marketing-segments/notify', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { title, message, link, gender, age_min, age_max, region } = req.body || {};
+    if (!title || !String(title).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: '알림 제목(title)은 필수입니다', timestamp: new Date().toISOString() });
+    }
+    if (!message || !String(message).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: '알림 내용(message)은 필수입니다', timestamp: new Date().toISOString() });
+    }
+
+    const query = buildMarketingSegmentQuery({ gender, age_min, age_max, region });
+    const { data: targets, error: findErr } = await query;
+    if (findErr) throw findErr;
+    if (!targets || targets.length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '조건에 해당하는(마케팅 동의) 회원이 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const rows = targets.map(t => ({
+      user_id: t.id,
+      type: 'marketing_targeted',
+      title: String(title).trim(),
+      message: String(message).trim(),
+      link: link || null
+    }));
+    const { error: insErr } = await supabase.from('notifications_with').insert(rows);
+    if (insErr) throw insErr;
+
+    try {
+      await supabase.from('admin_actions').insert([{
+        actor_id: req.user.id, action: 'marketing_segment_notify', target_type: 'marketing_segment', target_id: null,
+        meta: { count: targets.length, filters: { gender: gender || null, age_min: age_min || null, age_max: age_max || null, region: region || null }, title: String(title).trim() }
+      }]);
+    } catch (_) { /* 감사로그 실패는 발송 자체를 막지 않음 */ }
+
+    res.json({ success: true, count: targets.length, message: `${targets.length}명에게 발송했습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error sending marketing segment notification:', err);
+    res.status(500).json({ error: 'Failed to send marketing segment notification', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
@@ -14560,7 +14696,7 @@ const STATIC_INFO_PAGES = [
   'about', 'careers', 'press', 'sustainability',
   'support', 'faq', 'contact', 'returns',
   'terms', 'privacy', 'cookie', 'guides',
-  'partner', 'seller', 'affiliate', 'medical-voucher', 'wholesale'
+  'partner', 'seller', 'affiliate', 'medical-voucher', 'wholesale', 'my-info'
 ];
 STATIC_INFO_PAGES.forEach(slug => {
   app.get('/' + slug, (req, res) => {

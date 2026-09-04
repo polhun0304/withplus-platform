@@ -1487,6 +1487,7 @@
                     ${isAdmin ? '<button class="tab-btn" data-tab="suppliers">🏭 공급자 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="seller-applications">🆕 판매자 입점신청</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="wholesale-applications">🏭 도매몰 입점신청</button>' : ''}
+                    ${isAdmin ? '<button class="tab-btn" data-tab="marketing-segments">🎯 타겟 마케팅</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="communities">🏢 분양 조직 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="community-settlements">💵 분양조직 정산</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="boards">📝 게시판 관리</button>' : ''}
@@ -1677,6 +1678,50 @@
                         </select>
                     </div>
                     <div id="wholesale-applications-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                </div>
+                <div class="tab-panel" id="tab-marketing-segments">
+                    <div class="panel-toolbar">
+                        <span style="color:var(--text-gray); font-size:0.9em;">"마케팅 정보 활용"에 동의한 회원 중에서만 성별/연령대/지역으로 조건을 좁혀 알림을 발송합니다. 동의하지 않은 회원은 어떤 조건을 걸어도 대상에 포함되지 않습니다.</span>
+                    </div>
+                    <div style="background:var(--bg-light); border-radius:12px; padding:20px; margin-bottom:20px;">
+                        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px,1fr)); gap:14px; margin-bottom:14px;">
+                            <div>
+                                <label style="display:block; font-size:0.85em; margin-bottom:6px; color:var(--text-gray);">성별</label>
+                                <select id="mkt-gender" style="width:100%; padding:9px 10px; border:1px solid var(--border-color); border-radius:6px;">
+                                    <option value="">전체</option>
+                                    <option value="F">여성</option>
+                                    <option value="M">남성</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="display:block; font-size:0.85em; margin-bottom:6px; color:var(--text-gray);">최소 나이</label>
+                                <input type="number" id="mkt-age-min" min="0" max="120" placeholder="예: 20" style="width:100%; padding:9px 10px; border:1px solid var(--border-color); border-radius:6px;">
+                            </div>
+                            <div>
+                                <label style="display:block; font-size:0.85em; margin-bottom:6px; color:var(--text-gray);">최대 나이</label>
+                                <input type="number" id="mkt-age-max" min="0" max="120" placeholder="예: 29" style="width:100%; padding:9px 10px; border:1px solid var(--border-color); border-radius:6px;">
+                            </div>
+                            <div>
+                                <label style="display:block; font-size:0.85em; margin-bottom:6px; color:var(--text-gray);">지역 (부분일치)</label>
+                                <input type="text" id="mkt-region" placeholder="예: 서울" style="width:100%; padding:9px 10px; border:1px solid var(--border-color); border-radius:6px;">
+                            </div>
+                        </div>
+                        <button type="button" class="btn btn-secondary" id="mkt-preview-btn">🔍 대상 인원 미리보기</button>
+                        <div id="mkt-preview-result" style="margin-top:14px;"></div>
+                    </div>
+                    <div style="background:var(--bg-light); border-radius:12px; padding:20px;">
+                        <h3 style="margin-bottom:12px; font-size:1em;">📣 알림 발송</h3>
+                        <div style="margin-bottom:12px;">
+                            <label style="display:block; font-size:0.85em; margin-bottom:6px; color:var(--text-gray);">제목</label>
+                            <input type="text" id="mkt-title" placeholder="예: 20대 여성 고객님을 위한 특가 안내" style="width:100%; padding:10px 12px; border:1px solid var(--border-color); border-radius:6px;">
+                        </div>
+                        <div style="margin-bottom:14px;">
+                            <label style="display:block; font-size:0.85em; margin-bottom:6px; color:var(--text-gray);">내용</label>
+                            <textarea id="mkt-message" rows="3" placeholder="알림함에 표시될 내용을 입력하세요" style="width:100%; padding:10px 12px; border:1px solid var(--border-color); border-radius:6px; font-family:inherit;"></textarea>
+                        </div>
+                        <button type="button" class="btn btn-primary" id="mkt-send-btn">위 조건의 대상에게 발송</button>
+                        <div id="mkt-send-result" style="margin-top:12px;"></div>
+                    </div>
                 </div>
                 <div class="tab-panel" id="tab-communities">
                     <div class="panel-toolbar">
@@ -6668,6 +6713,66 @@
                 document.getElementById('wapp-status-filter')?.addEventListener('change', loadWholesaleApplications);
                 document.querySelector('[data-tab="wholesale-applications"]').addEventListener('click', () => {
                     loadWholesaleApplications();
+                });
+
+                // ===== 인구통계 타겟 마케팅 (관리자 전용) =====
+                function mktQueryString() {
+                    const params = new URLSearchParams();
+                    const gender = document.getElementById('mkt-gender').value;
+                    const ageMin = document.getElementById('mkt-age-min').value;
+                    const ageMax = document.getElementById('mkt-age-max').value;
+                    const region = document.getElementById('mkt-region').value.trim();
+                    if (gender) params.set('gender', gender);
+                    if (ageMin) params.set('age_min', ageMin);
+                    if (ageMax) params.set('age_max', ageMax);
+                    if (region) params.set('region', region);
+                    return params.toString();
+                }
+
+                document.getElementById('mkt-preview-btn')?.addEventListener('click', async () => {
+                    const btn = document.getElementById('mkt-preview-btn');
+                    const area = document.getElementById('mkt-preview-result');
+                    btn.disabled = true;
+                    area.innerHTML = `<div class="state-box" style="padding:20px;"><div class="emoji">⏳</div></div>`;
+                    try {
+                        const { ok, json } = await authedFetch(`/api/admin/marketing-segments/preview?${mktQueryString()}`);
+                        if (!ok || !json.success) throw new Error(json.message || '조회에 실패했습니다');
+                        area.innerHTML = `
+                            <div style="background:white; border-radius:8px; padding:14px 16px; border:1px solid var(--border-color);">
+                                <strong style="font-size:1.1em; color:var(--primary-color);">${json.count.toLocaleString()}명</strong>이 조건에 해당합니다 (마케팅 동의 회원만).
+                                ${json.sample.length > 0 ? `<div style="margin-top:10px; font-size:0.85em; color:var(--text-gray);">샘플: ${json.sample.slice(0, 5).map(s => WithPlus.escapeHtml(s.full_name || s.email)).join(', ')}${json.sample.length > 5 ? ' 외' : ''}</div>` : ''}
+                            </div>`;
+                    } catch (err) {
+                        area.innerHTML = `<div class="state-box" style="padding:14px;"><p style="color:#C62828;">${WithPlus.escapeHtml(err.message)}</p></div>`;
+                    } finally {
+                        btn.disabled = false;
+                    }
+                });
+
+                document.getElementById('mkt-send-btn')?.addEventListener('click', async () => {
+                    const btn = document.getElementById('mkt-send-btn');
+                    const area = document.getElementById('mkt-send-result');
+                    const title = document.getElementById('mkt-title').value.trim();
+                    const message = document.getElementById('mkt-message').value.trim();
+                    if (!title || !message) { alert('제목과 내용을 모두 입력해주세요'); return; }
+                    if (!confirm('입력한 조건의 대상 전원에게 알림을 발송하시겠습니까? 먼저 "대상 인원 미리보기"로 인원수를 확인하시는 것을 권장합니다.')) return;
+                    btn.disabled = true;
+                    area.innerHTML = '';
+                    try {
+                        const params = new URLSearchParams(mktQueryString());
+                        const body = { title, message };
+                        if (params.get('gender')) body.gender = params.get('gender');
+                        if (params.get('age_min')) body.age_min = params.get('age_min');
+                        if (params.get('age_max')) body.age_max = params.get('age_max');
+                        if (params.get('region')) body.region = params.get('region');
+                        const { ok, json } = await authedFetch('/api/admin/marketing-segments/notify', { method: 'POST', body: JSON.stringify(body) });
+                        if (!ok || !json.success) throw new Error(json.message || '발송에 실패했습니다');
+                        area.innerHTML = `<div class="state-box" style="padding:14px;"><p style="color:var(--success-color, #2E7D32); font-weight:600;">✅ ${json.count.toLocaleString()}명에게 발송했습니다</p></div>`;
+                    } catch (err) {
+                        area.innerHTML = `<div class="state-box" style="padding:14px;"><p style="color:#C62828;">${WithPlus.escapeHtml(err.message)}</p></div>`;
+                    } finally {
+                        btn.disabled = false;
+                    }
                 });
 
                 // ===== 분양 조직(커뮤니티) 관리 (관리자 전용) =====
