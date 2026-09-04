@@ -244,6 +244,16 @@
         <div class="header-main">
             <a href="/" class="logo">WITH+ <span>관리자 페이지</span></a>
             <div class="header-right">
+                <div id="admin-notif-wrap" style="position:relative; display:none;">
+                    <button id="admin-notif-bell" style="background:none; border:none; cursor:pointer; font-size:1.2em; position:relative;" title="알림">🔔<span id="admin-notif-badge" style="display:none; position:absolute; top:-4px; right:-8px; background:#E53935; color:#fff; border-radius:10px; font-size:0.6em; padding:1px 5px; font-weight:bold;">0</span></button>
+                    <div id="admin-notif-panel" style="display:none; position:absolute; right:0; top:130%; width:320px; max-height:420px; overflow-y:auto; background:#fff; border:1px solid var(--border-color); border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,0.12); z-index:1000;">
+                        <div style="padding:10px 12px; border-bottom:1px solid var(--border-color); display:flex; justify-content:space-between; align-items:center;">
+                            <strong style="font-size:0.9em;">알림</strong>
+                            <button id="admin-notif-read-all-btn" style="font-size:0.78em; background:none; border:none; color:var(--primary-color); cursor:pointer;">모두 읽음</button>
+                        </div>
+                        <div id="admin-notif-list" style="font-size:0.85em;"></div>
+                    </div>
+                </div>
                 <span id="who-am-i"></span>
                 <a href="/mypage">마이페이지</a>
                 <a href="/" >쇼핑몰 홈</a>
@@ -984,6 +994,72 @@
             }
 
             document.getElementById('who-am-i').textContent = `${ME.email} (${ME.role})`;
+
+            // ===== 🔔 관리자/공급자 알림 배지 (재고 임박 알림 등, 범용 notifications_with 재사용) =====
+            if (isAdmin || isProvider) {
+                const notifWrap = document.getElementById('admin-notif-wrap');
+                const notifBell = document.getElementById('admin-notif-bell');
+                const notifBadge = document.getElementById('admin-notif-badge');
+                const notifPanel = document.getElementById('admin-notif-panel');
+                const notifList = document.getElementById('admin-notif-list');
+                const notifReadAllBtn = document.getElementById('admin-notif-read-all-btn');
+                notifWrap.style.display = '';
+
+                async function loadAdminNotifications() {
+                    try {
+                        const token = await WithPlus.getAccessToken();
+                        const res = await fetch('/api/me/notifications', { headers: { Authorization: 'Bearer ' + token } });
+                        const json = await res.json();
+                        if (!res.ok || !json.success) return;
+                        const items = json.data || [];
+                        const unread = json.unread_count || 0;
+                        if (unread > 0) { notifBadge.style.display = ''; notifBadge.textContent = unread > 99 ? '99+' : String(unread); }
+                        else { notifBadge.style.display = 'none'; }
+                        if (items.length === 0) {
+                            notifList.innerHTML = '<div style="padding:16px; text-align:center; color:var(--text-gray);">알림이 없습니다</div>';
+                            return;
+                        }
+                        notifList.innerHTML = items.slice(0, 20).map(n => `
+                            <div class="admin-notif-item" data-id="${n.id}" data-link="${WithPlus.escapeHtml(n.link || '')}" style="padding:9px 12px; border-bottom:1px solid #F0F0F0; cursor:pointer; ${n.is_read ? 'opacity:0.55;' : 'background:#FFF8F0;'}">
+                                <div style="font-weight:600;">${WithPlus.escapeHtml(n.title || '알림')}</div>
+                                <div style="color:var(--text-gray); margin-top:2px;">${WithPlus.escapeHtml(n.message || '')}</div>
+                            </div>`).join('');
+                        notifList.querySelectorAll('.admin-notif-item').forEach(item => {
+                            item.addEventListener('click', async () => {
+                                const id = item.getAttribute('data-id');
+                                const link = item.getAttribute('data-link');
+                                try {
+                                    const token = await WithPlus.getAccessToken();
+                                    await fetch('/api/me/notifications/' + id + '/read', { method: 'PATCH', headers: { Authorization: 'Bearer ' + token } });
+                                } catch (e) { /* 읽음 처리 실패해도 화면 진행에는 지장 없음 */ }
+                                if (link) location.hash = link.replace(/^\/admin/, '') || '#';
+                                notifPanel.style.display = 'none';
+                                loadAdminNotifications();
+                            });
+                        });
+                    } catch (e) { /* 알림 로딩 실패는 조용히 무시 - 관리자 화면 전체를 막지 않음 */ }
+                }
+
+                notifBell.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const willOpen = notifPanel.style.display === 'none';
+                    notifPanel.style.display = willOpen ? '' : 'none';
+                    if (willOpen) loadAdminNotifications();
+                });
+                document.addEventListener('click', (e) => { if (!notifWrap.contains(e.target)) notifPanel.style.display = 'none'; });
+                if (notifReadAllBtn) {
+                    notifReadAllBtn.addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        try {
+                            const token = await WithPlus.getAccessToken();
+                            await fetch('/api/me/notifications/read-all', { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
+                        } catch (err) { /* noop */ }
+                        loadAdminNotifications();
+                    });
+                }
+                loadAdminNotifications();
+                setInterval(loadAdminNotifications, 120000);
+            }
 
             if (!isAdmin && !isProvider) {
                 // 본부 관리자(admin/super_admin)도 공급자(provider)도 아니지만, 특정 분양 조직의 담당 관리자로

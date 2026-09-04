@@ -6696,6 +6696,104 @@ app.get('/api/admin/low-stock', authenticate, requireRole(['provider', 'admin', 
   }
 });
 
+// ============================================
+// ⚠️ 재고 임박(저재고) 자동 알림 - 미팅 요청사항 격차분석 보고서 4번 항목
+// 기존 /api/admin/low-stock 조회 로직을 그대로 재사용해, 관리자가 직접 들어가 봐야만 알 수 있던 것을
+// node-cron 정기 스캔(6시간마다)으로 바꿔 notifications_with에 실제 알림을 쌓는다.
+// 같은 상품/옵션에 24시간 내 중복 알림을 보내지 않기 위해 low_stock_alerts_with로 최근 발송 이력을 추적한다.
+// 장바구니 이탈 리마인더(runCartReminderScan)와 동일한 패턴: node-cron 정기 실행 + 관리자 수동 실행(run-now) 겸용.
+// ============================================
+const LOW_STOCK_ALERT_THRESHOLD = 5;
+const LOW_STOCK_ALERT_RESEND_HOURS = 24;
+
+async function runLowStockAlertScan(opts = {}) {
+  const result = { scanned: 0, alerted: 0, admin_notified: 0, provider_notified: 0 };
+  try {
+    const { data: lowProducts, error: pErr } = await supabase
+      .from('products_with').select('id, name, stock, supplier_id')
+      .eq('status', 'active').lte('stock', LOW_STOCK_ALERT_THRESHOLD);
+    if (pErr) throw pErr;
+
+    const { data: lowVariants, error: vErr } = await supabase
+      .from('product_variants_with')
+      .select('id, name, stock, product_id, products_with!inner(id, name, supplier_id, status)')
+      .eq('is_active', true).lte('stock', LOW_STOCK_ALERT_THRESHOLD).eq('products_with.status', 'active');
+    if (vErr) throw vErr;
+
+    const items = [
+      ...(lowProducts || []).map(p => ({ product_id: p.id, variant_id: null, name: p.name, stock: p.stock, supplier_id: p.supplier_id })),
+      ...(lowVariants || []).map(v => ({ product_id: v.product_id, variant_id: v.id, name: `${v.products_with ? v.products_with.name : ''} - ${v.name}`, stock: v.stock, supplier_id: v.products_with ? v.products_with.supplier_id : null }))
+    ];
+    result.scanned = items.length;
+    if (items.length === 0) return result;
+
+    // 최근 24시간 내 이미 알림 보낸 항목은 제외 (force=true면 무시하고 전부 재알림 - 관리자 수동 테스트용)
+    const resendCutoff = new Date(Date.now() - LOW_STOCK_ALERT_RESEND_HOURS * 3600 * 1000).toISOString();
+    let toAlert = items;
+    if (!opts.force) {
+      const { data: recent } = await supabase.from('low_stock_alerts_with').select('product_id, variant_id').gte('notified_at', resendCutoff);
+      const recentKeys = new Set((recent || []).map(r => `${r.product_id}|${r.variant_id || ''}`));
+      toAlert = items.filter(i => !recentKeys.has(`${i.product_id}|${i.variant_id || ''}`));
+    }
+    if (toAlert.length === 0) return result;
+    result.alerted = toAlert.length;
+
+    await supabase.from('low_stock_alerts_with').upsert(
+      toAlert.map(i => ({ product_id: i.product_id, variant_id: i.variant_id, last_stock: i.stock, notified_at: new Date().toISOString() })),
+      { onConflict: 'product_id,variant_id' }
+    );
+
+    const names = toAlert.map(i => `${i.name}(${i.stock}개)`);
+    const summaryMsg = `재고 임박 상품 ${toAlert.length}건: ${names.slice(0, 5).join(', ')}${names.length > 5 ? ` 외 ${names.length - 5}건` : ''}`;
+
+    const { data: admins } = await supabase.from('profiles').select('id').in('role', ['admin', 'super_admin']);
+    if (admins && admins.length > 0) {
+      await supabase.from('notifications_with').insert(admins.map(a => ({
+        user_id: a.id, type: 'low_stock_alert', title: '⚠️ 재고 임박 알림', message: summaryMsg, link: '/admin#products'
+      })));
+      result.admin_notified = admins.length;
+    }
+
+    const bySupplier = {};
+    toAlert.forEach(i => { if (i.supplier_id) { (bySupplier[i.supplier_id] = bySupplier[i.supplier_id] || []).push(i); } });
+    const supplierIds = Object.keys(bySupplier);
+    if (supplierIds.length > 0) {
+      const rows = supplierIds.map(sid => {
+        const mine = bySupplier[sid];
+        const mineNames = mine.map(i => `${i.name}(${i.stock}개)`);
+        return {
+          user_id: sid, type: 'low_stock_alert', title: '⚠️ 재고 임박 알림',
+          message: `내 상품 중 재고 임박 ${mine.length}건: ${mineNames.slice(0, 5).join(', ')}${mineNames.length > 5 ? ` 외 ${mineNames.length - 5}건` : ''}`,
+          link: '/admin#products'
+        };
+      });
+      await supabase.from('notifications_with').insert(rows);
+      result.provider_notified = supplierIds.length;
+    }
+
+    return result;
+  } catch (err) {
+    console.error('Error running low stock alert scan:', err);
+    return result;
+  }
+}
+
+// 6시간마다 자동 스캔
+cron.schedule('0 */6 * * *', () => {
+  runLowStockAlertScan().catch(err => console.error('Low stock alert cron error:', err));
+});
+
+// 관리자: 지금 즉시 스캔 실행 (24시간 중복방지 무시하고 강제 재알림 - 테스트/수동 발송 목적)
+app.post('/api/admin/low-stock-alert/run-now', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const result = await runLowStockAlertScan({ force: true });
+    res.json({ success: true, data: result, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error running low stock alert scan:', err);
+    res.status(500).json({ error: 'Failed to run low stock alert scan', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 
 // ============================================
 // 창고관리(WMS) API — 재고원장/바코드스캔/로케이션/디지털트윈/AGV(시뮬레이션)
