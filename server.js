@@ -4880,6 +4880,208 @@ app.put('/api/admin/supplier-applications/:id/reject', authenticate, requireRole
 });
 
 // ============================================
+// 도매몰(wholesale) 회원 간편입점신청 — 위 판매자(공급자) 입점신청과 동일한 패턴.
+// 승인되면 profiles.role이 'wholesale'로 바뀌고, 이 계정으로 로그인하면 도매채널가로 주문할 수 있게 된다
+// (실제 가격 대체 로직은 POST /api/orders 참고). 판매 권한(provider)과는 별개의 "매입 회원" 개념이다.
+// ============================================
+
+app.post('/api/me/wholesale-applications', authenticate, async (req, res) => {
+  try {
+    const { company_name, business_number, contact_person, phone, email, address, category, business_type, product_description } = req.body;
+    if (!company_name || !String(company_name).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: '상호명(company_name)은 필수입니다', timestamp: new Date().toISOString() });
+    }
+    // 사업자등록번호는 필수 입력으로 한다 - 도매가는 사업자 간 거래(B2B)를 전제로 하므로 사업자정보 확인 없이는 승인하지 않는다.
+    if (!business_number || !String(business_number).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: '사업자등록번호(business_number)는 필수입니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: profile } = await supabase.from('profiles').select('role').eq('id', req.user.id).single();
+    if (profile && ['wholesale', 'admin', 'super_admin'].includes(profile.role)) {
+      return res.status(400).json({ error: 'Bad Request', message: '이미 도매 회원(또는 관리자) 권한을 가진 계정입니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: existingPending } = await supabase.from('wholesale_applications_with').select('id').eq('applicant_id', req.user.id).eq('status', 'pending').maybeSingle();
+    if (existingPending) {
+      return res.status(409).json({ error: 'Conflict', message: '이미 심사 대기 중인 도매몰 입점 신청이 있습니다', timestamp: new Date().toISOString() });
+    }
+
+    let bizVerified = false, bizStatus = null;
+    if (business_number) {
+      if (!isValidBusinessNumberFormat(business_number)) {
+        return res.status(400).json({ error: 'Bad Request', message: '유효하지 않은 사업자등록번호입니다 (형식 오류)', timestamp: new Date().toISOString() });
+      }
+      const ntsResult = await verifyBusinessNumberWithNTS(business_number);
+      if (ntsResult.checked) {
+        if (!ntsResult.exists) {
+          return res.status(400).json({ error: 'Bad Request', message: '국세청에 등록되지 않은 사업자등록번호입니다', timestamp: new Date().toISOString() });
+        }
+        if (ntsResult.status === '폐업자') {
+          return res.status(400).json({ error: 'Bad Request', message: `국세청 조회 결과 폐업 상태인 사업자등록번호입니다 (상태: ${ntsResult.status})`, timestamp: new Date().toISOString() });
+        }
+        bizVerified = ntsResult.active;
+        bizStatus = ntsResult.status;
+      }
+    }
+
+    const { data, error } = await supabase.from('wholesale_applications_with').insert([{
+      applicant_id: req.user.id,
+      company_name: String(company_name).trim(),
+      business_number: business_number || null,
+      business_number_verified: bizVerified,
+      business_number_status: bizStatus,
+      contact_person: contact_person || null,
+      phone: phone || null,
+      email: email || null,
+      address: address || null,
+      category: category || null,
+      business_type: business_type || null,
+      product_description: product_description || null,
+      status: 'pending'
+    }]).select().single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data, message: '도매몰 입점 신청이 접수되었습니다. 검토 후 결과를 알려드립니다.', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating wholesale application:', err);
+    res.status(500).json({ error: 'Failed to create wholesale application', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 내 신청 이력(가장 최근 것 기준 상태 확인용 — 도매몰 페이지에서 사용)
+app.get('/api/me/wholesale-applications', authenticate, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('wholesale_applications_with').select('*').eq('applicant_id', req.user.id).order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching my wholesale applications:', err);
+    res.status(500).json({ error: 'Failed to fetch wholesale applications', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/wholesale-applications', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    let query = supabase.from('wholesale_applications_with').select('*, profiles!wholesale_applications_with_applicant_id_fkey(email, full_name)').order('created_at', { ascending: false });
+    if (req.query.status) query = query.eq('status', req.query.status);
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching wholesale applications:', err);
+    res.status(500).json({ error: 'Failed to fetch wholesale applications', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/wholesale-applications/:id/approve', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: appRow, error: findErr } = await supabase.from('wholesale_applications_with').select('*').eq('id', req.params.id).maybeSingle();
+    if (findErr) throw findErr;
+    if (!appRow) return res.status(404).json({ error: 'Not Found', message: '신청을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (appRow.status !== 'pending') return res.status(400).json({ error: 'Bad Request', message: '이미 처리된 신청입니다', timestamp: new Date().toISOString() });
+
+    const { data: applicantProfile } = await supabase.from('profiles').select('role').eq('id', appRow.applicant_id).maybeSingle();
+    if (!applicantProfile) return res.status(404).json({ error: 'Not Found', message: '신청자 계정을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (!['member'].includes(applicantProfile.role)) {
+      return res.status(400).json({ error: 'Bad Request', message: `신청자 계정의 현재 권한(${applicantProfile.role})은 이 화면에서 승인 처리할 수 없습니다`, timestamp: new Date().toISOString() });
+    }
+
+    const { error: roleErr } = await supabase.from('profiles').update({ role: 'wholesale' }).eq('id', appRow.applicant_id);
+    if (roleErr) throw roleErr;
+
+    const { data, error } = await supabase.from('wholesale_applications_with').update({
+      status: 'approved', reviewed_by: req.user.id, reviewed_at: new Date().toISOString(), updated_at: new Date().toISOString()
+    }).eq('id', req.params.id).select().single();
+    if (error) throw error;
+
+    await supabase.from('notifications_with').insert([{
+      user_id: appRow.applicant_id,
+      type: 'wholesale_application_approved',
+      title: '도매몰 입점 신청이 승인되었습니다',
+      message: `"${appRow.company_name}" 도매몰 입점 신청이 승인되었습니다. 이제 로그인 후 도매가로 주문하실 수 있습니다.`,
+      link: '/wholesale'
+    }]);
+
+    try {
+      await supabase.from('admin_actions').insert([{
+        actor_id: req.user.id, action: 'wholesale_application_approve', target_type: 'wholesale_application', target_id: req.params.id,
+        meta: { applicant_id: appRow.applicant_id, company_name: appRow.company_name }
+      }]);
+    } catch (_) { /* 감사로그 기록 실패는 승인 처리 자체를 막지 않음 */ }
+
+    res.json({ success: true, data, message: '도매몰 입점 신청을 승인했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error approving wholesale application:', err);
+    res.status(500).json({ error: 'Failed to approve wholesale application', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/wholesale-applications/:id/reject', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { reason } = req.body;
+    const { data: appRow, error: findErr } = await supabase.from('wholesale_applications_with').select('*').eq('id', req.params.id).maybeSingle();
+    if (findErr) throw findErr;
+    if (!appRow) return res.status(404).json({ error: 'Not Found', message: '신청을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (appRow.status !== 'pending') return res.status(400).json({ error: 'Bad Request', message: '이미 처리된 신청입니다', timestamp: new Date().toISOString() });
+
+    const { data, error } = await supabase.from('wholesale_applications_with').update({
+      status: 'rejected', reviewed_by: req.user.id, reviewed_at: new Date().toISOString(), rejection_reason: reason || null, updated_at: new Date().toISOString()
+    }).eq('id', req.params.id).select().single();
+    if (error) throw error;
+
+    await supabase.from('notifications_with').insert([{
+      user_id: appRow.applicant_id,
+      type: 'wholesale_application_rejected',
+      title: '도매몰 입점 신청이 반려되었습니다',
+      message: reason ? `"${appRow.company_name}" 도매몰 입점 신청이 반려되었습니다. 사유: ${reason}` : `"${appRow.company_name}" 도매몰 입점 신청이 반려되었습니다.`,
+      link: '/wholesale'
+    }]);
+
+    try {
+      await supabase.from('admin_actions').insert([{
+        actor_id: req.user.id, action: 'wholesale_application_reject', target_type: 'wholesale_application', target_id: req.params.id,
+        meta: { applicant_id: appRow.applicant_id, company_name: appRow.company_name, reason: reason || null }
+      }]);
+    } catch (_) { /* 감사로그 기록 실패는 반려 처리 자체를 막지 않음 */ }
+
+    res.json({ success: true, data, message: '도매몰 입점 신청을 반려했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error rejecting wholesale application:', err);
+    res.status(500).json({ error: 'Failed to reject wholesale application', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 도매몰 카탈로그 - 도매 회원(및 관리자)만 조회 가능. 도매채널가가 지정된 상품이 없으면 온라인 판매가로 폴백해 보여준다
+// (채널가 조회 화면 GET /api/admin/products/:id/channel-prices 와 동일한 폴백 규칙)
+app.get('/api/wholesale/products', authenticate, requireRole(['wholesale', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: products, error } = await supabase
+      .from('products_with')
+      .select(PRODUCT_SAFE_COLUMNS)
+      .eq('status', 'active')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    const productIds = (products || []).map(p => p.id);
+    let wholesalePriceMap = {};
+    if (productIds.length > 0) {
+      const { data: wsPrices } = await supabase
+        .from('product_channel_prices_with')
+        .select('product_id, price')
+        .eq('channel', 'wholesale')
+        .in('product_id', productIds);
+      (wsPrices || []).forEach(r => { wholesalePriceMap[r.product_id] = Number(r.price); });
+    }
+    const data = (products || []).map(p => ({
+      ...p,
+      wholesale_price: wholesalePriceMap[p.id] !== undefined ? wholesalePriceMap[p.id] : Number(p.price)
+    }));
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching wholesale products:', err);
+    res.status(500).json({ error: 'Failed to fetch wholesale products', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
 // 상품 API
 // ============================================
 
@@ -8941,6 +9143,21 @@ app.post('/api/orders', authenticate, async (req, res) => {
       });
     }
 
+    // 도매몰(wholesale) 회원 여부 확인 - 도매 회원이 주문하면 상품가를 온라인가가 아닌 도매채널가로 대체한다.
+    // (일반 회원이 도매가를 알아내 그대로 주문에 꽂아넣는 것을 막기 위해, 클라이언트가 보낸 값이 아니라
+    //  서버가 로그인한 계정의 실제 role을 다시 조회해서 판단한다)
+    const { data: buyerProfile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
+    const isWholesaleBuyer = !!(buyerProfile && buyerProfile.role === 'wholesale');
+    let wholesalePriceMap = {};
+    if (isWholesaleBuyer && productIds.length > 0) {
+      const { data: wsPrices } = await supabase
+        .from('product_channel_prices_with')
+        .select('product_id, price')
+        .eq('channel', 'wholesale')
+        .in('product_id', productIds);
+      (wsPrices || []).forEach(r => { wholesalePriceMap[r.product_id] = Number(r.price); });
+    }
+
     // 🔒 보안: 상품 가격은 절대 클라이언트(브라우저)가 보낸 값을 신뢰하지 않는다. 여기서 검증하면서
     // 동시에 DB의 실제 판매가(옵션이 있으면 옵션 가격조정 포함)로 다시 계산한 "검증된 주문항목"을
     // 새로 만들어, 이후 총액 계산·주문 저장에는 이 값만 사용한다. (이전에는 item.price를 그대로 믿어서
@@ -8957,7 +9174,11 @@ app.post('/api/orders', authenticate, async (req, res) => {
       if (!Number.isInteger(qty) || qty < 1) {
         return res.status(400).json({ error: 'Bad Request', message: `수량이 올바르지 않습니다: ${product.name}`, timestamp: new Date().toISOString() });
       }
-      let unitPrice = Number(product.price) || 0;
+      // 도매 회원이면 도매채널가(설정돼 있으면)로 대체 - 설정된 채널가가 없으면 기존과 동일하게 온라인 판매가를 사용한다
+      // (채널가 조회 화면과 동일한 폴백 규칙 - 관리자가 아직 도매가를 지정하지 않은 상품까지 주문을 막지 않기 위함)
+      let unitPrice = (isWholesaleBuyer && wholesalePriceMap[item.product_id] !== undefined)
+        ? wholesalePriceMap[item.product_id]
+        : (Number(product.price) || 0);
       let variantLabel = '';
 
       if (variants.length > 0) {
@@ -14339,7 +14560,7 @@ const STATIC_INFO_PAGES = [
   'about', 'careers', 'press', 'sustainability',
   'support', 'faq', 'contact', 'returns',
   'terms', 'privacy', 'cookie', 'guides',
-  'partner', 'seller', 'affiliate', 'medical-voucher'
+  'partner', 'seller', 'affiliate', 'medical-voucher', 'wholesale'
 ];
 STATIC_INFO_PAGES.forEach(slug => {
   app.get('/' + slug, (req, res) => {

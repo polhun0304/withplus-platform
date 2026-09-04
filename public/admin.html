@@ -1486,6 +1486,7 @@
                     ${isAdmin ? '<button class="tab-btn" data-tab="categories">🏷️ 카테고리 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="suppliers">🏭 공급자 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="seller-applications">🆕 판매자 입점신청</button>' : ''}
+                    ${isAdmin ? '<button class="tab-btn" data-tab="wholesale-applications">🏭 도매몰 입점신청</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="communities">🏢 분양 조직 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="community-settlements">💵 분양조직 정산</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="boards">📝 게시판 관리</button>' : ''}
@@ -1664,6 +1665,18 @@
                         </select>
                     </div>
                     <div id="seller-applications-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                </div>
+                <div class="tab-panel" id="tab-wholesale-applications">
+                    <div class="panel-toolbar">
+                        <span style="color:var(--text-gray); font-size:0.9em;">회원이 /wholesale 페이지에서 직접 접수한 도매몰(wholesale) 입점 신청입니다. 승인 시 해당 계정의 권한이 즉시 도매 회원으로 바뀌어 도매채널가로 주문할 수 있게 됩니다.</span>
+                        <select id="wapp-status-filter" style="padding:8px 12px; border:1px solid var(--border-color); border-radius:6px;">
+                            <option value="pending">심사 대기중</option>
+                            <option value="approved">승인됨</option>
+                            <option value="rejected">반려됨</option>
+                            <option value="">전체</option>
+                        </select>
+                    </div>
+                    <div id="wholesale-applications-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                 </div>
                 <div class="tab-panel" id="tab-communities">
                     <div class="panel-toolbar">
@@ -6590,6 +6603,71 @@
                 document.getElementById('sapp-status-filter')?.addEventListener('change', loadSellerApplications);
                 document.querySelector('[data-tab="seller-applications"]').addEventListener('click', () => {
                     loadSellerApplications();
+                });
+
+                // ===== 도매몰 입점신청 심사 (관리자 전용) =====
+                const WAPP_STATUS_LABEL = { pending: '⏳ 심사 대기중', approved: '✅ 승인됨', rejected: '❌ 반려됨' };
+                async function loadWholesaleApplications() {
+                    const area = document.getElementById('wholesale-applications-table-area');
+                    area.innerHTML = `<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>`;
+                    try {
+                        const status = document.getElementById('wapp-status-filter').value;
+                        const { ok, json } = await authedFetch(`/api/admin/wholesale-applications${status ? '?status=' + status : ''}`);
+                        if (!ok || !json.success) throw new Error(json.message || '도매몰 입점 신청 목록을 불러오지 못했습니다');
+                        const rows = json.data;
+                        if (rows.length === 0) {
+                            area.innerHTML = `<div class="state-box"><div class="emoji">🏭</div><h3>해당 조건의 입점 신청이 없습니다</h3></div>`;
+                            return;
+                        }
+                        area.innerHTML = `
+                            <table>
+                                <thead><tr><th>상호명</th><th>신청자</th><th>사업자번호</th><th>연락처</th><th>희망 카테고리</th><th>상태</th><th>신청일</th><th></th></tr></thead>
+                                <tbody>
+                                    ${rows.map(a => `
+                                    <tr data-id="${a.id}">
+                                        <td data-label="상호명">${WithPlus.escapeHtml(a.company_name)}</td>
+                                        <td data-label="신청자">${WithPlus.escapeHtml(a.profiles?.email || '-')}</td>
+                                        <td data-label="사업자번호">${a.business_number ? `${WithPlus.escapeHtml(a.business_number)} ${a.business_number_verified ? '✅' : '⚠️'}` : '-'}</td>
+                                        <td data-label="연락처">${WithPlus.escapeHtml(a.contact_person || '-')} ${WithPlus.escapeHtml(a.phone || '')}</td>
+                                        <td data-label="희망 카테고리">${WithPlus.escapeHtml(a.category || '-')}</td>
+                                        <td data-label="상태">${WAPP_STATUS_LABEL[a.status] || a.status}</td>
+                                        <td data-label="신청일">${WithPlus.timeAgo(a.created_at)}</td>
+                                        <td>${a.status === 'pending' ? `
+                                            <button type="button" class="btn btn-primary wapp-approve-btn" style="padding:6px 12px; font-size:0.82em;">승인</button>
+                                            <button type="button" class="btn btn-secondary wapp-reject-btn" style="padding:6px 12px; font-size:0.82em; color:#C62828;">반려</button>
+                                        ` : (a.rejection_reason ? `<span style="font-size:0.8em; color:var(--text-gray);">사유: ${WithPlus.escapeHtml(a.rejection_reason)}</span>` : '-')}</td>
+                                    </tr>`).join('')}
+                                </tbody>
+                            </table>`;
+
+                        area.querySelectorAll('.wapp-approve-btn').forEach(btn => {
+                            btn.addEventListener('click', async () => {
+                                const id = btn.closest('tr').dataset.id;
+                                if (!confirm('이 신청을 승인하시겠습니까? 신청자 계정이 즉시 도매(wholesale) 권한으로 바뀝니다.')) return;
+                                btn.disabled = true;
+                                const { ok, json } = await authedFetch(`/api/admin/wholesale-applications/${id}/approve`, { method: 'PUT' });
+                                if (!ok) { alert(json.message || '승인 처리에 실패했습니다'); btn.disabled = false; return; }
+                                loadWholesaleApplications();
+                            });
+                        });
+                        area.querySelectorAll('.wapp-reject-btn').forEach(btn => {
+                            btn.addEventListener('click', async () => {
+                                const id = btn.closest('tr').dataset.id;
+                                const reason = prompt('반려 사유를 입력해주세요 (신청자에게 알림으로 전달됩니다)');
+                                if (reason === null) return;
+                                btn.disabled = true;
+                                const { ok, json } = await authedFetch(`/api/admin/wholesale-applications/${id}/reject`, { method: 'PUT', body: JSON.stringify({ reason }) });
+                                if (!ok) { alert(json.message || '반려 처리에 실패했습니다'); btn.disabled = false; return; }
+                                loadWholesaleApplications();
+                            });
+                        });
+                    } catch (err) {
+                        area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>목록을 불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                    }
+                }
+                document.getElementById('wapp-status-filter')?.addEventListener('change', loadWholesaleApplications);
+                document.querySelector('[data-tab="wholesale-applications"]').addEventListener('click', () => {
+                    loadWholesaleApplications();
                 });
 
                 // ===== 분양 조직(커뮤니티) 관리 (관리자 전용) =====

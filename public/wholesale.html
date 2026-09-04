@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>도매몰 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B; --primary-dark: #B0154F;
+            --bg-white: #FFFFFF; --bg-light: #F5F5F5;
+            --text-dark: #333333; --text-gray: #666666;
+            --border-color: #E0E0E0; --success: #2E7D32;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; background: var(--bg-white); }
+        .header { background: var(--bg-white); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-main { max-width: 1200px; margin: 0 auto; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .logo { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; }
+        .logo span { font-size: 0.7em; color: var(--text-gray); display: block; font-weight: normal; }
+        .icon-button { background: none; border: none; cursor: pointer; font-size: 1.3em; color: var(--text-dark); position: relative; text-decoration: none; display: inline-block; }
+        .cart-badge { position: absolute; top: -8px; right: -8px; background: var(--primary-color); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: bold; }
+
+        .page-hero { background: linear-gradient(135deg, var(--primary-color), var(--primary-dark)); color: white; padding: 50px 20px; text-align: center; }
+        .page-hero h1 { font-size: 2em; margin-bottom: 10px; }
+        .page-hero p { opacity: 0.95; }
+
+        .wrap { max-width: 1100px; margin: 40px auto 80px; padding: 0 20px; }
+        .wrap.narrow { max-width: 700px; }
+
+        .notice-box { background: linear-gradient(135deg, #FFF7E5, #FFF0F0); border: 1px solid #F5C97A; border-radius: 12px; padding: 20px 24px; margin-bottom: 32px; font-size: 0.92em; }
+        .notice-box strong { color: #B8571E; }
+
+        .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin: 20px 0 28px; }
+        .card { background: var(--bg-light); border-radius: 12px; padding: 20px; border: 1px solid var(--border-color); }
+        .card h3 { margin-top: 0; color: var(--primary-dark); font-size: 1em; }
+        .card p { font-size: 0.9em; color: var(--text-gray); margin-bottom: 0; }
+
+        .content h2 { font-size: 1.3em; margin: 36px 0 14px; color: var(--primary-dark); border-bottom: 2px solid var(--border-color); padding-bottom: 8px; }
+        .content h2:first-of-type { margin-top: 0; }
+
+        /* 신청 폼 */
+        .apply-form { background: var(--bg-light); border-radius: 14px; padding: 28px; margin-top: 20px; }
+        .apply-form .field { margin-bottom: 16px; }
+        .apply-form label { display: block; font-size: 0.88em; font-weight: 600; margin-bottom: 6px; color: var(--text-dark); }
+        .apply-form label .req { color: var(--primary-color); }
+        .apply-form input, .apply-form select, .apply-form textarea {
+            width: 100%; padding: 11px 14px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95em; font-family: inherit; background: white;
+        }
+        .apply-form textarea { min-height: 90px; resize: vertical; }
+        .apply-form .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+        .apply-form button[type="submit"] { width: 100%; background: var(--primary-color); color: white; border: none; padding: 14px; border-radius: 8px; font-size: 1em; font-weight: 700; cursor: pointer; margin-top: 8px; }
+        .apply-form button[type="submit"]:hover { background: var(--primary-dark); }
+        .apply-form button[type="submit"]:disabled { opacity: 0.6; cursor: not-allowed; }
+        .form-msg { margin-top: 12px; font-size: 0.88em; padding: 10px 14px; border-radius: 8px; display: none; }
+        .form-msg.error { display: block; background: #FDEAEA; color: #C62828; }
+        .form-msg.ok { display: block; background: #E8F5E9; color: var(--success); }
+
+        /* 상태 카드 */
+        .status-card { background: var(--bg-light); border-radius: 14px; padding: 28px; text-align: center; margin-top: 20px; }
+        .status-card .badge { display: inline-block; padding: 6px 18px; border-radius: 30px; font-weight: 700; font-size: 0.95em; margin-bottom: 14px; }
+        .status-card .badge.pending { background: #FFF3CD; color: #7A5200; }
+        .status-card .badge.approved { background: #E8F5E9; color: var(--success); }
+        .status-card .badge.rejected { background: #FDEAEA; color: #C62828; }
+        .status-card .company { font-size: 1.1em; font-weight: 700; margin-bottom: 6px; }
+        .status-card .reason { margin-top: 12px; font-size: 0.88em; color: var(--text-gray); }
+        .state-box { text-align: center; padding: 50px 20px; color: var(--text-gray); }
+        .state-box .emoji { font-size: 2.5em; margin-bottom: 10px; }
+
+        /* 도매 카탈로그 */
+        .wholesale-shell { display: grid; grid-template-columns: 1fr 340px; gap: 28px; align-items: start; }
+        @media (max-width: 860px) { .wholesale-shell { grid-template-columns: 1fr; } }
+        .catalog-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px; }
+        .wprod-card { border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; background: white; }
+        .wprod-thumb { width: 100%; aspect-ratio: 1/1; object-fit: cover; background: var(--bg-light); display: block; }
+        .wprod-body { padding: 12px; }
+        .wprod-name { font-size: 0.88em; font-weight: 600; margin-bottom: 6px; height: 2.6em; overflow: hidden; }
+        .wprod-price { color: var(--primary-color); font-weight: 700; font-size: 1.02em; }
+        .wprod-price-orig { color: var(--text-gray); font-size: 0.78em; text-decoration: line-through; margin-left: 4px; }
+        .wprod-addbtn { width: 100%; margin-top: 8px; padding: 8px; border: 1px solid var(--primary-color); background: white; color: var(--primary-color); border-radius: 6px; font-size: 0.85em; font-weight: 600; cursor: pointer; }
+        .wprod-addbtn:hover { background: var(--primary-color); color: white; }
+
+        .wcart-box { background: var(--bg-light); border-radius: 14px; padding: 20px; position: sticky; top: 90px; }
+        .wcart-box h3 { margin-bottom: 12px; }
+        .wcart-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border-color); font-size: 0.88em; gap: 8px; }
+        .wcart-item .qty-ctl { display: flex; align-items: center; gap: 6px; }
+        .wcart-item .qty-ctl button { width: 22px; height: 22px; border: 1px solid var(--border-color); background: white; border-radius: 4px; cursor: pointer; }
+        .wcart-total { display: flex; justify-content: space-between; font-weight: 700; margin: 14px 0; font-size: 1.05em; }
+        .wcart-box button.checkout { width: 100%; background: var(--primary-color); color: white; border: none; padding: 13px; border-radius: 8px; font-weight: 700; cursor: pointer; }
+        .wcart-box button.checkout:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .footer { background: var(--text-dark); color: rgba(255,255,255,0.7); padding: 30px 20px; text-align: center; font-size: 0.85em; }
+        .footer a { color: #FF7FA8; text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-main">
+            <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+            <div style="display:flex; gap:20px; align-items:center;">
+                <a class="icon-button" id="account-link" href="/login">👤</a>
+                <a class="icon-button" href="/cart">🛒<span class="cart-badge">0</span></a>
+            </div>
+        </div>
+    </header>
+
+    <div class="page-hero">
+        <h1>🏭 WITH+ 도매몰</h1>
+        <p>사업자 회원 전용 · 도매가로 대량 구매하세요</p>
+    </div>
+
+    <div id="wholesale-app" class="wrap narrow">
+        <div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>
+    </div>
+
+    <footer class="footer">
+        &copy; 2026 WITH+. All rights reserved. · <a href="/terms">이용약관</a> · <a href="/privacy">개인정보처리방침</a>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        const APP = document.getElementById('wholesale-app');
+
+        function introBlock() {
+            return `
+                <div class="content">
+                    <h2>WITH+ 도매몰이란?</h2>
+                    <div class="card-grid">
+                        <div class="card"><h3>💰 도매 전용가</h3><p>일반 판매가보다 낮은 도매채널 전용 가격으로 대량 구매</p></div>
+                        <div class="card"><h3>🏢 사업자 회원 전용</h3><p>사업자등록번호 확인을 거친 사업자 계정만 이용 가능</p></div>
+                        <div class="card"><h3>📦 간편 주문</h3><p>승인 후 이 페이지에서 바로 도매가 카탈로그를 보고 주문</p></div>
+                    </div>
+                </div>`;
+        }
+
+        function renderStatus(app) {
+            const badgeLabel = { pending: '⏳ 심사 대기중', approved: '✅ 승인됨', rejected: '❌ 반려됨' };
+            APP.innerHTML = `
+                ${introBlock()}
+                <div class="status-card">
+                    <span class="badge ${app.status}">${badgeLabel[app.status] || app.status}</span>
+                    <div class="company">${WithPlus.escapeHtml(app.company_name)}</div>
+                    <p style="color:var(--text-gray); font-size:0.9em;">
+                        ${app.status === 'pending' ? '입점 신청을 검토하고 있습니다. 승인되면 이 계정으로 도매가 주문이 가능해집니다.' : ''}
+                        ${app.status === 'rejected' ? '이번 신청은 반려되었습니다.' : ''}
+                        ${app.status === 'approved' ? '승인되었습니다. 페이지를 새로고침하면 도매 카탈로그가 표시됩니다.' : ''}
+                    </p>
+                    ${app.status === 'rejected' && app.rejection_reason ? `<div class="reason">반려 사유: ${WithPlus.escapeHtml(app.rejection_reason)}</div>` : ''}
+                </div>
+            `;
+        }
+
+        function renderForm(previousApp) {
+            APP.innerHTML = `
+                ${introBlock()}
+                ${previousApp && previousApp.status === 'rejected' ? '<div class="notice-box"><strong>이전 신청이 반려되었습니다.</strong> 아래 정보를 다시 확인 후 재신청해주세요.</div>' : ''}
+                <h2 style="border:none; margin-top:0;">도매몰 입점 신청</h2>
+                <form id="wholesale-apply-form" class="apply-form">
+                    <div class="field"><label>상호명 <span class="req">*</span></label><input type="text" id="wf-company-name" required></div>
+                    <div class="row2">
+                        <div class="field"><label>사업자등록번호 <span class="req">*</span></label><input type="text" id="wf-business-number" placeholder="000-00-00000" required></div>
+                        <div class="field"><label>업태/업종</label><input type="text" id="wf-business-type"></div>
+                    </div>
+                    <div class="row2">
+                        <div class="field"><label>담당자명</label><input type="text" id="wf-contact-person"></div>
+                        <div class="field"><label>연락처</label><input type="text" id="wf-phone"></div>
+                    </div>
+                    <div class="row2">
+                        <div class="field"><label>이메일</label><input type="email" id="wf-email"></div>
+                        <div class="field"><label>희망 카테고리</label><input type="text" id="wf-category"></div>
+                    </div>
+                    <div class="field"><label>사업장 주소</label><input type="text" id="wf-address"></div>
+                    <div class="field"><label>매입 희망 상품/수량 등 참고사항</label><textarea id="wf-product-description"></textarea></div>
+                    <button type="submit">입점 신청하기</button>
+                    <div class="form-msg" id="wf-msg"></div>
+                </form>
+            `;
+            document.getElementById('wholesale-apply-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const btn = e.target.querySelector('button[type="submit"]');
+                const msg = document.getElementById('wf-msg');
+                msg.className = 'form-msg'; msg.textContent = '';
+                btn.disabled = true; btn.textContent = '신청 처리 중...';
+                try {
+                    const token = await WithPlus.getAccessToken();
+                    const res = await fetch('/api/me/wholesale-applications', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                        body: JSON.stringify({
+                            company_name: document.getElementById('wf-company-name').value.trim(),
+                            business_number: document.getElementById('wf-business-number').value.trim(),
+                            business_type: document.getElementById('wf-business-type').value.trim() || undefined,
+                            contact_person: document.getElementById('wf-contact-person').value.trim() || undefined,
+                            phone: document.getElementById('wf-phone').value.trim() || undefined,
+                            email: document.getElementById('wf-email').value.trim() || undefined,
+                            category: document.getElementById('wf-category').value.trim() || undefined,
+                            address: document.getElementById('wf-address').value.trim() || undefined,
+                            product_description: document.getElementById('wf-product-description').value.trim() || undefined
+                        })
+                    });
+                    const json = await res.json();
+                    if (!res.ok || !json.success) throw new Error(json.message || '신청에 실패했습니다');
+                    renderStatus(json.data);
+                } catch (err) {
+                    msg.className = 'form-msg error';
+                    msg.textContent = err.message;
+                    btn.disabled = false; btn.textContent = '입점 신청하기';
+                }
+            });
+        }
+
+        function renderLoginPrompt() {
+            APP.innerHTML = `
+                ${introBlock()}
+                <div class="state-box">
+                    <div class="emoji">🔒</div>
+                    <h3>로그인이 필요합니다</h3>
+                    <p style="margin-top:8px;">도매몰 입점 신청은 로그인 후 이용하실 수 있습니다.</p>
+                    <a href="/login?redirect=/wholesale" class="icon-button" style="display:inline-block; margin-top:16px; background:var(--primary-color); color:white; padding:12px 28px; border-radius:8px; text-decoration:none; font-weight:600;">로그인하러 가기</a>
+                </div>
+            `;
+        }
+
+        // ===== 도매 카탈로그 + 주문 (승인된 도매 회원 전용) =====
+        let wCart = {}; // { product_id: { product, qty } }
+
+        function wCartTotal() {
+            return Object.values(wCart).reduce((sum, it) => sum + it.product.wholesale_price * it.qty, 0);
+        }
+
+        function renderWCartBox() {
+            const box = document.getElementById('wcart-list');
+            const items = Object.values(wCart);
+            if (items.length === 0) {
+                box.innerHTML = `<p style="color:var(--text-gray); font-size:0.88em; text-align:center; padding:14px 0;">담긴 상품이 없습니다</p>`;
+            } else {
+                box.innerHTML = items.map(it => `
+                    <div class="wcart-item" data-id="${it.product.id}">
+                        <span style="flex:1;">${WithPlus.escapeHtml(it.product.name)}</span>
+                        <div class="qty-ctl">
+                            <button type="button" class="wcart-minus">-</button>
+                            <span>${it.qty}</span>
+                            <button type="button" class="wcart-plus">+</button>
+                        </div>
+                        <span style="white-space:nowrap;">${WithPlus.formatPrice(it.product.wholesale_price * it.qty)}</span>
+                    </div>
+                `).join('');
+                box.querySelectorAll('.wcart-minus').forEach(b => b.addEventListener('click', (e) => {
+                    const id = e.target.closest('.wcart-item').dataset.id;
+                    wCart[id].qty -= 1;
+                    if (wCart[id].qty <= 0) delete wCart[id];
+                    renderWCartBox();
+                }));
+                box.querySelectorAll('.wcart-plus').forEach(b => b.addEventListener('click', (e) => {
+                    const id = e.target.closest('.wcart-item').dataset.id;
+                    wCart[id].qty += 1;
+                    renderWCartBox();
+                }));
+            }
+            document.getElementById('wcart-total').textContent = WithPlus.formatPrice(wCartTotal());
+            document.getElementById('wcart-checkout-btn').disabled = items.length === 0;
+        }
+
+        async function renderCatalog() {
+            APP.innerHTML = `
+                <div class="notice-box"><strong>도매 회원으로 승인되었습니다.</strong> 아래 도매가로 주문할 수 있습니다. (도매채널가가 별도 지정되지 않은 상품은 일반 판매가로 표시됩니다)</div>
+                <div class="wholesale-shell">
+                    <div id="wcatalog-grid" class="catalog-grid"><div class="state-box"><div class="emoji">⏳</div><h3>상품을 불러오는 중...</h3></div></div>
+                    <div class="wcart-box">
+                        <h3>🧾 도매 주문 목록</h3>
+                        <div id="wcart-list"></div>
+                        <div class="wcart-total"><span>합계</span><span id="wcart-total">0원</span></div>
+                        <button type="button" class="checkout" id="wcart-checkout-btn" disabled>주문 접수하기</button>
+                        <div class="form-msg" id="wcheckout-msg"></div>
+                    </div>
+                </div>
+            `;
+            renderWCartBox();
+            document.getElementById('wcart-checkout-btn').addEventListener('click', submitWholesaleOrder);
+
+            try {
+                const token = await WithPlus.getAccessToken();
+                const res = await fetch('/api/wholesale/products', { headers: { Authorization: 'Bearer ' + token } });
+                const json = await res.json();
+                if (!res.ok || !json.success) throw new Error(json.message || '상품 목록을 불러오지 못했습니다');
+                const grid = document.getElementById('wcatalog-grid');
+                if (!json.data || json.data.length === 0) {
+                    grid.innerHTML = `<div class="state-box"><div class="emoji">📦</div><h3>등록된 상품이 없습니다</h3></div>`;
+                    return;
+                }
+                grid.innerHTML = json.data.map(p => {
+                    const img = (p.images_urls && p.images_urls[0]) || '';
+                    const discounted = p.wholesale_price < Number(p.price);
+                    return `
+                    <div class="wprod-card" data-id="${p.id}">
+                        ${img ? `<img class="wprod-thumb" src="${WithPlus.escapeHtml(img)}" alt="">` : `<div class="wprod-thumb"></div>`}
+                        <div class="wprod-body">
+                            <div class="wprod-name">${WithPlus.escapeHtml(p.name)}</div>
+                            <div class="wprod-price">${WithPlus.formatPrice(p.wholesale_price)}${discounted ? `<span class="wprod-price-orig">${WithPlus.formatPrice(p.price)}</span>` : ''}</div>
+                            <button type="button" class="wprod-addbtn">담기</button>
+                        </div>
+                    </div>`;
+                }).join('');
+                grid.querySelectorAll('.wprod-addbtn').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        const card = btn.closest('.wprod-card');
+                        const product = json.data.find(p => p.id === card.dataset.id);
+                        if (!wCart[product.id]) wCart[product.id] = { product, qty: 0 };
+                        wCart[product.id].qty += 1;
+                        renderWCartBox();
+                    });
+                });
+            } catch (err) {
+                document.getElementById('wcatalog-grid').innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>상품을 불러오지 못했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+            }
+        }
+
+        async function submitWholesaleOrder() {
+            const btn = document.getElementById('wcart-checkout-btn');
+            const msg = document.getElementById('wcheckout-msg');
+            msg.className = 'form-msg'; msg.textContent = '';
+            const items = Object.values(wCart);
+            if (items.length === 0) return;
+            btn.disabled = true; btn.textContent = '주문 접수 중...';
+            try {
+                const session = await WithPlus.getSession();
+                const token = await WithPlus.getAccessToken();
+                const res = await fetch('/api/orders', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+                    body: JSON.stringify({
+                        items: items.map(it => ({ product_id: it.product.id, name: it.product.name, quantity: it.qty })),
+                        shipping_address: {
+                            name: session?.user?.user_metadata?.full_name || '도매 주문',
+                            phone: session?.user?.phone || '',
+                            address: '주문 접수 후 담당자가 별도로 배송지를 확인합니다'
+                        },
+                        payment_method: 'wholesale_invoice'
+                    })
+                });
+                const json = await res.json();
+                if (!res.ok || !json.success) throw new Error(json.message || '주문 접수에 실패했습니다');
+                wCart = {};
+                document.querySelector('.wholesale-shell').innerHTML = `
+                    <div class="state-box" style="grid-column:1/-1;">
+                        <div class="emoji">✅</div>
+                        <h3>주문이 접수되었습니다</h3>
+                        <p style="margin-top:8px;">담당자가 확인 후 세금계산서/입금 안내를 별도로 연락드립니다.</p>
+                    </div>`;
+            } catch (err) {
+                msg.className = 'form-msg error';
+                msg.textContent = err.message;
+                btn.disabled = false; btn.textContent = '주문 접수하기';
+            }
+        }
+
+        async function init() {
+            if (window.WithPlus && WithPlus.initHeader) { WithPlus.initHeader(); }
+            const session = await WithPlus.getSession();
+            if (!session) { renderLoginPrompt(); return; }
+
+            try {
+                const token = await WithPlus.getAccessToken();
+                const meRes = await fetch('/api/me', { headers: { Authorization: 'Bearer ' + token } });
+                const meJson = await meRes.json();
+                const role = meJson.success ? meJson.data.role : 'member';
+
+                if (['wholesale', 'admin', 'super_admin'].includes(role)) {
+                    renderCatalog();
+                    return;
+                }
+
+                const appsRes = await fetch('/api/me/wholesale-applications', { headers: { Authorization: 'Bearer ' + token } });
+                const appsJson = await appsRes.json();
+                const apps = appsJson.success ? appsJson.data : [];
+                const latest = apps[0];
+                if (latest && latest.status === 'pending') { renderStatus(latest); return; }
+                renderForm(latest);
+            } catch (err) {
+                APP.innerHTML = `${introBlock()}<div class="state-box"><div class="emoji">⚠️</div><h3>불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+            }
+        }
+        init();
+    </script>
+</body>
+</html>
