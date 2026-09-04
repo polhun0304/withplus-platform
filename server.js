@@ -6800,6 +6800,59 @@ app.post('/api/admin/low-stock-alert/run-now', authenticate, requireRole(['admin
 // 상품명 검색으로 대체한다. 기존 product_location_assignments_with(로케이션 배정),
 // stock_adjustments_with(재고 이벤트 원장)를 그대로 조합만 해서 만든다(새 테이블 없음).
 // ============================================
+// ============================================
+// 📦 채널별(쇼핑몰/라이브/오프라인) 재고 배정 관리 - 상품 레벨(variant 미지원, MVP)
+// 행을 만들면 그 채널은 배정 한도 안에서만 팔리고, 행을 지우면(allocated_qty 미지정) 다시 공유 풀로 돌아간다.
+// ============================================
+app.get('/api/admin/products/:id/channel-stock', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const access = await assertProductAccess(req.params.id, req);
+    if (access.error) return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    const { data, error } = await supabase.from('product_channel_stock_with').select('*').eq('product_id', req.params.id).is('variant_id', null);
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching channel stock:', err);
+    res.status(500).json({ error: 'Failed to fetch channel stock', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/products/:id/channel-stock', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { channel, allocated_qty } = req.body;
+    if (!['online', 'live', 'offline'].includes(channel)) {
+      return res.status(400).json({ error: 'Bad Request', message: 'channel은 online/live/offline 중 하나여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const access = await assertProductAccess(req.params.id, req);
+    if (access.error) return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+
+    if (allocated_qty === null || allocated_qty === undefined) {
+      // 배정 해제 - 이 채널은 다시 공유 풀로 동작
+      await supabase.from('product_channel_stock_with').delete().eq('product_id', req.params.id).is('variant_id', null).eq('channel', channel);
+      return res.json({ success: true, data: null, message: `${channel} 채널 배정이 해제되어 공유 재고 풀로 돌아갑니다`, timestamp: new Date().toISOString() });
+    }
+    const qtyNum = parseInt(allocated_qty, 10);
+    if (!Number.isFinite(qtyNum) || qtyNum < 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'allocated_qty는 0 이상의 정수여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const { data: existing } = await supabase.from('product_channel_stock_with').select('id, sold_qty').eq('product_id', req.params.id).is('variant_id', null).eq('channel', channel).maybeSingle();
+    let data, error;
+    if (existing) {
+      if (qtyNum < existing.sold_qty) {
+        return res.status(400).json({ error: 'Bad Request', message: `이미 이 채널에서 ${existing.sold_qty}개가 판매되어 그보다 적은 수량으로는 낮출 수 없습니다`, timestamp: new Date().toISOString() });
+      }
+      ({ data, error } = await supabase.from('product_channel_stock_with').update({ allocated_qty: qtyNum, updated_at: new Date().toISOString() }).eq('id', existing.id).select().single());
+    } else {
+      ({ data, error } = await supabase.from('product_channel_stock_with').insert([{ product_id: req.params.id, variant_id: null, channel, allocated_qty: qtyNum }]).select().single());
+    }
+    if (error) throw error;
+    res.json({ success: true, data, message: '채널 배정이 저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error saving channel stock:', err);
+    res.status(500).json({ error: 'Failed to save channel stock', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 app.get('/api/admin/inventory/search', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
     const q = (req.query.q || '').trim();
@@ -7213,6 +7266,20 @@ app.post('/api/admin/inventory/channel-sales', authenticate, requireRole(['provi
       .single();
     if (saleErr) throw saleErr;
 
+    // 채널별 재고 분리 할당(옵트인) - 이 상품/옵션에 해당 채널 배정 행이 있으면 그 한도 안에서만 판매 허용
+    let chStockQuery = supabase.from('product_channel_stock_with').select('id').eq('product_id', product_id).eq('channel', channel);
+    chStockQuery = variant_id ? chStockQuery.eq('variant_id', variant_id) : chStockQuery.is('variant_id', null);
+    const { data: chRow } = await chStockQuery.maybeSingle();
+    let chReserved = false;
+    if (chRow) {
+      const { data: reserved } = await supabase.rpc('reserve_channel_stock', { p_product_id: product_id, p_variant_id: variant_id || null, p_channel: channel, p_qty: qty });
+      if (!reserved) {
+        await supabase.from('channel_sales_with').delete().eq('id', sale.id);
+        return res.status(400).json({ error: 'Bad Request', message: `이 상품은 ${WMS_CHANNEL_LABEL[channel]} 채널에 배정된 재고가 소진되었습니다`, timestamp: new Date().toISOString() });
+      }
+      chReserved = true;
+    }
+
     const { error: stockErr } = await supabase.rpc('adjust_stock_with', {
       p_product_id: product_id, p_variant_id: variant_id || null, p_delta: -qty,
       p_reason: `${WMS_CHANNEL_LABEL[channel]} 판매`, p_order_id: null, p_created_by: req.user.id,
@@ -7220,6 +7287,7 @@ app.post('/api/admin/inventory/channel-sales', authenticate, requireRole(['provi
     });
     if (stockErr) {
       // 재고 부족 등으로 차감이 실패하면 방금 만든 판매 기록도 되돌려 남기지 않는다(부분 실패 방지)
+      if (chReserved) await supabase.rpc('release_channel_stock', { p_product_id: product_id, p_variant_id: variant_id || null, p_channel: channel, p_qty: qty }).catch(() => {});
       await supabase.from('channel_sales_with').delete().eq('id', sale.id);
       if (stockErr.message && stockErr.message.includes('INSUFFICIENT_STOCK')) {
         return res.status(400).json({ error: 'Bad Request', message: '재고보다 많이 판매할 수 없습니다', timestamp: new Date().toISOString() });
@@ -7338,6 +7406,8 @@ app.patch('/api/admin/inventory/channel-sales/:id/cancel', authenticate, require
     if (access.error) {
       return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
     }
+
+    await supabase.rpc('release_channel_stock', { p_product_id: sale.product_id, p_variant_id: sale.variant_id, p_channel: sale.channel, p_qty: sale.quantity }).catch(() => {});
 
     const { error: stockErr } = await supabase.rpc('adjust_stock_with', {
       p_product_id: sale.product_id, p_variant_id: sale.variant_id, p_delta: sale.quantity,
@@ -9015,11 +9085,32 @@ app.post('/api/orders', authenticate, async (req, res) => {
     // 재고 원자적 차감 - 사전 검증을 통과했더라도 그 사이 다른 주문이 먼저 재고를 가져갔을 수 있으므로
     // DB 함수(adjust_stock_with)로 다시 한번 원자적으로 확인하며 차감한다. 도중에 하나라도 부족하면
     // 이미 차감된 항목들은 원복(보상)하고 방금 만든 주문도 삭제해 재고 불일치가 남지 않도록 한다.
+    // 채널별 재고 분리 할당(옵트인) - product_channel_stock_with에 이 상품/옵션의 'online' 채널 행이
+    // 있으면 그 배정 한도 안에서만 팔리고(물리 재고가 남아있어도 그 채널에서는 품절 처리),
+    // 행이 없으면 기존과 완전히 동일하게(공유 풀) 동작한다. 미팅 요청사항 격차분석 보고서 5번 항목.
     const decrementedItems = [];
     let stockError = null;
     for (const item of verifiedItems) {
       if (!item.product_id) continue;
       const qty = Number(item.quantity) || 1;
+
+      let channelRowQuery = supabase
+        .from('product_channel_stock_with').select('id')
+        .eq('product_id', item.product_id).eq('channel', 'online');
+      channelRowQuery = item.variant_id ? channelRowQuery.eq('variant_id', item.variant_id) : channelRowQuery.is('variant_id', null);
+      const { data: channelRow } = await channelRowQuery.maybeSingle();
+      let channelReserved = false;
+      if (channelRow) {
+        const { data: reserved } = await supabase.rpc('reserve_channel_stock', {
+          p_product_id: item.product_id, p_variant_id: item.variant_id || null, p_channel: 'online', p_qty: qty
+        });
+        if (!reserved) {
+          stockError = { item, err: { message: '채널(쇼핑몰) 배정 재고 소진' } };
+          break;
+        }
+        channelReserved = true;
+      }
+
       const { error: rpcErr } = await supabase.rpc('adjust_stock_with', {
         p_product_id: item.product_id,
         p_variant_id: item.variant_id || null,
@@ -9030,19 +9121,25 @@ app.post('/api/orders', authenticate, async (req, res) => {
         p_scan_source: 'order'
       });
       if (rpcErr) {
+        if (channelReserved) {
+          await supabase.rpc('release_channel_stock', { p_product_id: item.product_id, p_variant_id: item.variant_id || null, p_channel: 'online', p_qty: qty }).catch(() => {});
+        }
         stockError = { item, err: rpcErr };
         break;
       }
-      decrementedItems.push({ product_id: item.product_id, variant_id: item.variant_id || null, qty });
+      decrementedItems.push({ product_id: item.product_id, variant_id: item.variant_id || null, qty, channelReserved });
     }
 
     if (stockError) {
-      // 보상: 이미 차감된 항목들 원복
+      // 보상: 이미 차감된 항목들 원복 (물리 재고 + 채널 배정분 모두)
       for (const d of decrementedItems) {
         try {
           await supabase.rpc('adjust_stock_with', {
             p_product_id: d.product_id, p_variant_id: d.variant_id, p_delta: d.qty, p_reason: '재고 부족으로 인한 주문 실패 - 자동 원복', p_order_id: data.id, p_created_by: req.user.id
           });
+          if (d.channelReserved) {
+            await supabase.rpc('release_channel_stock', { p_product_id: d.product_id, p_variant_id: d.variant_id, p_channel: 'online', p_qty: d.qty });
+          }
         } catch (compensateErr) { /* 재고 원복은 최선을 다해 시도하되, 실패해도 요청 처리를 막지 않는다 */ }
       }
       await supabase.from('orders_with').delete().eq('id', data.id);
@@ -9082,6 +9179,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
             await supabase.rpc('adjust_stock_with', {
               p_product_id: d.product_id, p_variant_id: d.variant_id, p_delta: d.qty, p_reason: '쿠폰 소진으로 인한 주문 실패 - 자동 원복', p_order_id: data.id, p_created_by: req.user.id
             });
+            await supabase.rpc('release_channel_stock', { p_product_id: d.product_id, p_variant_id: d.variant_id, p_channel: 'online', p_qty: d.qty });
           } catch (compensateErr) { /* 재고 원복은 최선을 다해 시도하되, 실패해도 요청 처리를 막지 않는다 */ }
         }
         await supabase.from('orders_with').delete().eq('id', data.id);
@@ -9119,6 +9217,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
             await supabase.rpc('adjust_stock_with', {
               p_product_id: d.product_id, p_variant_id: d.variant_id, p_delta: d.qty, p_reason: '쿠폰 1인당 사용한도 초과로 인한 주문 실패 - 자동 원복', p_order_id: data.id, p_created_by: req.user.id
             });
+            await supabase.rpc('release_channel_stock', { p_product_id: d.product_id, p_variant_id: d.variant_id, p_channel: 'online', p_qty: d.qty });
           } catch (compensateErr) { /* 재고 원복은 최선을 다해 시도하되, 실패해도 요청 처리를 막지 않는다 */ }
         }
         await supabase.from('orders_with').delete().eq('id', data.id);
@@ -9206,6 +9305,7 @@ async function cancelStalePendingOrders() {
             p_created_by: null,
             p_scan_source: 'auto_cancel_pending'
           });
+          await supabase.rpc('release_channel_stock', { p_product_id: item.product_id, p_variant_id: item.variant_id || null, p_channel: 'online', p_qty: qty });
           if (item.variant_id) affectedProductIds.add(item.product_id);
         } catch (stockErr) {
           console.error(`Error restoring stock for stale order ${order.order_number}:`, stockErr);
@@ -13922,6 +14022,7 @@ app.patch('/api/admin/return-requests/:id', authenticate, requireRole(['admin', 
               p_created_by: req.user.id,
               p_scan_source: 'order_restore'
             });
+            await supabase.rpc('release_channel_stock', { p_product_id: item.product_id, p_variant_id: item.variant_id || null, p_channel: 'online', p_qty: qty });
           } catch (restoreErr) { /* 재고 복구는 최선을 다해 시도하되, 하나가 실패해도 전체 처리를 막지 않는다 */ }
           if (item.variant_id) await syncProductStockFromVariants(item.product_id);
         }

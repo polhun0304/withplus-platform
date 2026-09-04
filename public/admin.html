@@ -432,6 +432,11 @@
             </form>
             <div class="msg" id="stock-adjust-msg"></div>
 
+            <div class="subsection-title">📦 채널별 재고 배정 (쇼핑몰/라이브/오프라인)</div>
+            <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:8px;">특정 채널에만 배정 수량을 걸어두면, 물리 재고가 남아있어도 그 채널은 배정된 만큼만 판매되고 다른 채널의 몫을 침범하지 않습니다. 빈 칸으로 두면 그 채널은 기존처럼 전 채널 공유 재고를 사용합니다. (옵션 상품은 상품 전체 기준으로만 배정됩니다)</p>
+            <div id="channel-stock-area" style="display:flex; gap:12px; flex-wrap:wrap; margin-bottom:8px;"></div>
+            <div class="msg" id="channel-stock-msg"></div>
+
             <div class="subsection-title">판매 외 사유 처리(자가사용 / 불량처리)</div>
             <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:8px;">판매가 아닌 사유로 재고가 빠질 때 사유를 카테고리로 남겨 이력을 명확히 구분합니다.</p>
             <form id="write-off-form" style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end;">
@@ -2299,6 +2304,43 @@
             const variantModal = document.getElementById('variant-modal');
             let variantModalProduct = null;
 
+            const CHANNEL_STOCK_LABELS = { online: '🛍️ 쇼핑몰', live: '📺 라이브', offline: '🏪 오프라인' };
+            async function loadChannelStock() {
+                const area = document.getElementById('channel-stock-area');
+                if (!area || !variantModalProduct) return;
+                area.innerHTML = '불러오는 중...';
+                const { ok, json } = await authedFetch(`/api/admin/products/${variantModalProduct.id}/channel-stock`);
+                const rows = (ok && json.success) ? json.data : [];
+                const byChannel = {};
+                rows.forEach(r => { byChannel[r.channel] = r; });
+                area.innerHTML = Object.keys(CHANNEL_STOCK_LABELS).map(ch => {
+                    const row = byChannel[ch];
+                    return `<div class="field" style="width:150px; margin-bottom:0; border:1px solid var(--border-color); border-radius:8px; padding:8px;">
+                        <label>${CHANNEL_STOCK_LABELS[ch]}</label>
+                        <input type="number" min="0" class="small-input channel-stock-input" data-channel="${ch}" style="width:100%;" placeholder="공유 풀 사용" value="${row ? row.allocated_qty : ''}">
+                        ${row ? `<div style="font-size:0.75em; color:var(--text-gray); margin-top:2px;">판매됨 ${row.sold_qty} / 배정 ${row.allocated_qty}</div>` : ''}
+                    </div>`;
+                }).join('') + `<button type="button" class="btn btn-secondary" id="channel-stock-save-btn" style="height:34px;">저장</button>`;
+
+                document.getElementById('channel-stock-save-btn')?.addEventListener('click', async () => {
+                    const msg = document.getElementById('channel-stock-msg');
+                    msg.className = 'msg'; msg.textContent = '';
+                    const inputs = area.querySelectorAll('.channel-stock-input');
+                    try {
+                        for (const input of inputs) {
+                            const channel = input.dataset.channel;
+                            const val = input.value.trim();
+                            const { ok: saveOk, json: saveJson } = await authedFetch(`/api/admin/products/${variantModalProduct.id}/channel-stock`, {
+                                method: 'PUT', body: JSON.stringify({ channel, allocated_qty: val === '' ? null : parseInt(val, 10) })
+                            });
+                            if (!saveOk) throw new Error(saveJson.message || '저장 실패');
+                        }
+                        msg.textContent = '채널별 재고 배정이 저장되었습니다'; msg.className = 'msg success';
+                        loadChannelStock();
+                    } catch (err) { msg.textContent = err.message; msg.className = 'msg error'; }
+                });
+            }
+
             async function openVariantModal(product) {
                 variantModalProduct = product;
                 document.getElementById('variant-modal-title').textContent = `🎨 옵션/재고 관리 — ${product.name}`;
@@ -2313,7 +2355,7 @@
                 document.getElementById('stocktake-msg').className = 'msg';
                 document.getElementById('transfer-msg').className = 'msg';
                 variantModal.classList.add('open');
-                await Promise.all([loadVariantList(), loadStockHistory(), loadIoLocations()]);
+                await Promise.all([loadVariantList(), loadStockHistory(), loadIoLocations(), loadChannelStock()]);
             }
 
             async function loadVariantList() {
