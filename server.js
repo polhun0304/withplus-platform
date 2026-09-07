@@ -14343,15 +14343,23 @@ app.patch('/api/admin/return-requests/:id', authenticate, requireRole(['admin', 
     if (status !== undefined) updates.status = status;
     if (admin_note !== undefined) updates.admin_note = admin_note;
 
-    const { data, error } = await supabase
-      .from('return_requests')
-      .update(updates)
-      .eq('id', req.params.id)
-      .select()
-      .single();
+    // 완료 처리로 전환하는 요청은 이 UPDATE 자체를 "아직 완료가 아닌 경우에만" 성립하도록 걸어
+    // 동시에 두 번 눌리거나(중복 클릭·재시도) 두 관리자가 동시에 처리해도 둘 중 하나만 실제로
+    // 반영되게 한다(TOCTOU 경쟁조건 차단 — 위 existingRequest 조회만으로는 두 요청 모두 통과할 수 있었음).
+    let updateQuery = supabase.from('return_requests').update(updates).eq('id', req.params.id);
+    if (status === 'completed') {
+      updateQuery = updateQuery.neq('status', 'completed');
+    }
+    const { data, error } = await updateQuery.select().maybeSingle();
     if (error) throw error;
     if (!data) {
-      return res.status(404).json({ error: 'Not Found', message: 'Return request not found', timestamp: new Date().toISOString() });
+      // status==='completed' 분기에서 0행 매치는 "존재하지 않음"이 아니라 "동시 요청이 먼저 완료 처리함"을
+      // 의미할 수 있으므로, 실제 현재 상태를 다시 조회해 정상 응답으로 돌려준다(재고 이중 복구 방지).
+      const { data: current } = await supabase.from('return_requests').select('*').eq('id', req.params.id).maybeSingle();
+      if (!current) {
+        return res.status(404).json({ error: 'Not Found', message: 'Return request not found', timestamp: new Date().toISOString() });
+      }
+      return res.json({ success: true, data: current, sideEffect: null, message: '이미 처리된 요청입니다 (중복 처리 방지)', timestamp: new Date().toISOString() });
     }
 
     // "완료" 처리로 새로 전환되는 순간에만(이미 완료된 건을 다시 저장해도 중복 실행되지 않도록) 실제 재고/주문상태를 반영한다.
