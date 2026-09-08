@@ -292,6 +292,8 @@
             border: 1px solid rgba(255,255,255,0.3);
             transition: all 0.3s;
             cursor: pointer;
+            text-decoration: none;
+            color: inherit;
         }
 
         .carousel-slide:hover {
@@ -310,6 +312,7 @@
             max-width: 1400px;
             margin: 40px auto;
             padding: 0 20px;
+            scroll-margin-top: 90px;
         }
 
         .section-title {
@@ -326,6 +329,7 @@
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
             gap: 15px;
+            scroll-margin-top: 90px;
         }
 
         .category-item {
@@ -681,6 +685,7 @@
             background: linear-gradient(135deg, #FFE5E5, #FFF0F6);
             margin: 60px 0;
             padding: 50px 20px;
+            scroll-margin-top: 90px;
         }
 
         .community-content {
@@ -1109,10 +1114,10 @@
             <h1>함께할수록 더 큰 나눔</h1>
             <p>구매할 때마다 개인 1% + 커뮤니티 2% 적립</p>
             <div class="hero-carousel">
-                <div class="carousel-slide active">🛍️ 쇼핑</div>
-                <div class="carousel-slide">💰 적립</div>
-                <div class="carousel-slide">🤝 공유</div>
-                <div class="carousel-slide">🌟 성장</div>
+                <a href="#category-grid" class="carousel-slide active">🛍️ 쇼핑</a>
+                <a href="/mypage" class="carousel-slide">💰 적립</a>
+                <a href="/communities" class="carousel-slide">🤝 공유</a>
+                <a href="#community-highlight" class="carousel-slide">🌟 성장</a>
             </div>
         </div>
     </section>
@@ -1159,25 +1164,25 @@
     <!-- PROMOTIONAL BANNERS -->
     <section class="promo-banner">
         <div class="banner-grid">
-            <div class="banner-card">
+            <a href="/join" class="banner-card" style="text-decoration:none; display:block;">
                 <div class="banner-card-content">
                     <h3>🎁 신규 회원 혜택</h3>
                     <p>첫 구매 시 10% 할인 + 5,000원 마일리지</p>
-                    <button>지금 가입하기</button>
+                    <button type="button">지금 가입하기</button>
                 </div>
-            </div>
-            <div class="banner-card" style="background: linear-gradient(135deg, #667EEA, #764BA2);">
+            </a>
+            <a href="/mypage" class="banner-card" style="background: linear-gradient(135deg, #667EEA, #764BA2); text-decoration:none; display:block;">
                 <div class="banner-card-content">
                     <h3>⭐ VIP 회원 전용</h3>
                     <p>매월 특별 할인 상품 & 빠른 배송</p>
-                    <button>등급 올리기</button>
+                    <button type="button">등급 올리기</button>
                 </div>
-            </div>
+            </a>
             <a href="/communities" class="banner-card" style="background: linear-gradient(135deg, #F093FB, #F5576C); text-decoration:none; display:block;">
                 <div class="banner-card-content">
                     <h3>🤝 커뮤니티 참여</h3>
                     <p>구매 시 추가 2% 적립 + 커뮤니티 혜택</p>
-                    <button>커뮤니티 보기</button>
+                    <button type="button">커뮤니티 보기</button>
                 </div>
             </a>
         </div>
@@ -1385,7 +1390,7 @@
     </section>
 
     <!-- COMMUNITY SECTION -->
-    <section class="community-section">
+    <section class="community-section" id="community-highlight">
         <div class="community-content">
             <div class="community-text">
                 <h2>🤝 WITH+ 커뮤니티</h2>
