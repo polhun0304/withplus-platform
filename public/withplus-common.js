@@ -764,6 +764,81 @@
     } catch (e) { /* 실패해도 일반 로그인 흐름으로 계속 진행 */ }
   }
 
+  // ============================================
+  // 개수 선택 컨트롤: 상품이 계속 이어지는 섹션(베스트 상품, 추천 상품 등) 옆에
+  // "8개/16개/24개/전체" 버튼을 붙여 사용자가 원하는 만큼만 보이도록 한다.
+  // controlsEl: 버튼을 그릴 컨테이너, gridEl: 카드가 렌더링될 그리드,
+  // fullItems: 이미 로드해 둔 전체 상품 배열(추가 API 호출 없이 클라이언트에서 자름).
+  // options.counts: 버튼에 노출할 개수 목록(기본 [8, 16, 24]), options.renderItem: 카드 렌더 함수,
+  // options.storageKey: 선택한 개수를 기억해둘 localStorage 키(생략 시 매번 첫 옵션으로 시작).
+  // ============================================
+  function mountCountControl(controlsEl, gridEl, fullItems, options) {
+    if (!controlsEl || !gridEl) return;
+    options = options || {};
+    const counts = options.counts || [8, 16, 24];
+    const renderItem = options.renderItem || renderProductCard;
+    const storageKey = options.storageKey || null;
+    const items = fullItems || [];
+
+    // 전체 개수가 가장 작은 옵션보다도 적으면 굳이 컨트롤을 보여줄 필요가 없다
+    const availableCounts = counts.filter(c => c < items.length);
+
+    function render(count) {
+      const shown = (count == null) ? items : items.slice(0, count);
+      gridEl.innerHTML = shown.map(renderItem).join('');
+      syncWishlistHearts();
+      attachProductCardInteractions();
+    }
+
+    if (availableCounts.length === 0) {
+      controlsEl.innerHTML = '';
+      render(null);
+      return;
+    }
+
+    function readSaved() {
+      if (!storageKey) return null;
+      try { return localStorage.getItem(storageKey); } catch (e) { return null; }
+    }
+    function save(value) {
+      if (!storageKey) return;
+      try { localStorage.setItem(storageKey, value); } catch (e) { /* 무시 */ }
+    }
+
+    const saved = readSaved();
+    let initial = availableCounts[0];
+    if (saved === 'all') {
+      initial = null;
+    } else {
+      const savedNum = parseInt(saved, 10);
+      if (availableCounts.includes(savedNum)) initial = savedNum;
+    }
+
+    controlsEl.innerHTML = availableCounts.map(c =>
+      `<button type="button" class="count-btn" data-count="${c}">${c}개</button>`
+    ).join('') + `<button type="button" class="count-btn" data-count="all">전체</button>`;
+
+    function setActive(count) {
+      controlsEl.querySelectorAll('.count-btn').forEach(btn => {
+        const isAllBtn = btn.dataset.count === 'all';
+        btn.classList.toggle('active', isAllBtn ? count == null : parseInt(btn.dataset.count, 10) === count);
+      });
+    }
+
+    controlsEl.querySelectorAll('.count-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const isAllBtn = btn.dataset.count === 'all';
+        const count = isAllBtn ? null : parseInt(btn.dataset.count, 10);
+        render(count);
+        setActive(count);
+        save(isAllBtn ? 'all' : String(count));
+      });
+    });
+
+    setActive(initial);
+    render(initial);
+  }
+
   global.WithPlus = {
     API_BASE,
     CATEGORY_MAP,
@@ -789,6 +864,7 @@
     timeAgo,
     attachProductCardInteractions,
     syncWishlistHearts,
+    mountCountControl,
     recordRecentlyViewed,
     getRecentlyViewed,
     getClient,

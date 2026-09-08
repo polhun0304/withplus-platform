@@ -467,6 +467,45 @@
             gap: 10px;
         }
 
+        /* 섹션 헤더 우측: 개수 선택 컨트롤 + 전체보기 링크를 함께 배치 */
+        .section-header-actions {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            flex-wrap: wrap;
+        }
+
+        .count-selector {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: var(--bg-light, #f5f5f5);
+            border-radius: 999px;
+            padding: 4px;
+        }
+
+        .count-btn {
+            border: none;
+            background: transparent;
+            color: var(--text-gray);
+            font-size: 0.85em;
+            font-weight: 600;
+            padding: 6px 14px;
+            border-radius: 999px;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+
+        .count-btn:hover {
+            color: var(--text-dark);
+        }
+
+        .count-btn.active {
+            background: var(--primary-color);
+            color: white;
+        }
+
         .product-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -1182,7 +1221,10 @@
     <section class="products-section">
         <div class="section-header">
             <h2 class="section-title">⭐ 베스트 상품</h2>
-            <a href="/api/products" class="view-all">전체보기 →</a>
+            <div class="section-header-actions">
+                <div class="count-selector" id="best-products-count"></div>
+                <a href="/api/products" class="view-all">전체보기 →</a>
+            </div>
         </div>
         <div class="product-grid" id="best-products-grid">
             <!-- Product 1 -->
@@ -1349,7 +1391,25 @@
         </div>
     </section>
 
+    <!-- PERSONALIZED HOME SECTIONS -->
+    <!-- 개인화 추천 섹션들은 /api/me/home-sections가 내려주는 순서/개수 그대로 여기 채워진다.
+         섹션 추가/순서 변경/알고리즘 교체는 서버 쪽만 바꾸면 되고 이 페이지는 다시 손댈 필요가 없다. -->
+    <div id="home-sections-container"></div>
+
+    <!-- RECENTLY VIEWED -->
+    <section class="recently-viewed" id="recently-viewed-section" style="display:none;">
+        <div class="section-header">
+            <h2 class="section-title">👀 최근 본 상품</h2>
+            <div class="count-selector" id="recently-viewed-count"></div>
+        </div>
+        <div class="horizontal-scroll" id="recently-viewed-grid">
+            <!-- JS로 실제 최근 조회 상품 데이터가 채워집니다 -->
+        </div>
+    </section>
+
     <!-- REALTIME ACTIVITY -->
+    <!-- 상품 탐색 흐름(베스트→개인화 추천→최근 본 상품)이 끊기지 않도록,
+         참여형 콘텐츠(실시간 활동/커뮤니티)는 상품 섹션들이 모두 끝난 뒤 배치한다. -->
     <section class="realtime-section">
         <h2 class="section-title">🔥 실시간 활동</h2>
         <div class="activity-grid">
@@ -1398,19 +1458,6 @@
                 <a href="/communities" class="community-cta">커뮤니티 보기</a>
             </div>
             <div class="community-image">🌍</div>
-        </div>
-    </section>
-
-    <!-- PERSONALIZED HOME SECTIONS -->
-    <!-- 개인화 추천 섹션들은 /api/me/home-sections가 내려주는 순서/개수 그대로 여기 채워진다.
-         섹션 추가/순서 변경/알고리즘 교체는 서버 쪽만 바꾸면 되고 이 페이지는 다시 손댈 필요가 없다. -->
-    <div id="home-sections-container"></div>
-
-    <!-- RECENTLY VIEWED -->
-    <section class="recently-viewed" id="recently-viewed-section" style="display:none;">
-        <h2 class="section-title">👀 최근 본 상품</h2>
-        <div class="horizontal-scroll" id="recently-viewed-grid">
-            <!-- JS로 실제 최근 조회 상품 데이터가 채워집니다 -->
         </div>
     </section>
 
@@ -1488,20 +1535,30 @@
             // ============================================
             // 베스트 상품: 실제 API에서 로드 (평점순)
             // ============================================
+            // 상품이 계속 이어지는 섹션들에 공통으로 쓸 "개수 선택" 옵션.
+            // 각 섹션의 전체 상품 수가 이보다 적으면 해당 버튼은 자동으로 숨겨진다(mountCountControl 참고).
+            const COUNT_OPTIONS = [8, 16, 24];
+
             async function loadProductSections() {
                 const bestGrid = document.getElementById('best-products-grid');
+                const bestCount = document.getElementById('best-products-count');
                 try {
                     const { ok, json } = await WithPlus.fetchJSON(WithPlus.withCommunityParam('/api/products'));
                     if (!ok || !json.success || !Array.isArray(json.data)) throw new Error('상품 목록을 불러오지 못했습니다');
 
                     const products = json.data;
                     if (products.length === 0) {
+                        if (bestCount) bestCount.innerHTML = '';
                         if (bestGrid) bestGrid.innerHTML = '<p style="grid-column:1/-1; text-align:center; color:var(--text-gray); padding:40px 0;">등록된 상품이 아직 없습니다.</p>';
                         return;
                     }
 
                     const byRating = [...products].sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0));
-                    if (bestGrid) bestGrid.innerHTML = byRating.map(WithPlus.renderProductCard).join('');
+                    // 평점순 전체를 넘겨두고, 처음엔 일부만(기본 8개) 보여준 뒤 버튼으로 늘려볼 수 있게 한다
+                    WithPlus.mountCountControl(bestCount, bestGrid, byRating, {
+                        counts: COUNT_OPTIONS,
+                        storageKey: 'wp_count_best'
+                    });
                 } catch (err) {
                     if (bestGrid) bestGrid.innerHTML = `<p style="grid-column:1/-1; text-align:center; color:var(--text-gray); padding:40px 0;">상품을 불러오는 중 문제가 발생했습니다: ${WithPlus.escapeHtml(err.message)}</p>`;
                 }
@@ -1523,7 +1580,9 @@
                     // 서버 이력에 아직 반영 안 됐어도 지금 홈 화면에 곧바로 신호로 반영되게 한다.
                     const recentIds = (WithPlus.getRecentlyViewed() || []).slice(0, 5);
                     const recentParam = recentIds.length > 0 ? `&session_recent_ids=${recentIds.map(encodeURIComponent).join(',')}` : '';
-                    const res = await fetch(`/api/me/home-sections?limit=8${recentParam}`, { headers });
+                    // 서버가 허용하는 최대치(20)까지 넉넉히 받아두고, 화면에는 섹션별 개수 선택 컨트롤로
+                    // 일부만 보여준다 - 한 번에 너무 많은 상품이 계속 이어지는 문제를 방지하기 위함.
+                    const res = await fetch(`/api/me/home-sections?limit=20${recentParam}`, { headers });
                     const json = await res.json();
                     if (!res.ok || !json.success) throw new Error(json.message || '추천 상품을 불러오지 못했습니다');
 
@@ -1534,13 +1593,21 @@
                         <section class="products-section">
                             <div class="section-header">
                                 <h2 class="section-title">${WithPlus.escapeHtml(sec.title)}</h2>
+                                <div class="count-selector" id="home-section-count-${sec.section_key}"></div>
                             </div>
                             ${sec.subtitle ? `<p style="font-size:0.85em; color:var(--text-gray); margin:-10px 0 16px;">${WithPlus.escapeHtml(sec.subtitle)}</p>` : ''}
-                            <div class="product-grid">${sec.products.map(WithPlus.renderProductCard).join('')}</div>
+                            <div class="product-grid" id="home-section-grid-${sec.section_key}"></div>
                         </section>
                     `).join('');
-                    WithPlus.syncWishlistHearts && WithPlus.syncWishlistHearts();
-                    WithPlus.attachProductCardInteractions && WithPlus.attachProductCardInteractions();
+
+                    sections.forEach(sec => {
+                        const countEl = document.getElementById(`home-section-count-${sec.section_key}`);
+                        const gridEl = document.getElementById(`home-section-grid-${sec.section_key}`);
+                        WithPlus.mountCountControl(countEl, gridEl, sec.products, {
+                            counts: COUNT_OPTIONS,
+                            storageKey: `wp_count_home_${sec.section_key}`
+                        });
+                    });
                 } catch (err) {
                     container.innerHTML = `<section class="products-section"><p style="grid-column:1/-1; text-align:center; color:var(--text-gray); padding:40px 0;">추천 상품을 불러오는 중 문제가 발생했습니다: ${WithPlus.escapeHtml(err.message)}</p></section>`;
                 }
@@ -1553,6 +1620,7 @@
             async function loadRecentlyViewed() {
                 const section = document.getElementById('recently-viewed-section');
                 const grid = document.getElementById('recently-viewed-grid');
+                const countEl = document.getElementById('recently-viewed-count');
                 const ids = WithPlus.getRecentlyViewed();
                 if (!ids || ids.length === 0) return;
 
@@ -1564,7 +1632,10 @@
                     const found = ids.map(id => byId[id]).filter(Boolean);
                     if (found.length === 0) return;
 
-                    grid.innerHTML = found.map(WithPlus.renderProductCard).join('');
+                    WithPlus.mountCountControl(countEl, grid, found, {
+                        counts: COUNT_OPTIONS,
+                        storageKey: 'wp_count_recent'
+                    });
                     section.style.display = '';
                 } catch (err) {
                     // 실패 시 섹션을 숨긴 채로 둠 (가짜 데이터 노출 방지)
