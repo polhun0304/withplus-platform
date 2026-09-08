@@ -940,16 +940,54 @@
                 padding: 12px;
             }
 
+            /* 공지사항/사용후기/Q&A/자유게시판 링크가 좁은 화면에서 글자 단위로 줄바꿈되며
+               헤더 높이를 불필요하게 키우던 문제 방지 - 한 줄 가로 스크롤로 전환 */
+            .header-top {
+                flex-wrap: nowrap;
+            }
+
+            .header-top-right {
+                overflow-x: auto;
+                scrollbar-width: none;
+                flex-wrap: nowrap;
+            }
+
+            .header-top-right::-webkit-scrollbar {
+                display: none;
+            }
+
+            .header-top-right a {
+                white-space: nowrap;
+                flex-shrink: 0;
+            }
+
             .header-main {
                 flex-direction: column;
                 gap: 12px;
             }
 
+            /* 모바일에서는 카테고리 메뉴를 세로로 쌓지 않고 한 줄 가로 스크롤로 보여준다.
+               (예전엔 8개 링크가 세로로 쌓여 헤더가 화면의 2/3 가까이 차지, 실제 상품이 안 보였음) */
             .nav-menu {
-                flex-direction: column;
-                gap: 10px;
+                flex-direction: row;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+                gap: 18px;
                 flex: none;
                 width: 100%;
+                padding-bottom: 2px;
+            }
+
+            .nav-menu::-webkit-scrollbar {
+                display: none;
+            }
+
+            .nav-menu a,
+            .nav-menu .wp-nav-item {
+                white-space: nowrap;
+                flex-shrink: 0;
             }
 
             .header-actions {
