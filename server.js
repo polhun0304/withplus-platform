@@ -10087,26 +10087,71 @@ app.patch('/api/admin/reviews/:id/status', authenticate, requireRole(['admin', '
 // ============================================
 // 커뮤니티 API (인증 불필요, 공개 목록)
 // ============================================
+// ILIKE 패턴에 들어갈 사용자 입력을 이스케이프한다 (%, _, \ 는 LIKE/ILIKE의 특수문자라
+// 그대로 넣으면 와일드카드처럼 동작하거나 패턴이 깨질 수 있음).
+function escapeIlike(str) {
+  return String(str || '').replace(/[\\%_]/g, ch => '\\' + ch);
+}
+
+// 분양 조직(커뮤니티) 목록 - 상호명 검색(q), 지역 검색(region, 주소에 포함된 텍스트로 매칭),
+// 정렬(sort), 페이지네이션(page/limit)을 지원한다. 조직 수가 수천~수만 개로 늘어나도
+// 한 번에 다 내려주지 않고 필요한 페이지만 조회한다.
+// sort=members(참여 인원 많은순)만은 커뮤니티별 인원수를 DB 집계 없이 계산해야 해서
+// 부득이 전체를 메모리에서 정렬한다 - 조직 수가 매우 커지면 별도 집계 컬럼/뷰로 옮길 필요가 있다.
 app.get('/api/communities', async (req, res) => {
   try {
-    const [{ data: communities, error: cErr }, { data: members, error: mErr }] = await Promise.all([
-      supabase.from('communities').select('id, name, slug, description, image_url, logo_url, total_points_earned').eq('status', 'active').order('created_at', { ascending: false }),
-      supabase.from('community_members').select('community_id').eq('status', 'active')
-    ]);
+    const q = String(req.query.q || '').trim().slice(0, 100);
+    const region = String(req.query.region || '').trim().slice(0, 50);
+    const sort = String(req.query.sort || 'newest');
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(60, Math.max(1, parseInt(req.query.limit, 10) || 24));
+    const offset = (page - 1) * limit;
+    const selectCols = 'id, name, slug, description, image_url, logo_url, address, total_points_earned, created_at';
+
+    if (sort === 'members') {
+      const [{ data: allCommunities, error: cErr }, { data: members, error: mErr }] = await Promise.all([
+        supabase.from('communities').select(selectCols).eq('status', 'active'),
+        supabase.from('community_members').select('community_id').eq('status', 'active')
+      ]);
+      if (cErr) throw cErr;
+      if (mErr) throw mErr;
+
+      const memberCounts = {};
+      (members || []).forEach(m => { memberCounts[m.community_id] = (memberCounts[m.community_id] || 0) + 1; });
+
+      let list = (allCommunities || []).map(c => ({ ...c, member_count: memberCounts[c.id] || 0 }));
+      if (q) list = list.filter(c => (c.name || '').toLowerCase().includes(q.toLowerCase()));
+      if (region) list = list.filter(c => (c.address || '').includes(region));
+      list.sort((a, b) => b.member_count - a.member_count);
+
+      const total = list.length;
+      const paged = list.slice(offset, offset + limit);
+      return res.json({ success: true, data: paged, count: paged.length, total, page, limit, timestamp: new Date().toISOString() });
+    }
+
+    let query = supabase.from('communities').select(selectCols, { count: 'exact' }).eq('status', 'active');
+    if (q) query = query.ilike('name', `%${escapeIlike(q)}%`);
+    if (region) query = query.ilike('address', `%${escapeIlike(region)}%`);
+    if (sort === 'name') query = query.order('name', { ascending: true });
+    else if (sort === 'points') query = query.order('total_points_earned', { ascending: false });
+    else query = query.order('created_at', { ascending: false });
+    query = query.range(offset, offset + limit - 1);
+
+    const { data: communities, error: cErr, count } = await query;
     if (cErr) throw cErr;
-    if (mErr) throw mErr;
 
+    const ids = (communities || []).map(c => c.id);
     const memberCounts = {};
-    (members || []).forEach(m => {
-      memberCounts[m.community_id] = (memberCounts[m.community_id] || 0) + 1;
-    });
+    if (ids.length) {
+      const { data: members, error: mErr } = await supabase
+        .from('community_members').select('community_id').eq('status', 'active').in('community_id', ids);
+      if (mErr) throw mErr;
+      (members || []).forEach(m => { memberCounts[m.community_id] = (memberCounts[m.community_id] || 0) + 1; });
+    }
 
-    const result = (communities || []).map(c => ({
-      ...c,
-      member_count: memberCounts[c.id] || 0
-    }));
+    const result = (communities || []).map(c => ({ ...c, member_count: memberCounts[c.id] || 0 }));
 
-    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+    res.json({ success: true, data: result, count: result.length, total: count || 0, page, limit, timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error fetching communities:', err);
     res.status(500).json({ error: 'Failed to fetch communities', message: err.message, timestamp: new Date().toISOString() });
