@@ -178,6 +178,13 @@
     return Number(price).toLocaleString('ko-KR') + '원';
   }
 
+  function getShippingBadgeLabel(stock) {
+    const n = Number(stock);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    if (n <= 5) return `⏰ 재고 ${n}개 남음 - 서둘러 주문해주세요`;
+    return '🚚 오늘 주문하면 빠르게 배송해드립니다';
+  }
+
   // ============================================
   // 마일리지 적립율 (관리자가 언제든 동적으로 변경 가능 - 하드코딩 금지)
   // ============================================
@@ -592,6 +599,25 @@
     }
   }
 
+  const VALID_INTERACTION_EVENTS = ['view', 'view_end', 'cart_add', 'cart_remove'];
+  async function recordInteraction(eventType, productId, extra, opts) {
+    try {
+      if (!productId || !VALID_INTERACTION_EVENTS.includes(eventType)) return;
+      const body = Object.assign({ product_id: productId, event_type: eventType }, extra || {});
+      const keepalive = !!(opts && opts.keepalive);
+      const session = await getSession().catch(() => null);
+      const token = session && session.access_token;
+      if (keepalive && !token && typeof navigator !== 'undefined' && navigator.sendBeacon) {
+        const blob = new Blob([JSON.stringify(body)], { type: 'application/json' });
+        const sent = navigator.sendBeacon(API_BASE + '/api/interactions', blob);
+        if (sent) return;
+      }
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers.Authorization = 'Bearer ' + token;
+      await fetch(API_BASE + '/api/interactions', { method: 'POST', headers, body: JSON.stringify(body), keepalive });
+    } catch (e) { /* 트래킹 실패가 사용자 경험을 막아서는 안 됨 - 조용히 무시 */ }
+  }
+
   // ============================================
   // 검색창 공통 초기화 - 헤더의 .search-box(input+button)가 있는 모든 페이지에서 호출.
   // 엔터/돋보기 클릭 시 /search?q=검색어로 이동하고, 입력하는 동안 오타허용 자동완성 드롭다운을 보여준다.
@@ -852,6 +878,7 @@
     renderCategoryNav,
     initCategoryNav,
     formatPrice,
+    getShippingBadgeLabel,
     fetchJSON,
     refreshMileageRates,
     getMileageRatesCached,
@@ -867,6 +894,7 @@
     mountCountControl,
     recordRecentlyViewed,
     getRecentlyViewed,
+    recordInteraction,
     getClient,
     getSession,
     getAccessToken,
