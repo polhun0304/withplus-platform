@@ -459,8 +459,8 @@
     <div class="product-card" data-product-id="${product.id}" style="cursor:pointer;">
         <div class="product-image" ${imageUrl ? `style="background-image:url('${safeUrlAttr(imageUrl)}');background-size:cover;background-position:center;"` : ''}>
             <div class="mileage-badge">
-                <span class="individual">💰 ${formatPercent(rates.personalPercent)}%</span>
-                <span class="bonus">+커뮤니티 ${formatPercent(rates.communityPercent)}%</span>
+                <span class="individual">적립 ${formatPercent(rates.personalPercent)}%</span>
+                <span class="bonus">+${formatPercent(rates.communityPercent)}%</span>
             </div>
             <div class="product-actions">
                 <button class="action-btn wishlist-btn" type="button">❤️</button>
