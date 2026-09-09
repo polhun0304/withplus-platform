@@ -86,7 +86,19 @@
 
         @media (max-width: 768px) {
             .header-main { flex-direction: column; gap: 12px; }
-            .nav-menu { flex-direction: column; gap: 10px; }
+            /* 모바일에서는 카테고리 메뉴를 세로로 쌓지 않고 한 줄 가로 스크롤로 보여준다.
+               (8개 링크가 세로로 쌓이면 헤더가 화면 대부분을 차지해 실제 상품이 안 보임) */
+            .nav-menu {
+                flex-direction: row;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+                gap: 18px;
+                padding-bottom: 2px;
+            }
+            .nav-menu::-webkit-scrollbar { display: none; }
+            .nav-menu a { white-space: nowrap; flex-shrink: 0; }
             .product-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
         }
     </style>
