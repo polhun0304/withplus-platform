@@ -36,26 +36,37 @@
             const box = document.getElementById('result-box');
             const params = new URLSearchParams(location.search);
 
+            // 헌금(GIVE+) 결제는 주문번호가 "OFR-"로 시작한다(상품주문은 "ORD-") - 이 접두어로 상품구매/헌금을
+            // 구분해서 승인 API와 완료 후 안내 문구·이동 링크를 다르게 보여준다(장바구니 결제와 결제 완료 화면 공유).
+            function isOffering(orderNumber) {
+                return !!orderNumber && orderNumber.startsWith('OFR-');
+            }
+
             function renderSuccess(orderNumber) {
+                const offering = isOffering(orderNumber);
                 box.innerHTML = `
-                    <div class="emoji">🎉</div>
-                    <h1>결제가 완료되었습니다!</h1>
+                    <div class="emoji">${offering ? '🙏' : '🎉'}</div>
+                    <h1>${offering ? '헌금·후원이 완료되었습니다' : '결제가 완료되었습니다!'}</h1>
                     ${orderNumber ? `<div class="order-no">주문번호: ${WithPlus.escapeHtml(orderNumber)}</div>` : ''}
+                    ${offering ? `<div class="detail-msg">받아주셔서 감사합니다. 헌금·후원 내역은 언제든 조회할 수 있습니다.</div>` : ''}
                     <div class="btn-row">
-                        <a href="/mypage" class="primary">주문내역 보기</a>
-                        <a href="/" class="secondary">쇼핑 계속하기</a>
+                        ${offering
+                            ? `<a href="javascript:history.back()" class="primary">헌금 내역 보기</a><a href="/" class="secondary">홈으로</a>`
+                            : `<a href="/mypage" class="primary">주문내역 보기</a><a href="/" class="secondary">쇼핑 계속하기</a>`}
                     </div>`;
             }
 
             function renderFail(orderNumber, detailMsg) {
+                const offering = isOffering(orderNumber);
                 box.innerHTML = `
                     <div class="emoji">😥</div>
-                    <h1>결제가 완료되지 않았습니다</h1>
+                    <h1>${offering ? '헌금·후원이 완료되지 않았습니다' : '결제가 완료되지 않았습니다'}</h1>
                     ${orderNumber ? `<div class="order-no">주문번호: ${WithPlus.escapeHtml(orderNumber)}</div>` : ''}
-                    <div class="detail-msg">${WithPlus.escapeHtml(detailMsg || '결제가 취소되었거나 승인에 실패했습니다. 주문내역에서 다시 시도해주세요.')}</div>
+                    <div class="detail-msg">${WithPlus.escapeHtml(detailMsg || (offering ? '결제가 취소되었거나 승인에 실패했습니다. 다시 시도해주세요.' : '결제가 취소되었거나 승인에 실패했습니다. 주문내역에서 다시 시도해주세요.'))}</div>
                     <div class="btn-row">
-                        <a href="/mypage" class="primary">주문내역 보기</a>
-                        <a href="/" class="secondary">쇼핑 계속하기</a>
+                        ${offering
+                            ? `<a href="javascript:history.back()" class="primary">다시 시도하기</a><a href="/" class="secondary">홈으로</a>`
+                            : `<a href="/mypage" class="primary">주문내역 보기</a><a href="/" class="secondary">쇼핑 계속하기</a>`}
                     </div>`;
             }
 
@@ -93,7 +104,8 @@
 
             try {
                 const token = await WithPlus.getAccessToken();
-                const res = await fetch('/api/payments/toss/confirm', {
+                const confirmEndpoint = isOffering(orderId) ? '/api/offerings/toss/confirm' : '/api/payments/toss/confirm';
+                const res = await fetch(confirmEndpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
                     body: JSON.stringify({ paymentKey, orderId, amount })

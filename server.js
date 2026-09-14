@@ -10388,7 +10388,7 @@ const BUSINESS_INFO_MODES = ['platform', 'own'];
 
 app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, admin_email, personal_point_rate, community_point_rate, landing_template, business_number, business_info_mode, business_name, ceo_name, mail_order_registration_number, privacy_officer_name, privacy_officer_position, privacy_officer_contact } = req.body;
+    const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, admin_email, personal_point_rate, community_point_rate, landing_template, business_number, business_info_mode, business_name, ceo_name, mail_order_registration_number, privacy_officer_name, privacy_officer_position, privacy_officer_contact, org_type, offering_labels } = req.body;
     if (!name || !slug) {
       return res.status(400).json({ error: 'Bad Request', message: 'Required fields: name, slug', timestamp: new Date().toISOString() });
     }
@@ -10402,6 +10402,12 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
     if (business_info_mode !== undefined && !BUSINESS_INFO_MODES.includes(business_info_mode)) {
       return res.status(400).json({ error: 'Bad Request', message: `business_info_mode는 ${BUSINESS_INFO_MODES.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
     }
+    // GIVE+ 1단계: 종교시설 유형 - 생략하면 DB 기본값(church)을 따르고, 지정하면 그 유형의 기본 헌금 항목명을 함께 채운다
+    if (org_type !== undefined && !ORG_TYPES.includes(org_type)) {
+      return res.status(400).json({ error: 'Bad Request', message: `org_type은 ${ORG_TYPES.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+    }
+    const resolvedOrgType = org_type || 'church';
+    const resolvedOfferingLabels = offering_labels || DEFAULT_OFFERING_LABELS[resolvedOrgType];
 
     // 이 조직을 담당할 관리자를 이메일로 지정 (WITH+에 이미 가입된 회원이어야 함) - 이 사람만 /api/community-admin/* 로 이 조직 데이터를 볼 수 있다
     let adminUserId = null;
@@ -10459,6 +10465,8 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
         privacy_officer_name: privacy_officer_name || null,
         privacy_officer_position: privacy_officer_position || null,
         privacy_officer_contact: privacy_officer_contact || null,
+        org_type: resolvedOrgType,
+        offering_labels: resolvedOfferingLabels,
         status: 'active'
       }])
       .select()
@@ -10490,7 +10498,7 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
 
 app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, status, admin_email, personal_point_rate, community_point_rate, landing_template, settlement_commission_rate, business_number, settlement_tax_method, bank_name, bank_account, account_holder, bank_account_verified, business_info_mode, business_name, ceo_name, mail_order_registration_number, privacy_officer_name, privacy_officer_position, privacy_officer_contact } = req.body;
+    const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, status, admin_email, personal_point_rate, community_point_rate, landing_template, settlement_commission_rate, business_number, settlement_tax_method, bank_name, bank_account, account_holder, bank_account_verified, business_info_mode, business_name, ceo_name, mail_order_registration_number, privacy_officer_name, privacy_officer_position, privacy_officer_contact, org_type, offering_labels } = req.body;
     const updates = { updated_at: new Date().toISOString() };
     let bizWarning = null;
     // business_number/bank_account 변경 여부 판정에 기존 값이 필요하므로, 둘 중 하나라도 바뀌면 한 번만 조회해서 같이 재사용한다
@@ -10616,6 +10624,23 @@ app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super
     if (privacy_officer_name !== undefined) updates.privacy_officer_name = privacy_officer_name || null;
     if (privacy_officer_position !== undefined) updates.privacy_officer_position = privacy_officer_position || null;
     if (privacy_officer_contact !== undefined) updates.privacy_officer_contact = privacy_officer_contact || null;
+    // 종교시설 유형/헌금 항목명 (GIVE+ 1단계) - org_type만 바뀌고 offering_labels를 따로 안 보내면
+    // 그 유형의 기본 항목명(DEFAULT_OFFERING_LABELS)을 자동으로 채워준다(형님이 매번 직접 타이핑할 필요 없게)
+    if (org_type !== undefined) {
+      if (!ORG_TYPES.includes(org_type)) {
+        return res.status(400).json({ error: 'Bad Request', message: `org_type은 ${ORG_TYPES.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+      }
+      updates.org_type = org_type;
+      if (offering_labels === undefined) {
+        updates.offering_labels = DEFAULT_OFFERING_LABELS[org_type];
+      }
+    }
+    if (offering_labels !== undefined) {
+      if (typeof offering_labels !== 'object' || Array.isArray(offering_labels) || !offering_labels) {
+        return res.status(400).json({ error: 'Bad Request', message: 'offering_labels는 {key: 한글명} 형태의 객체여야 합니다', timestamp: new Date().toISOString() });
+      }
+      updates.offering_labels = offering_labels;
+    }
 
     const { data, error } = await supabase
       .from('communities')
@@ -11188,6 +11213,229 @@ app.put('/api/community-admin/business-info', authenticate, async (req, res) => 
   } catch (err) {
     console.error('Error updating community-admin business info:', err);
     res.status(500).json({ error: 'Failed to save business info', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🙏 GIVE+ 1단계: 종교 초월 헌금/후원 모듈
+// - 카르디아(교회용 키오스크 헌금 결제사) 대응 제안서(2026-09-13, 프로젝트 문서 참고)에 따라
+//   기존 분양형 멀티테넌트(communities) + 정산 인프라를 그대로 재사용해 "헌금"이라는 새 도메인을 얹는다.
+// - 종교를 코드에 하드코딩하지 않는다: communities.org_type(church/catholic/buddhist/other) +
+//   offering_labels(JSON, 항목key->한글명)로 데이터 기반 확장. 신규 종교/교단도 코드 수정 없이 데이터만으로 추가된다.
+// - 결제는 기존 토스페이먼츠 연동(getPgConfig('toss'))을 그대로 재사용 - 새 PG 계약 불필요.
+// - 실제 개신교 교회 외에 성당·사찰 연결도 예정되어 있어(형님 확인), org_type별 기본 항목명은 일반적인
+//   통용 표현으로 채워뒀다 - 실제 연결되는 성당/사찰 담당자에게 정확한 용어(예: 교무금 산정 단위, 시주 익명성 관례)를
+//   확인해 offering_labels를 조정하는 절차가 필요하다(제안서 5장에 명시한 한계와 동일).
+// ============================================
+const ORG_TYPES = ['church', 'catholic', 'buddhist', 'other'];
+const DEFAULT_OFFERING_LABELS = {
+  church: { tithe: '십일조', thanks: '감사헌금', mission: '선교헌금', building: '건축헌금', general: '주정기헌금' },
+  catholic: { dues: '교무금', mass: '미사예물', special: '특별헌금', general: '주일헌금' },
+  buddhist: { dana: '시주', lantern: '연등접수', incense: '불전', general: '보시금' },
+  other: { general: '후원금', special: '특별후원' }
+};
+
+// 공개: 종교시설 유형/기본 항목명 목록 (관리자가 조직 등록 시 org_type 선택 → 기본 라벨 프리필용)
+app.get('/api/offering-org-types', (req, res) => {
+  res.json({ success: true, data: { org_types: ORG_TYPES, default_labels: DEFAULT_OFFERING_LABELS }, timestamp: new Date().toISOString() });
+});
+
+// 헌금/후원 생성 (결제 전 pending 레코드 - 상품주문(POST /api/orders)과 동일한 2단계 결제 패턴)
+app.post('/api/offerings', authenticate, async (req, res) => {
+  try {
+    const { community_slug, items, is_anonymous, memo } = req.body || {};
+    if (!community_slug) {
+      return res.status(400).json({ error: 'Bad Request', message: 'community_slug가 필요합니다', timestamp: new Date().toISOString() });
+    }
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '헌금 항목(items)이 최소 1개 필요합니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: community, error: cErr } = await supabase
+      .from('communities').select('id, name, slug, status, offering_labels').eq('slug', community_slug).eq('status', 'active').maybeSingle();
+    if (cErr) throw cErr;
+    if (!community) return res.status(404).json({ error: 'Not Found', message: '헌금 대상 조직을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const labels = community.offering_labels || {};
+    const verifiedItems = [];
+    let totalAmount = 0;
+    for (const raw of items) {
+      const key = String(raw?.key || '').trim().slice(0, 50);
+      const amount = Math.round(Number(raw?.amount));
+      if (!key || !Number.isFinite(amount) || amount <= 0) {
+        return res.status(400).json({ error: 'Bad Request', message: '헌금 항목은 key와 1원 이상의 amount가 필요합니다', timestamp: new Date().toISOString() });
+      }
+      // 항목명은 클라이언트가 보낸 값이 아니라 서버가 조직의 offering_labels에서 다시 조회한 값을 신뢰한다(위조 방지)
+      verifiedItems.push({ key, label: labels[key] || key, amount });
+      totalAmount += amount;
+    }
+    if (totalAmount <= 0 || totalAmount > 50000000) {
+      return res.status(400).json({ error: 'Bad Request', message: '헌금 총액이 올바르지 않습니다(1회 최대 5천만원)', timestamp: new Date().toISOString() });
+    }
+
+    const orderNumber = `OFR-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const { data, error } = await supabase
+      .from('offerings')
+      .insert([{
+        order_number: orderNumber,
+        community_id: community.id,
+        user_id: req.user.id,
+        items: verifiedItems,
+        total_amount: totalAmount,
+        status: 'pending',
+        is_anonymous: !!is_anonymous,
+        memo: memo ? String(memo).slice(0, 500) : null
+      }])
+      .select()
+      .single();
+    if (error) throw error;
+
+    res.status(201).json({ success: true, data: { ...data, community_name: community.name }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating offering:', err);
+    res.status(500).json({ error: 'Failed to create offering', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 헌금 결제 승인 (토스페이먼츠 - 기존 /api/payments/toss/confirm과 동일한 승인 흐름, 대상 테이블만 offerings)
+app.post('/api/offerings/toss/confirm', authenticate, async (req, res) => {
+  try {
+    const { paymentKey, orderId, amount } = req.body;
+    if (!paymentKey || !orderId || !Number.isFinite(Number(amount))) {
+      return res.status(400).json({ error: 'Bad Request', message: 'paymentKey, orderId, amount가 모두 필요합니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: offering, error: offErr } = await supabase.from('offerings').select('*').eq('order_number', orderId).eq('user_id', req.user.id).maybeSingle();
+    if (offErr) throw offErr;
+    if (!offering) return res.status(404).json({ error: 'Not Found', message: '헌금 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (offering.status !== 'pending') {
+      return res.status(400).json({ error: 'Bad Request', message: `이미 처리된 헌금입니다 (현재 상태: ${offering.status})`, timestamp: new Date().toISOString() });
+    }
+    if (Math.round(Number(offering.total_amount)) !== Math.round(Number(amount))) {
+      return res.status(400).json({ error: 'Bad Request', message: '결제 금액이 헌금 금액과 일치하지 않습니다', timestamp: new Date().toISOString() });
+    }
+
+    const config = await getPgConfig('toss');
+    if (!config || !config.enabled || !config.secret_key) {
+      return res.status(400).json({ error: 'Bad Request', message: '결제 연동이 활성화되어 있지 않습니다', timestamp: new Date().toISOString() });
+    }
+
+    const authHeader = 'Basic ' + Buffer.from(config.secret_key + ':').toString('base64');
+    const tossResp = await fetch('https://api.tosspayments.com/v1/payments/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: authHeader },
+      body: JSON.stringify({ paymentKey, orderId, amount: Number(amount) }),
+      signal: AbortSignal.timeout(20000)
+    });
+    const tossJson = await tossResp.json().catch(() => null);
+
+    if (tossResp.ok) {
+      await supabase.from('offering_payments').insert([{ offering_id: offering.id, provider_key: 'toss', payment_key: paymentKey, amount: Number(amount), status: 'approved', raw_response: tossJson }]);
+      await supabase.from('offerings').update({ status: 'paid', payment_method: 'toss', paid_at: new Date().toISOString() }).eq('id', offering.id);
+      return res.json({ success: true, data: { order_number: offering.order_number, status: 'paid' }, timestamp: new Date().toISOString() });
+    } else {
+      await supabase.from('offering_payments').insert([{ offering_id: offering.id, provider_key: 'toss', payment_key: paymentKey, amount: Number(amount), status: 'failed', raw_response: tossJson }]);
+      return res.status(400).json({ error: 'Payment Failed', message: tossJson?.message || '결제 승인에 실패했습니다', timestamp: new Date().toISOString() });
+    }
+  } catch (err) {
+    console.error('Error confirming offering payment:', err);
+    res.status(500).json({ error: 'Failed to confirm payment', message: (process.env.NODE_ENV === 'production' ? '결제 승인에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
+  }
+});
+
+// 내 헌금 내역 조회 (= 카르디아 offeringhistory 화면이 하려던 일 + 요약 통계)
+app.get('/api/offerings/my', authenticate, async (req, res) => {
+  try {
+    const year = req.query.year ? parseInt(req.query.year, 10) : null;
+    let query = supabase.from('offerings').select('*, communities(name, slug, logo_url, org_type)').eq('user_id', req.user.id).eq('status', 'paid').order('paid_at', { ascending: false });
+    if (year && Number.isFinite(year)) {
+      query = query.gte('paid_at', `${year}-01-01T00:00:00Z`).lt('paid_at', `${year + 1}-01-01T00:00:00Z`);
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+
+    const list = data || [];
+    const thisYear = new Date().getFullYear();
+    const summary = {
+      total_all_time: list.reduce((s, o) => s + Number(o.total_amount || 0), 0),
+      total_this_year: list.filter(o => o.paid_at && new Date(o.paid_at).getFullYear() === thisYear).reduce((s, o) => s + Number(o.total_amount || 0), 0),
+      count: list.length
+    };
+
+    res.json({ success: true, data: list, summary, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching my offerings:', err);
+    res.status(500).json({ error: 'Failed to fetch offerings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 분양 조직(종교시설) 관리자 - 헌금 현황 대시보드 (기존 community-admin 패턴 재사용)
+app.get('/api/community-admin/offerings', authenticate, async (req, res) => {
+  try {
+    const community = await getMyManagedCommunity(req.user.id);
+    if (!community) {
+      return res.status(404).json({ error: 'Not Found', message: '담당하고 있는 분양 조직이 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: offerings, error } = await supabase
+      .from('offerings').select('*').eq('community_id', community.id).eq('status', 'paid').order('paid_at', { ascending: false }).limit(1000);
+    if (error) throw error;
+
+    const list = offerings || [];
+    const byItem = {};
+    list.forEach(o => (o.items || []).forEach(it => {
+      byItem[it.key] = byItem[it.key] || { key: it.key, label: it.label, total: 0, count: 0 };
+      byItem[it.key].total += Number(it.amount || 0);
+      byItem[it.key].count += 1;
+    }));
+    const thisMonth = new Date().toISOString().slice(0, 7);
+    const totalThisMonth = list.filter(o => (o.paid_at || '').slice(0, 7) === thisMonth).reduce((s, o) => s + Number(o.total_amount || 0), 0);
+
+    res.json({
+      success: true,
+      data: {
+        community: { id: community.id, name: community.name, org_type: community.org_type, offering_labels: community.offering_labels },
+        recent: list.slice(0, 100).map(o => ({ id: o.id, items: o.items, total_amount: o.total_amount, is_anonymous: o.is_anonymous, paid_at: o.paid_at, user_id: o.is_anonymous ? null : o.user_id })),
+        total_all_time: list.reduce((s, o) => s + Number(o.total_amount || 0), 0),
+        total_this_month: totalThisMonth,
+        count: list.length,
+        by_item: Object.values(byItem)
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching community-admin offerings:', err);
+    res.status(500).json({ error: 'Failed to fetch offerings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 분양 조직(종교시설) 관리자 - 자신의 org_type/헌금 항목명 직접 커스터마이즈
+app.put('/api/community-admin/offering-labels', authenticate, async (req, res) => {
+  try {
+    const community = await getMyManagedCommunity(req.user.id);
+    if (!community) {
+      return res.status(404).json({ error: 'Not Found', message: '담당하고 있는 분양 조직이 없습니다', timestamp: new Date().toISOString() });
+    }
+    const { org_type, offering_labels } = req.body || {};
+    const updates = { updated_at: new Date().toISOString() };
+    if (org_type !== undefined) {
+      if (!ORG_TYPES.includes(org_type)) {
+        return res.status(400).json({ error: 'Bad Request', message: `org_type은 ${ORG_TYPES.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+      }
+      updates.org_type = org_type;
+    }
+    if (offering_labels !== undefined) {
+      if (typeof offering_labels !== 'object' || Array.isArray(offering_labels) || !offering_labels) {
+        return res.status(400).json({ error: 'Bad Request', message: 'offering_labels는 {key: 한글명} 형태의 객체여야 합니다', timestamp: new Date().toISOString() });
+      }
+      updates.offering_labels = offering_labels;
+    }
+    const { data, error } = await supabase.from('communities').update(updates).eq('id', community.id).select('org_type, offering_labels').single();
+    if (error) throw error;
+    res.json({ success: true, data, message: '헌금 항목 설정이 저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating offering labels:', err);
+    res.status(500).json({ error: 'Failed to update offering labels', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
@@ -14604,6 +14852,11 @@ app.get('/category/:slug', async (req, res) => {
 // 분양형 커뮤니티(조직) 랜딩페이지 - 브랜딩된 랜딩화면
 app.get('/c/:slug', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'community-landing.html'));
+});
+
+// 종교 초월 헌금/후원 화면 (GIVE+ 1단계) - /c/:slug와 동일한 예쁜 URL 패턴
+app.get('/give/:slug', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'offering.html'));
 });
 
 app.get('/product/:id', async (req, res) => {

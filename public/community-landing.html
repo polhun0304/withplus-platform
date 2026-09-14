@@ -276,6 +276,7 @@
                     <h1>${WithPlus.escapeHtml(heroTitle)}</h1>
                     <p>${WithPlus.escapeHtml(heroSubtitle)}</p>
                     <a href="/welcome?community=${encodeURIComponent(community.slug)}" class="cta-btn">WITH+ 쇼핑 시작하기 →</a>
+                    <div style="margin-top:12px;"><a href="/give/${encodeURIComponent(community.slug)}" style="color:white; font-size:0.85em; text-decoration:underline;">🙏 온라인 헌금·후원 하기 →</a></div>
                 </section>
 
                 <div class="classic-stats-row">
@@ -351,7 +352,7 @@
                     ${community.address ? WithPlus.escapeHtml(community.address) + '<br>' : ''}
                     ${community.phone ? WithPlus.escapeHtml(community.phone) : ''}${community.phone && community.website_url ? ' · ' : ''}${community.website_url ? WithPlus.escapeHtml(community.website_url) : ''}
                     ${bizInfoHtml}
-                    <div class="powered-by">WITH+는 ${WithPlus.escapeHtml(community.name)}와 함께 하나님의 사랑을 전하는 사역에 동참합니다.<br>Powered by <a href="/">WITH+</a></div>
+                    <div class="powered-by">WITH+는 ${WithPlus.escapeHtml(community.name)}와 함께 ${WithPlus.getPoweredByTagline(community.org_type)}.<br>Powered by <a href="/">WITH+</a></div>
                 </footer>`;
             }
 
@@ -362,6 +363,7 @@
                     <h1>${WithPlus.escapeHtml(heroTitle)}</h1>
                     <p>${WithPlus.escapeHtml(heroSubtitle)}</p>
                     <a href="/welcome?community=${encodeURIComponent(community.slug)}" class="cta-btn" style="background:${primaryColor};">WITH+ 쇼핑 시작하기 →</a>
+                    <div style="margin-top:10px;"><a href="/give/${encodeURIComponent(community.slug)}" style="color:${primaryColor}; font-size:0.85em; text-decoration:underline;">🙏 온라인 헌금·후원 하기 →</a></div>
                 </section>
 
                 <div class="modern-stats">
@@ -453,7 +455,7 @@
                     ${community.address ? WithPlus.escapeHtml(community.address) + '<br>' : ''}
                     ${community.phone ? WithPlus.escapeHtml(community.phone) : ''}${community.phone && community.website_url ? ' · ' : ''}${community.website_url ? WithPlus.escapeHtml(community.website_url) : ''}
                     ${bizInfoHtml}
-                    <div class="m-powered-by">WITH+는 ${WithPlus.escapeHtml(community.name)}와 함께 하나님의 사랑을 전하는 사역에 동참합니다.<br>Powered by <a href="/" style="color:${primaryColor};">WITH+</a></div>
+                    <div class="m-powered-by">WITH+는 ${WithPlus.escapeHtml(community.name)}와 함께 ${WithPlus.getPoweredByTagline(community.org_type)}.<br>Powered by <a href="/" style="color:${primaryColor};">WITH+</a></div>
                 </footer>`;
             }
 
@@ -468,6 +470,7 @@
                     <h1>${WithPlus.escapeHtml(heroTitle)}</h1>
                     <p>${WithPlus.escapeHtml(heroSubtitle)}</p>
                     <a href="/welcome?community=${encodeURIComponent(community.slug)}" class="cta-btn" style="color:${primaryColor};">WITH+ 쇼핑 시작하기 →</a>
+                    <div style="margin-top:10px;"><a href="/give/${encodeURIComponent(community.slug)}" style="color:${primaryColor}; font-size:0.85em; text-decoration:underline;">🙏 온라인 헌금·후원 하기 →</a></div>
                 </section>
 
                 <div class="warm-stats">
@@ -535,7 +538,7 @@
                     ${community.address ? WithPlus.escapeHtml(community.address) + '<br>' : ''}
                     ${community.phone ? WithPlus.escapeHtml(community.phone) : ''}${community.phone && community.website_url ? ' · ' : ''}${community.website_url ? WithPlus.escapeHtml(community.website_url) : ''}
                     ${bizInfoHtml}
-                    <div class="w-powered-by">🤍 WITH+는 ${WithPlus.escapeHtml(community.name)}와 함께 하나님의 사랑을 전하는 사역에 동참합니다.<br>Powered by <a href="/" style="color:${primaryColor};">WITH+</a></div>
+                    <div class="w-powered-by">🤍 WITH+는 ${WithPlus.escapeHtml(community.name)}와 함께 ${WithPlus.getPoweredByTagline(community.org_type)}.<br>Powered by <a href="/" style="color:${primaryColor};">WITH+</a></div>
                 </footer>`;
             }
 

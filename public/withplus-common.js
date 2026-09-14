@@ -459,8 +459,8 @@
     <div class="product-card" data-product-id="${product.id}" style="cursor:pointer;">
         <div class="product-image" ${imageUrl ? `style="background-image:url('${safeUrlAttr(imageUrl)}');background-size:cover;background-position:center;"` : ''}>
             <div class="mileage-badge">
-                <span class="individual">💰 ${formatPercent(rates.personalPercent)}%</span>
-                <span class="bonus">+커뮤니티 ${formatPercent(rates.communityPercent)}%</span>
+                <span class="individual">적립 ${formatPercent(rates.personalPercent)}%</span>
+                <span class="bonus">+${formatPercent(rates.communityPercent)}%</span>
             </div>
             <div class="product-actions">
                 <button class="action-btn wishlist-btn" type="button">❤️</button>
@@ -865,10 +865,29 @@
     render(initial);
   }
 
+  // 종교 중립 문구 헬퍼 (GIVE+ 1단계) - community.org_type에 따라 랜딩페이지 하단 문구를 다르게 보여준다.
+  // 예전에는 "하나님의 사랑을 전하는 사역"이 모든 조직(성당/사찰 포함)에 하드코딩되어 있었는데,
+  // 개신교 외 종교시설(성당/사찰) 연결이 실제로 예정되어 있어 org_type별로 분기하도록 고쳤다.
+  const ORG_TYPE_NAMES = { church: '교회', catholic: '성당', buddhist: '사찰', other: '기관/단체' };
+  const POWERED_BY_TAGLINES = {
+    church: '하나님의 사랑을 전하는 사역에 동참합니다',
+    catholic: '하느님의 사랑을 전하는 사목에 동참합니다',
+    buddhist: '자비의 마음을 나누는 원력에 동참합니다',
+    other: '공동체의 나눔에 함께합니다'
+  };
+  function getOrgTypeName(orgType) {
+    return ORG_TYPE_NAMES[orgType] || ORG_TYPE_NAMES.other;
+  }
+  function getPoweredByTagline(orgType) {
+    return POWERED_BY_TAGLINES[orgType] || POWERED_BY_TAGLINES.other;
+  }
+
   global.WithPlus = {
     API_BASE,
     CATEGORY_MAP,
     CATEGORY_EMOJI,
+    getOrgTypeName,
+    getPoweredByTagline,
     refreshCategoryMap,
     getCategoryMapCached,
     getCategoryEmoji,

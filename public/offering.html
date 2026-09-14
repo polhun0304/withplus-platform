@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>헌금·후원 - WITH+</title>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B; --primary-dark: #B0154F;
+            --bg-white: #FFFFFF; --bg-light: #F5F5F5;
+            --text-dark: #333333; --text-gray: #666666; --border-color: #E0E0E0;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; background: var(--bg-light); }
+        a { color: inherit; }
+        .app-wrap { max-width: 640px; margin: 0 auto; background: var(--bg-white); min-height: 100vh; }
+
+        .header { border-bottom: 1px solid var(--border-color); position: sticky; top: 0; background: white; z-index: 10; }
+        .header-inner { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 14px 16px; }
+        .org-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 1em; min-width: 0; }
+        .org-brand .logo-img { width: 30px; height: 30px; object-fit: cover; border-radius: 8px; flex-shrink: 0; }
+        .org-brand .brand-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .org-brand .org-type-tag { font-size: 0.72em; color: var(--text-gray); font-weight: 500; }
+        .header-links a { font-size: 0.82em; color: var(--text-gray); text-decoration: none; }
+
+        .tabs { display: flex; border-bottom: 1px solid var(--border-color); background: white; position: sticky; top: 57px; z-index: 9; }
+        .tab-btn { flex: 1; padding: 13px 0; text-align: center; font-weight: 700; font-size: 0.92em; color: var(--text-gray); background: none; border: none; cursor: pointer; border-bottom: 2px solid transparent; }
+        .tab-btn.active { color: var(--primary-color); border-bottom-color: var(--primary-color); }
+
+        .panel { padding: 20px 16px 60px; display: none; }
+        .panel.active { display: block; }
+
+        .state-box { text-align: center; padding: 70px 20px; color: var(--text-gray); }
+        .state-box .emoji { font-size: 2.4em; margin-bottom: 12px; }
+
+        .item-row { display: flex; align-items: center; gap: 10px; padding: 13px 0; border-bottom: 1px solid var(--border-color); }
+        .item-row label { flex: 1; display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 0.95em; cursor: pointer; }
+        .item-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--primary-color); }
+        .item-row input[type="number"] { width: 130px; padding: 9px 10px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95em; text-align: right; }
+        .item-row input[type="number"]:disabled { background: #F5F5F5; color: #bbb; }
+
+        .quick-amounts { display: flex; gap: 6px; margin-top: 20px; flex-wrap: wrap; }
+        .quick-amounts button { padding: 6px 12px; border: 1px solid var(--border-color); border-radius: 16px; background: white; font-size: 0.82em; color: var(--text-gray); cursor: pointer; }
+
+        .form-row { margin-top: 20px; }
+        .form-row label { display: block; font-size: 0.88em; font-weight: 600; margin-bottom: 8px; }
+        .form-row textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.9em; resize: vertical; min-height: 60px; font-family: inherit; }
+        .toggle-row { display: flex; align-items: center; gap: 8px; margin-top: 16px; font-size: 0.9em; }
+
+        .total-box { margin-top: 24px; padding: 16px; background: var(--bg-light); border-radius: 12px; display: flex; justify-content: space-between; align-items: center; font-weight: 700; }
+        .total-box .amount { font-size: 1.25em; color: var(--primary-color); }
+
+        .pay-btn { width: 100%; margin-top: 16px; padding: 15px; border: none; border-radius: 10px; background: var(--primary-color); color: white; font-weight: 700; font-size: 1em; cursor: pointer; }
+        .pay-btn:disabled { background: #ccc; cursor: default; }
+        .msg { margin-top: 12px; font-size: 0.88em; text-align: center; }
+        .msg.error { color: #D32F2F; }
+        .msg.info { color: var(--text-gray); }
+
+        #toss-payment-method, #toss-agreement { margin-top: 16px; }
+
+        .summary-row { display: flex; gap: 10px; margin-bottom: 18px; }
+        .summary-card { flex: 1; background: var(--bg-light); border-radius: 12px; padding: 14px; text-align: center; }
+        .summary-card .label { font-size: 0.78em; color: var(--text-gray); margin-bottom: 6px; }
+        .summary-card .value { font-size: 1.05em; font-weight: 800; color: var(--primary-color); }
+
+        .history-item { padding: 14px 0; border-bottom: 1px solid var(--border-color); }
+        .history-item .top-row { display: flex; justify-content: space-between; align-items: baseline; }
+        .history-item .items-label { font-weight: 700; font-size: 0.95em; }
+        .history-item .amount { font-weight: 800; color: var(--primary-color); }
+        .history-item .date { font-size: 0.78em; color: var(--text-gray); margin-top: 4px; }
+        .history-item .memo { font-size: 0.82em; color: var(--text-gray); margin-top: 6px; background: var(--bg-light); border-radius: 8px; padding: 8px 10px; }
+
+        .year-filter { display: flex; gap: 6px; margin-bottom: 16px; }
+        .year-filter button { padding: 6px 14px; border: 1px solid var(--border-color); border-radius: 16px; background: white; font-size: 0.85em; cursor: pointer; }
+        .year-filter button.active { background: var(--primary-color); color: white; border-color: var(--primary-color); }
+    </style>
+</head>
+<body>
+    <div class="app-wrap">
+        <div class="header">
+            <div class="header-inner">
+                <div class="org-brand" id="org-brand">불러오는 중...</div>
+                <div class="header-links"><a href="/mypage">마이페이지</a></div>
+            </div>
+        </div>
+        <div class="tabs">
+            <button class="tab-btn active" data-tab="give">헌금·후원 하기</button>
+            <button class="tab-btn" data-tab="history">내 헌금 내역</button>
+        </div>
+
+        <div class="panel active" id="panel-give"><div class="state-box"><div class="emoji">⏳</div>불러오는 중입니다...</div></div>
+        <div class="panel" id="panel-history"><div class="state-box"><div class="emoji">⏳</div>불러오는 중입니다...</div></div>
+    </div>
+
+    <script src="/withplus-common.js"></script>
+    <script>
+    (async function () {
+        const slug = new URLSearchParams(location.search).get('c') || location.pathname.split('/').filter(Boolean).pop();
+        const giveBox = document.getElementById('panel-give');
+        const historyBox = document.getElementById('panel-history');
+        const brandBox = document.getElementById('org-brand');
+
+        // 탭 전환
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+                document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+                btn.classList.add('active');
+                document.getElementById('panel-' + btn.dataset.tab).classList.add('active');
+                if (btn.dataset.tab === 'history' && !historyLoaded) loadHistory();
+            });
+        });
+
+        if (!slug || slug === 'offering.html' || slug === 'give') {
+            giveBox.innerHTML = `<div class="state-box"><div class="emoji">🙏</div><h3>헌금·후원할 조직을 먼저 선택해주세요</h3><p style="margin-top:10px;"><a href="/communities" style="color:var(--primary-color); font-weight:700;">전체 조직(커뮤니티) 목록 보기 →</a></p></div>`;
+            historyBox.innerHTML = giveBox.innerHTML;
+            return;
+        }
+
+        // 로그인 확인
+        const token = await WithPlus.getAccessToken();
+        if (!token) {
+            const back = encodeURIComponent(location.pathname + location.search);
+            giveBox.innerHTML = `<div class="state-box"><div class="emoji">🔒</div><h3>로그인이 필요합니다</h3><p style="margin-top:10px;"><a href="/login.html?redirect=${back}" style="color:var(--primary-color); font-weight:700;">로그인하러 가기 →</a></p></div>`;
+            historyBox.innerHTML = giveBox.innerHTML;
+            return;
+        }
+
+        // 조직 정보 조회
+        let community;
+        try {
+            const { ok, json } = await WithPlus.fetchJSON('/api/communities/' + encodeURIComponent(slug));
+            if (!ok || !json.success) throw new Error(json.message || '조직 정보를 불러오지 못했습니다');
+            community = json.data;
+        } catch (err) {
+            giveBox.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>조직을 찾을 수 없습니다</h3><p style="margin-top:10px;">${WithPlus.escapeHtml(err.message)}</p></div>`;
+            historyBox.innerHTML = giveBox.innerHTML;
+            return;
+        }
+
+        const primaryColor = community.primary_color || '#D32F5B';
+        document.documentElement.style.setProperty('--primary-color', primaryColor);
+        document.title = `${community.name} 헌금·후원 - WITH+`;
+        brandBox.innerHTML = `
+            ${community.logo_url ? `<img src="${WithPlus.safeUrlAttr(community.logo_url)}" class="logo-img" alt="${WithPlus.escapeHtml(community.name)} 로고">` : '🙏'}
+            <div><span class="brand-text">${WithPlus.escapeHtml(community.name)}</span><br>
+            <span class="org-type-tag">${WithPlus.escapeHtml(WithPlus.getOrgTypeName(community.org_type))} · 온라인 헌금/후원</span></div>`;
+
+        const labels = community.offering_labels || { general: '헌금' };
+        const labelEntries = Object.entries(labels);
+
+        // ===== 헌금하기 폼 렌더 =====
+        giveBox.innerHTML = `
+            <form id="give-form">
+                ${labelEntries.map(([key, label], i) => `
+                    <div class="item-row">
+                        <label>
+                            <input type="checkbox" class="item-check" data-key="${WithPlus.escapeHtml(key)}" data-label="${WithPlus.escapeHtml(label)}" ${i === 0 ? 'checked' : ''}>
+                            ${WithPlus.escapeHtml(label)}
+                        </label>
+                        <input type="number" class="item-amount" data-key="${WithPlus.escapeHtml(key)}" min="0" step="1000" placeholder="0" ${i === 0 ? '' : 'disabled'}>
+                    </div>`).join('')}
+                <div class="quick-amounts" id="quick-amounts">
+                    ${[10000, 30000, 50000, 100000, 300000].map(v => `<button type="button" data-amount="${v}">${WithPlus.formatPrice(v)}</button>`).join('')}
+                </div>
+                <div class="form-row">
+                    <label for="memo-input">기도제목·감사제목 (선택)</label>
+                    <textarea id="memo-input" maxlength="500" placeholder="나누고 싶은 내용이 있으면 적어주세요"></textarea>
+                </div>
+                <div class="toggle-row">
+                    <input type="checkbox" id="anon-check" style="width:18px; height:18px;">
+                    <label for="anon-check">무기명으로 헌금하기 (담당자에게 이름이 표시되지 않습니다)</label>
+                </div>
+                <div class="total-box">
+                    <span>총 헌금·후원 금액</span>
+                    <span class="amount" id="total-amount">0원</span>
+                </div>
+                <button type="button" class="pay-btn" id="give-submit-btn">결제하기</button>
+                <div class="msg" id="give-msg"></div>
+                <div id="toss-payment-method"></div>
+                <div id="toss-agreement"></div>
+                <button type="button" class="pay-btn" id="toss-pay-btn" style="display:none;"></button>
+            </form>`;
+
+        function recalcTotal() {
+            let total = 0;
+            document.querySelectorAll('.item-check:checked').forEach(chk => {
+                const input = document.querySelector(`.item-amount[data-key="${CSS.escape(chk.dataset.key)}"]`);
+                total += Number(input.value || 0);
+            });
+            document.getElementById('total-amount').textContent = WithPlus.formatPrice(total);
+            return total;
+        }
+        document.querySelectorAll('.item-check').forEach(chk => {
+            chk.addEventListener('change', () => {
+                const input = document.querySelector(`.item-amount[data-key="${CSS.escape(chk.dataset.key)}"]`);
+                input.disabled = !chk.checked;
+                if (!chk.checked) input.value = '';
+                recalcTotal();
+            });
+        });
+        document.querySelectorAll('.item-amount').forEach(inp => inp.addEventListener('input', recalcTotal));
+        document.getElementById('quick-amounts').addEventListener('click', (e) => {
+            if (e.target.tagName !== 'BUTTON') return;
+            const checkedFirst = document.querySelector('.item-check:checked');
+            if (!checkedFirst) return;
+            document.querySelector(`.item-amount[data-key="${CSS.escape(checkedFirst.dataset.key)}"]`).value = e.target.dataset.amount;
+            recalcTotal();
+        });
+
+        const giveMsg = document.getElementById('give-msg');
+        document.getElementById('give-submit-btn').addEventListener('click', async () => {
+            const items = [];
+            document.querySelectorAll('.item-check:checked').forEach(chk => {
+                const amount = Number(document.querySelector(`.item-amount[data-key="${CSS.escape(chk.dataset.key)}"]`).value || 0);
+                if (amount > 0) items.push({ key: chk.dataset.key, amount });
+            });
+            if (items.length === 0) {
+                giveMsg.className = 'msg error';
+                giveMsg.textContent = '헌금 항목과 금액을 1개 이상 입력해주세요.';
+                return;
+            }
+
+            const submitBtn = document.getElementById('give-submit-btn');
+            submitBtn.disabled = true;
+            giveMsg.className = 'msg info';
+            giveMsg.textContent = '헌금 내역을 준비하는 중입니다...';
+
+            try {
+                const t = await WithPlus.getAccessToken();
+                const memo = document.getElementById('memo-input').value.trim();
+                const isAnonymous = document.getElementById('anon-check').checked;
+                const res = await fetch('/api/offerings', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + t },
+                    body: JSON.stringify({ community_slug: slug, items, is_anonymous: isAnonymous, memo })
+                });
+                const json = await res.json();
+                if (!res.ok || !json.success) throw new Error(json.message || '헌금 생성에 실패했습니다');
+                const offering = json.data;
+
+                // 토스 결제위젯 로드
+                const { json: cfgJson } = await WithPlus.fetchJSON('/api/payments/toss/config');
+                if (!cfgJson.data || !cfgJson.data.enabled || !cfgJson.data.clientKey) {
+                    throw new Error('현재 결제 연동이 준비되지 않았습니다. 관리자에게 문의해주세요.');
+                }
+                if (!document.getElementById('toss-sdk-script')) {
+                    await new Promise((resolve, reject) => {
+                        const s = document.createElement('script');
+                        s.id = 'toss-sdk-script';
+                        s.src = 'https://js.tosspayments.com/v1/payment-widget';
+                        s.onload = resolve;
+                        s.onerror = () => reject(new Error('결제 위젯을 불러오지 못했습니다'));
+                        document.head.appendChild(s);
+                    });
+                }
+                const session = await WithPlus.getSession();
+                const widget = PaymentWidget(cfgJson.data.clientKey, (session && session.user && session.user.id) || PaymentWidget.ANONYMOUS);
+                widget.renderPaymentMethods('#toss-payment-method', { value: offering.total_amount });
+                widget.renderAgreement('#toss-agreement');
+
+                submitBtn.style.display = 'none';
+                const payBtn = document.getElementById('toss-pay-btn');
+                payBtn.style.display = 'block';
+                payBtn.textContent = WithPlus.formatPrice(offering.total_amount) + ' 결제하기';
+                giveMsg.textContent = '';
+
+                payBtn.addEventListener('click', async () => {
+                    try {
+                        await widget.requestPayment({
+                            orderId: offering.order_number,
+                            orderName: `${community.name} ${items.map(i => i.key).length > 1 ? '헌금 외 ' + (items.length - 1) + '건' : (labels[items[0].key] || '헌금')}`,
+                            successUrl: location.origin + '/payment-result.html',
+                            failUrl: location.origin + '/payment-result.html',
+                            customerEmail: (session && session.user && session.user.email) || undefined
+                        });
+                    } catch (err) {
+                        giveMsg.className = 'msg error';
+                        giveMsg.textContent = '결제 진행 중 문제가 발생했습니다: ' + (err.message || err);
+                    }
+                });
+            } catch (err) {
+                giveMsg.className = 'msg error';
+                giveMsg.textContent = err.message;
+                submitBtn.disabled = false;
+            }
+        });
+
+        // ===== 헌금 내역 =====
+        let historyLoaded = false;
+        async function loadHistory() {
+            historyLoaded = true;
+            try {
+                const t = await WithPlus.getAccessToken();
+                const res = await fetch('/api/offerings/my', { headers: { Authorization: 'Bearer ' + t } });
+                const json = await res.json();
+                if (!res.ok || !json.success) throw new Error(json.message || '헌금 내역을 불러오지 못했습니다');
+                const list = (json.data || []).filter(o => o.communities && o.communities.slug === slug);
+                const summary = {
+                    total_all_time: list.reduce((s, o) => s + Number(o.total_amount || 0), 0),
+                    count: list.length
+                };
+                if (list.length === 0) {
+                    historyBox.innerHTML = `<div class="state-box"><div class="emoji">🙏</div><h3>아직 이 조직에 헌금·후원한 내역이 없습니다</h3></div>`;
+                    return;
+                }
+                historyBox.innerHTML = `
+                    <div class="summary-row">
+                        <div class="summary-card"><div class="label">총 헌금·후원액</div><div class="value">${WithPlus.formatPrice(summary.total_all_time)}</div></div>
+                        <div class="summary-card"><div class="label">총 건수</div><div class="value">${summary.count}건</div></div>
+                    </div>
+                    ${list.map(o => `
+                        <div class="history-item">
+                            <div class="top-row">
+                                <span class="items-label">${WithPlus.escapeHtml((o.items || []).map(it => it.label).join(', '))}</span>
+                                <span class="amount">${WithPlus.formatPrice(o.total_amount)}</span>
+                            </div>
+                            <div class="date">${o.paid_at ? new Date(o.paid_at).toLocaleString('ko-KR') : ''} · 주문번호 ${WithPlus.escapeHtml(o.order_number)}</div>
+                            ${o.memo ? `<div class="memo">${WithPlus.escapeHtml(o.memo)}</div>` : ''}
+                        </div>`).join('')}
+                    <p style="margin-top:20px; font-size:0.8em; color:var(--text-gray); text-align:center;">연말정산용 기부금영수증 자동발급 기능은 준비 중입니다.</p>`;
+            } catch (err) {
+                historyBox.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>내역을 불러오지 못했습니다</h3><p style="margin-top:10px;">${WithPlus.escapeHtml(err.message)}</p></div>`;
+            }
+        }
+
+        recalcTotal();
+    })();
+    </script>
+</body>
+</html>
