@@ -1609,6 +1609,7 @@
                     ${isAdmin ? '<button class="tab-btn" data-tab="wholesale-applications">🏭 도매몰 입점신청</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="marketing-segments">🎯 타겟 마케팅</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="communities">🏢 분양 조직 관리</button>' : ''}
+                    ${isAdmin ? '<button class="tab-btn" data-tab="prospects">📋 분양 영업 리스트</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="community-settlements">💵 분양조직 정산</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="boards">📝 게시판 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="returns">↩️ 취소/반품/교환 관리</button>' : ''}
@@ -1849,6 +1850,33 @@
                         <button class="btn btn-primary" id="btn-new-community">+ 새 조직 추가</button>
                     </div>
                     <div id="communities-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                </div>
+                <div class="tab-panel" id="tab-prospects">
+                    <div class="panel-toolbar" style="flex-wrap:wrap; gap:10px;">
+                        <span style="color:var(--text-gray); font-size:0.9em;">전국 교회·성당·사찰 등 수집 후보 목록입니다. 여기서는 <strong>공개 전환(✅) 체크 전까지 어떤 공개 화면에도 노출되지 않습니다.</strong> 체크하는 순간 <code>/c/슬러그</code> 랜딩페이지가 실제로 열립니다.</span>
+                    </div>
+                    <div class="panel-toolbar" style="flex-wrap:wrap; gap:10px;">
+                        <select id="prospects-filter-org-type" style="padding:8px 10px; border:1px solid var(--border-color); border-radius:6px;">
+                            <option value="">전체 종교</option>
+                            <option value="church">개신교(교회)</option>
+                            <option value="catholic">천주교(성당)</option>
+                            <option value="buddhist">불교(사찰)</option>
+                            <option value="other">기타</option>
+                        </select>
+                        <select id="prospects-filter-status" style="padding:8px 10px; border:1px solid var(--border-color); border-radius:6px;">
+                            <option value="">전체 상태</option>
+                            <option value="prospect">잠재(미컨택)</option>
+                            <option value="contacted">컨택중</option>
+                            <option value="declined">보류/거절</option>
+                            <option value="converted">공개 전환됨</option>
+                        </select>
+                        <input type="text" id="prospects-filter-sido" placeholder="시/도 (예: 서울특별시)" style="padding:8px 10px; border:1px solid var(--border-color); border-radius:6px;">
+                        <input type="text" id="prospects-filter-sigungu" placeholder="시/군/구 (예: 중구)" style="padding:8px 10px; border:1px solid var(--border-color); border-radius:6px;">
+                        <button type="button" class="btn btn-secondary" id="btn-prospects-search">검색</button>
+                        <button type="button" class="btn btn-primary" id="btn-prospects-add">+ 후보 직접 추가</button>
+                    </div>
+                    <div id="prospects-add-form-area" style="display:none;"></div>
+                    <div id="prospects-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                 </div>
                 <div class="tab-panel" id="tab-community-settlements">
                     <div id="community-settlements-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
@@ -7175,6 +7203,181 @@
                     }
                     tableArea.dataset.loaded = '1';
                     loadCommunitiesAdmin();
+                });
+
+                // ===== 분양 영업 리스트(전국 종교시설 후보) 관리 (관리자 전용) =====
+                // community_prospects(비공개 스테이징)에만 쌓이며, "✅ 공개 전환"을 누르는 순간에만
+                // 실제 communities 행이 생성되어 /c/슬러그 랜딩페이지가 열린다(server.js의 promote API).
+                const PROSPECT_ORG_TYPE_LABEL = { church: '개신교(교회)', catholic: '천주교(성당)', buddhist: '불교(사찰)', other: '기타' };
+                const PROSPECT_STATUS_LABEL = { prospect: '잠재(미컨택)', contacted: '컨택중', declined: '보류/거절', converted: '공개 전환됨' };
+                let prospectsCache = [];
+
+                async function loadProspectsAdmin() {
+                    const tableArea = document.getElementById('prospects-table-area');
+                    tableArea.innerHTML = `<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>`;
+                    try {
+                        const params = new URLSearchParams();
+                        const orgType = document.getElementById('prospects-filter-org-type').value;
+                        const status = document.getElementById('prospects-filter-status').value;
+                        const sido = document.getElementById('prospects-filter-sido').value.trim();
+                        const sigungu = document.getElementById('prospects-filter-sigungu').value.trim();
+                        if (orgType) params.set('org_type', orgType);
+                        if (status) params.set('status', status);
+                        if (sido) params.set('region_sido', sido);
+                        if (sigungu) params.set('region_sigungu', sigungu);
+
+                        const { ok, json } = await authedFetch('/api/admin/prospects?' + params.toString());
+                        if (!ok || !json.success) throw new Error(json.message || '영업리스트를 불러오지 못했습니다');
+                        prospectsCache = json.data;
+
+                        if (prospectsCache.length === 0) {
+                            tableArea.innerHTML = `<div class="state-box"><div class="emoji">📋</div><h3>조건에 맞는 후보가 없습니다</h3><p>"+ 후보 직접 추가"로 추가하거나 필터를 조정해보세요</p></div>`;
+                            return;
+                        }
+
+                        tableArea.innerHTML = `
+                            <table>
+                                <thead><tr><th>종교</th><th>이름</th><th>주소</th><th>연락처</th><th>출처</th><th>내부 메모</th><th>상태</th><th>✅ 공개 전환</th></tr></thead>
+                                <tbody>
+                                    ${prospectsCache.map(p => `
+                                    <tr data-id="${p.id}">
+                                        <td data-label="종교">${PROSPECT_ORG_TYPE_LABEL[p.org_type] || p.org_type}</td>
+                                        <td data-label="이름">${WithPlus.escapeHtml(p.name)}</td>
+                                        <td data-label="주소">${WithPlus.escapeHtml(p.address || '-')}${p.phone ? `<br><span style="color:var(--text-gray); font-size:0.85em;">${WithPlus.escapeHtml(p.phone)}</span>` : ''}</td>
+                                        <td data-label="연락처">${WithPlus.escapeHtml(p.phone || '-')}</td>
+                                        <td data-label="출처">${p.source_url ? `<a href="${WithPlus.escapeHtml(p.source_url)}" target="_blank" rel="noopener">${WithPlus.escapeHtml(p.source)} ↗</a>` : WithPlus.escapeHtml(p.source)}</td>
+                                        <td data-label="내부 메모">
+                                            <input type="text" class="prospect-note-input" value="${WithPlus.escapeHtml(p.admin_note || '')}" placeholder="통화 이력 등 내부 메모" style="width:150px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; font-size:0.85em;">
+                                            <button type="button" class="btn btn-secondary act-save-note" style="padding:4px 8px; font-size:0.78em;">저장</button>
+                                        </td>
+                                        <td data-label="상태">
+                                            ${p.status === 'converted'
+                                                ? `<span class="badge active">공개 전환됨</span>`
+                                                : `<select class="prospect-status-select" style="padding:4px 6px; border:1px solid var(--border-color); border-radius:6px; font-size:0.82em;">
+                                                    <option value="prospect" ${p.status === 'prospect' ? 'selected' : ''}>잠재(미컨택)</option>
+                                                    <option value="contacted" ${p.status === 'contacted' ? 'selected' : ''}>컨택중</option>
+                                                    <option value="declined" ${p.status === 'declined' ? 'selected' : ''}>보류/거절</option>
+                                                   </select>`}
+                                        </td>
+                                        <td data-label="공개 전환" style="text-align:center;">
+                                            <label style="display:inline-flex; align-items:center; gap:6px; cursor:pointer;">
+                                                <input type="checkbox" class="act-toggle-promote" ${p.status === 'converted' ? 'checked' : ''}>
+                                                ${p.status === 'converted' ? '<a href="/c/' + encodeURIComponent(p.promoted_community_slug || '') + '" target="_blank" rel="noopener" style="font-size:0.8em;">열기 ↗</a>' : ''}
+                                            </label>
+                                        </td>
+                                    </tr>`).join('')}
+                                </tbody>
+                            </table>`;
+
+                        tableArea.querySelectorAll('.act-save-note').forEach(btn => {
+                            btn.addEventListener('click', async () => {
+                                const tr = btn.closest('tr');
+                                const id = tr.dataset.id;
+                                const note = tr.querySelector('.prospect-note-input').value;
+                                btn.disabled = true; btn.textContent = '저장 중...';
+                                const { ok, json } = await authedFetch('/api/admin/prospects/' + id, { method: 'PATCH', body: JSON.stringify({ admin_note: note }) });
+                                btn.disabled = false; btn.textContent = '저장';
+                                if (!ok) alert(json.message || '메모 저장에 실패했습니다');
+                            });
+                        });
+
+                        tableArea.querySelectorAll('.prospect-status-select').forEach(sel => {
+                            sel.addEventListener('change', async () => {
+                                const id = sel.closest('tr').dataset.id;
+                                const { ok, json } = await authedFetch('/api/admin/prospects/' + id, { method: 'PATCH', body: JSON.stringify({ status: sel.value }) });
+                                if (!ok) { alert(json.message || '상태 변경에 실패했습니다'); loadProspectsAdmin(); return; }
+                                const p = prospectsCache.find(x => x.id === id);
+                                if (p) p.status = sel.value;
+                            });
+                        });
+
+                        tableArea.querySelectorAll('.act-toggle-promote').forEach(cb => {
+                            cb.addEventListener('change', async () => {
+                                const tr = cb.closest('tr');
+                                const id = tr.dataset.id;
+                                const p = prospectsCache.find(x => x.id === id);
+                                if (cb.checked) {
+                                    if (!confirm(`'${p.name}'을(를) 공개 전환하시겠습니까?\n\n즉시 /c/슬러그 랜딩페이지가 열리며 누구나 볼 수 있게 됩니다.`)) { cb.checked = false; return; }
+                                    cb.disabled = true;
+                                    const { ok, json } = await authedFetch('/api/admin/prospects/' + id + '/promote', { method: 'PUT', body: JSON.stringify({}) });
+                                    cb.disabled = false;
+                                    if (!ok) { alert(json.message || '공개 전환에 실패했습니다'); cb.checked = false; return; }
+                                    alert(json.message || '공개 전환되었습니다');
+                                } else {
+                                    if (!confirm(`'${p.name}'의 공개를 취소하시겠습니까?\n\n랜딩페이지가 비공개로 전환됩니다(기존 주문/헌금 이력은 보존됩니다).`)) { cb.checked = true; return; }
+                                    cb.disabled = true;
+                                    const { ok, json } = await authedFetch('/api/admin/prospects/' + id + '/demote', { method: 'PUT' });
+                                    cb.disabled = false;
+                                    if (!ok) { alert(json.message || '공개 취소에 실패했습니다'); cb.checked = true; return; }
+                                    alert(json.message || '공개가 취소되었습니다');
+                                }
+                                loadProspectsAdmin();
+                            });
+                        });
+                    } catch (err) {
+                        tableArea.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>불러오기 실패</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                    }
+                }
+
+                document.getElementById('btn-prospects-search').addEventListener('click', loadProspectsAdmin);
+
+                document.getElementById('btn-prospects-add').addEventListener('click', () => {
+                    const area = document.getElementById('prospects-add-form-area');
+                    if (area.style.display === 'block') { area.style.display = 'none'; return; }
+                    area.style.display = 'block';
+                    area.innerHTML = `
+                        <div class="card" style="padding:16px; margin-bottom:12px; background:var(--bg-light); border-radius:8px;">
+                            <h4 style="margin:0 0 10px;">후보 직접 추가</h4>
+                            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:8px; margin-bottom:10px;">
+                                <input type="text" id="pf-name" placeholder="이름 (필수, 예: 명동 주교좌성당)" style="padding:8px; border:1px solid var(--border-color); border-radius:6px;">
+                                <select id="pf-org-type" style="padding:8px; border:1px solid var(--border-color); border-radius:6px;">
+                                    <option value="church">개신교(교회)</option>
+                                    <option value="catholic">천주교(성당)</option>
+                                    <option value="buddhist">불교(사찰)</option>
+                                    <option value="other">기타</option>
+                                </select>
+                                <input type="text" id="pf-address" placeholder="주소" style="padding:8px; border:1px solid var(--border-color); border-radius:6px;">
+                                <input type="text" id="pf-sido" placeholder="시/도" style="padding:8px; border:1px solid var(--border-color); border-radius:6px;">
+                                <input type="text" id="pf-sigungu" placeholder="시/군/구" style="padding:8px; border:1px solid var(--border-color); border-radius:6px;">
+                                <input type="text" id="pf-phone" placeholder="전화번호" style="padding:8px; border:1px solid var(--border-color); border-radius:6px;">
+                                <input type="text" id="pf-source" placeholder="출처 (필수, 예: 수기입력)" value="admin_manual" style="padding:8px; border:1px solid var(--border-color); border-radius:6px;">
+                                <input type="text" id="pf-source-url" placeholder="출처 URL (선택)" style="padding:8px; border:1px solid var(--border-color); border-radius:6px;">
+                            </div>
+                            <button type="button" class="btn btn-primary" id="pf-submit">추가</button>
+                            <span id="pf-msg" style="margin-left:10px; font-size:0.85em;"></span>
+                        </div>`;
+                    document.getElementById('pf-submit').addEventListener('click', async () => {
+                        const msg = document.getElementById('pf-msg');
+                        const name = document.getElementById('pf-name').value.trim();
+                        const source = document.getElementById('pf-source').value.trim();
+                        if (!name || !source) { msg.textContent = '이름과 출처는 필수입니다'; msg.style.color = 'var(--danger-color, red)'; return; }
+                        const item = {
+                            name,
+                            org_type: document.getElementById('pf-org-type').value,
+                            address: document.getElementById('pf-address').value.trim() || null,
+                            region_sido: document.getElementById('pf-sido').value.trim() || null,
+                            region_sigungu: document.getElementById('pf-sigungu').value.trim() || null,
+                            phone: document.getElementById('pf-phone').value.trim() || null,
+                            source,
+                            source_url: document.getElementById('pf-source-url').value.trim() || null
+                        };
+                        const btn = document.getElementById('pf-submit');
+                        btn.disabled = true; btn.textContent = '추가 중...';
+                        const { ok, json } = await authedFetch('/api/admin/prospects/bulk-import', { method: 'POST', body: JSON.stringify({ items: [item] }) });
+                        btn.disabled = false; btn.textContent = '추가';
+                        if (!ok) { msg.textContent = json.message || '추가에 실패했습니다'; msg.style.color = 'var(--danger-color, red)'; return; }
+                        if (json.inserted === 0) { msg.textContent = '이미 동일한 항목이 등록되어 있어 건너뛰었습니다(중복)'; msg.style.color = 'var(--text-gray)'; return; }
+                        msg.textContent = '추가되었습니다'; msg.style.color = 'green';
+                        document.getElementById('prospects-add-form-area').style.display = 'none';
+                        loadProspectsAdmin();
+                    });
+                });
+
+                document.querySelector('[data-tab="prospects"]').addEventListener('click', () => {
+                    const tableArea = document.getElementById('prospects-table-area');
+                    if (tableArea.dataset.loaded) return;
+                    tableArea.dataset.loaded = '1';
+                    loadProspectsAdmin();
                 });
 
                 // ===== 분양 조직 담당자(다중) 관리 모달 =====

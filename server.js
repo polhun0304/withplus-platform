@@ -10496,6 +10496,269 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
   }
 });
 
+// ============================================
+// 분양 영업 리스트(전국 종교시설 후보) 관리 API - 관리자 전용
+// ============================================
+// 전국 교회·성당·사찰 등을 수집해 우선 비공개 스테이징 테이블(community_prospects)에만 쌓는다.
+// communities(공개 테이블)와 완전히 분리되어 있어, 관리자가 "공개 전환(promote)"을 누르기 전까지는
+// /c/슬러그 랜딩페이지 등 어떤 공개 화면에도 절대 노출되지 않는다.
+// (형님 결정: nationwide_religious_org_import_plan.md 참고 - "1번으로 하되 관리자 모드에서
+//  체크만 하면 바로 2번처럼 공개가 되도록" 구현)
+const PROSPECT_STATUSES = ['prospect', 'contacted', 'declined', 'converted'];
+
+// name+address를 정규화해 중복 수집을 걸러내는 키 (공백 제거, 주소는 앞부분만 사용)
+function computeDedupKeyForProspect(orgType, name, address) {
+  const normalize = (s) => String(s || '').replace(/\s+/g, '').trim();
+  return `${orgType}_${normalize(name)}_${normalize(address).slice(0, 30)}`;
+}
+
+app.get('/api/admin/prospects', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { org_type, region_sido, region_sigungu, status } = req.query;
+    let query = supabase.from('community_prospects').select('*', { count: 'exact' }).order('collected_at', { ascending: false });
+    if (org_type) {
+      if (!ORG_TYPES.includes(org_type)) {
+        return res.status(400).json({ error: 'Bad Request', message: `org_type은 ${ORG_TYPES.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+      }
+      query = query.eq('org_type', org_type);
+    }
+    if (region_sido) query = query.eq('region_sido', region_sido);
+    if (region_sigungu) query = query.eq('region_sigungu', region_sigungu);
+    if (status) {
+      if (!PROSPECT_STATUSES.includes(status)) {
+        return res.status(400).json({ error: 'Bad Request', message: `status는 ${PROSPECT_STATUSES.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+      }
+      query = query.eq('status', status);
+    }
+    const { data, error, count } = await query;
+    if (error) throw error;
+
+    // 공개 전환된 항목은 관리자 화면에서 바로 "/c/슬러그"로 이동할 수 있게 슬러그를 함께 내려준다
+    // (communities와 FK로만 연결되어 있어 별도 조회 후 합쳐줘야 함)
+    const promotedIds = [...new Set((data || []).map(p => p.promoted_community_id).filter(Boolean))];
+    let slugMap = {};
+    if (promotedIds.length > 0) {
+      const { data: promotedCommunities } = await supabase.from('communities').select('id, slug').in('id', promotedIds);
+      (promotedCommunities || []).forEach(c => { slugMap[c.id] = c.slug; });
+    }
+    const result = (data || []).map(p => ({
+      ...p,
+      promoted_community_slug: p.promoted_community_id ? (slugMap[p.promoted_community_id] || null) : null
+    }));
+
+    res.json({ success: true, data: result, count: count ?? result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching prospects:', err);
+    res.status(500).json({ error: 'Failed to fetch prospects', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 수집 스크립트가 소스별로 모아온 후보들을 한 번에 스테이징에 적재 - dedup_key 충돌은 조용히 건너뜀(이미 있는 건)
+app.post('/api/admin/prospects/bulk-import', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { items } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'items 배열이 최소 1개 필요합니다', timestamp: new Date().toISOString() });
+    }
+    const rows = [];
+    for (const raw of items) {
+      const name = String(raw?.name || '').trim();
+      const orgType = raw?.org_type;
+      const source = String(raw?.source || '').trim();
+      if (!name || !orgType || !ORG_TYPES.includes(orgType) || !source) {
+        return res.status(400).json({ error: 'Bad Request', message: `각 항목은 name, org_type(${ORG_TYPES.join('/')}), source가 필요합니다`, timestamp: new Date().toISOString() });
+      }
+      const address = raw?.address ? String(raw.address).trim() : null;
+      rows.push({
+        name,
+        org_type: orgType,
+        address,
+        region_sido: raw?.region_sido || null,
+        region_sigungu: raw?.region_sigungu || null,
+        phone: raw?.phone || null,
+        latitude: raw?.latitude != null && raw.latitude !== '' ? Number(raw.latitude) : null,
+        longitude: raw?.longitude != null && raw.longitude !== '' ? Number(raw.longitude) : null,
+        source,
+        source_url: raw?.source_url || null,
+        dedup_key: raw?.dedup_key ? String(raw.dedup_key).trim() : computeDedupKeyForProspect(orgType, name, address),
+        admin_note: raw?.admin_note || null
+      });
+    }
+
+    const { data, error } = await supabase
+      .from('community_prospects')
+      .upsert(rows, { onConflict: 'dedup_key', ignoreDuplicates: true })
+      .select('id');
+    if (error) throw error;
+
+    const insertedCount = (data || []).length;
+    res.status(201).json({
+      success: true,
+      inserted: insertedCount,
+      skipped: rows.length - insertedCount,
+      requested: rows.length,
+      message: `${insertedCount}건 신규 등록, ${rows.length - insertedCount}건은 중복이라 건너뛰었습니다`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error bulk-importing prospects:', err);
+    res.status(500).json({ error: 'Failed to bulk-import prospects', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 영업 상태(컨택중/보류)와 내부 메모만 수정 - status를 'converted'로 직접 바꾸는 건 막는다(공개 전환은 반드시 promote API로만)
+app.patch('/api/admin/prospects/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { status, admin_note } = req.body || {};
+    const updates = { updated_at: new Date().toISOString() };
+    if (status !== undefined) {
+      if (!PROSPECT_STATUSES.includes(status) || status === 'converted') {
+        return res.status(400).json({ error: 'Bad Request', message: `status는 ${PROSPECT_STATUSES.filter(s => s !== 'converted').join(', ')} 중 하나여야 합니다 (converted는 공개 전환(promote) API를 통해서만 설정됩니다)`, timestamp: new Date().toISOString() });
+      }
+      updates.status = status;
+    }
+    if (admin_note !== undefined) updates.admin_note = admin_note ? String(admin_note).slice(0, 2000) : null;
+    if (Object.keys(updates).length === 1) {
+      return res.status(400).json({ error: 'Bad Request', message: '변경할 status 또는 admin_note가 필요합니다', timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase.from('community_prospects').update(updates).eq('id', req.params.id).select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '해당 영업리스트 항목을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating prospect:', err);
+    res.status(500).json({ error: 'Failed to update prospect', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// "✅ 공개 전환" 체크박스 - community_prospects 한 건을 실제 communities(공개 랜딩페이지) 레코드로 승격시킨다.
+// POST /api/admin/communities와 동일한 org_type/offering_labels 규칙을 재사용한다.
+app.put('/api/admin/prospects/:id/promote', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: prospect, error: pErr } = await supabase.from('community_prospects').select('*').eq('id', req.params.id).maybeSingle();
+    if (pErr) throw pErr;
+    if (!prospect) return res.status(404).json({ error: 'Not Found', message: '해당 영업리스트 항목을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    // 이전에 공개 전환했다가 되돌린(demote) 이력이 있으면 새로 만들지 않고 기존에 연결된 조직을 재활성화한다
+    // (그렇지 않으면 재전환할 때마다 슬러그가 중복된 새 조직이 계속 생겨버림)
+    if (prospect.promoted_community_id) {
+      const { data: reactivated, error: reErr } = await supabase
+        .from('communities')
+        .update({ status: 'active', updated_at: new Date().toISOString() })
+        .eq('id', prospect.promoted_community_id)
+        .select()
+        .maybeSingle();
+      if (reErr) throw reErr;
+      if (reactivated) {
+        const { data: updatedProspect, error: upErr } = await supabase
+          .from('community_prospects')
+          .update({ status: 'converted', updated_at: new Date().toISOString() })
+          .eq('id', prospect.id)
+          .select()
+          .single();
+        if (upErr) throw upErr;
+        return res.json({ success: true, data: updatedProspect, community: reactivated, message: `이미 연결되어 있던 "${reactivated.name}"을(를) 다시 공개 전환했습니다 (/c/${reactivated.slug})`, timestamp: new Date().toISOString() });
+      }
+      // 연결된 communities 행이 실제로는 없는 이례적 상황(수동 삭제 등) - 아래에서 새로 생성 진행
+    }
+
+    const { slug: requestedSlug, offering_labels, landing_template, business_info_mode } = req.body || {};
+
+    // 한글 전용 조직명은 기존 슬러그 정리 로직(영문/숫자/하이픈만 허용)을 거치면 빈 문자열이 되므로,
+    // 관리자가 직접 슬러그를 안 주면 org_type-p<id앞8자리> 패턴으로 자동 생성한다
+    let cleanSlug = requestedSlug ? String(requestedSlug).trim().toLowerCase().replace(/[^a-z0-9-]/g, '-') : '';
+    if (!cleanSlug) {
+      cleanSlug = `${prospect.org_type}-p${String(prospect.id).replace(/-/g, '').slice(0, 8)}`;
+    }
+
+    const resolvedOrgType = ORG_TYPES.includes(prospect.org_type) ? prospect.org_type : 'other';
+    const resolvedOfferingLabels = offering_labels || DEFAULT_OFFERING_LABELS[resolvedOrgType];
+
+    const { data: newCommunity, error: cErr } = await supabase
+      .from('communities')
+      .insert([{
+        name: prospect.name,
+        slug: cleanSlug,
+        description: '',
+        address: prospect.address || null,
+        phone: prospect.phone || null,
+        landing_template: LANDING_TEMPLATES.includes(landing_template) ? landing_template : 'classic',
+        business_info_mode: BUSINESS_INFO_MODES.includes(business_info_mode) ? business_info_mode : 'platform',
+        org_type: resolvedOrgType,
+        offering_labels: resolvedOfferingLabels,
+        status: 'active'
+      }])
+      .select()
+      .single();
+
+    if (cErr) {
+      if (cErr.code === '23505') {
+        return res.status(409).json({ error: 'Conflict', message: `슬러그(${cleanSlug})가 이미 사용 중입니다. slug를 직접 지정해 다시 시도해주세요`, timestamp: new Date().toISOString() });
+      }
+      throw cErr;
+    }
+
+    const { data: updatedProspect, error: upErr } = await supabase
+      .from('community_prospects')
+      .update({ status: 'converted', promoted_community_id: newCommunity.id, updated_at: new Date().toISOString() })
+      .eq('id', prospect.id)
+      .select()
+      .single();
+    if (upErr) throw upErr;
+
+    res.json({
+      success: true,
+      data: updatedProspect,
+      community: newCommunity,
+      message: `"${newCommunity.name}"이(가) 공개 전환되었습니다 (/c/${newCommunity.slug})`,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error promoting prospect:', err);
+    res.status(500).json({ error: 'Failed to promote prospect', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// "되돌리기" - 공개 전환을 취소한다. communities는 완전 삭제하지 않고 status='inactive'로 내려 비공개화만 한다
+// (이미 발생한 주문/헌금 이력을 보존하기 위함). 다시 promote를 누르면 같은 조직을 재활성화한다.
+app.put('/api/admin/prospects/:id/demote', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: prospect, error: pErr } = await supabase.from('community_prospects').select('*').eq('id', req.params.id).maybeSingle();
+    if (pErr) throw pErr;
+    if (!prospect) return res.status(404).json({ error: 'Not Found', message: '해당 영업리스트 항목을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (prospect.status !== 'converted' || !prospect.promoted_community_id) {
+      return res.status(400).json({ error: 'Bad Request', message: '공개 전환된 항목이 아닙니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: deactivated, error: dErr } = await supabase
+      .from('communities')
+      .update({ status: 'inactive', updated_at: new Date().toISOString() })
+      .eq('id', prospect.promoted_community_id)
+      .select()
+      .maybeSingle();
+    if (dErr) throw dErr;
+
+    const { data: updatedProspect, error: upErr } = await supabase
+      .from('community_prospects')
+      .update({ status: 'prospect', updated_at: new Date().toISOString() })
+      .eq('id', prospect.id)
+      .select()
+      .single();
+    if (upErr) throw upErr;
+
+    res.json({
+      success: true,
+      data: updatedProspect,
+      community: deactivated,
+      message: '공개가 취소되어 비공개 영업리스트 상태로 되돌아갔습니다 (기존 주문/헌금 이력은 보존됩니다)',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error demoting prospect:', err);
+    res.status(500).json({ error: 'Failed to demote prospect', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, status, admin_email, personal_point_rate, community_point_rate, landing_template, settlement_commission_rate, business_number, settlement_tax_method, bank_name, bank_account, account_holder, bank_account_verified, business_info_mode, business_name, ceo_name, mail_order_registration_number, privacy_officer_name, privacy_officer_position, privacy_officer_contact, org_type, offering_labels } = req.body;
