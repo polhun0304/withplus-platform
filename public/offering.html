@@ -18,7 +18,7 @@
 
         .header { border-bottom: 1px solid var(--border-color); position: sticky; top: 0; background: white; z-index: 10; }
         .header-inner { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 14px 16px; }
-        .org-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 1em; min-width: 0; }
+        .org-brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 1em; min-width: 0; text-decoration: none; color: inherit; cursor: pointer; }
         .org-brand .logo-img { width: 30px; height: 30px; object-fit: cover; border-radius: 8px; flex-shrink: 0; }
         .org-brand .brand-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .org-brand .org-type-tag { font-size: 0.72em; color: var(--text-gray); font-weight: 500; }
@@ -80,7 +80,7 @@
     <div class="app-wrap">
         <div class="header">
             <div class="header-inner">
-                <div class="org-brand" id="org-brand">불러오는 중...</div>
+                <a class="org-brand" id="org-brand" href="/communities">불러오는 중...</a>
                 <div class="header-links"><a href="/mypage">마이페이지</a></div>
             </div>
         </div>
@@ -117,6 +117,9 @@
             historyBox.innerHTML = giveBox.innerHTML;
             return;
         }
+
+        // 헤더의 조직명/로고를 누르면 그 조직의 랜딩페이지(초기화면)로 돌아간다
+        brandBox.href = '/c/' + encodeURIComponent(slug);
 
         // 로그인 확인
         const token = await WithPlus.getAccessToken();

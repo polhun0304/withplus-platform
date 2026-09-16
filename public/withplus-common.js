@@ -882,12 +882,25 @@
     return POWERED_BY_TAGLINES[orgType] || POWERED_BY_TAGLINES.other;
   }
 
+  // 분양 랜딩페이지의 "헌금/후원하러 가기" 버튼 문구 - org_type에 맞는 실제 용어로 자동 전환한다
+  // (교회는 "헌금", 사찰은 "시주"가 실제로 쓰이는 표현이라 통일하면 부자연스러움).
+  const OFFERING_CTA_LABELS = {
+    church: '🙏 온라인 헌금하기',
+    catholic: '🙏 온라인 헌금하기',
+    buddhist: '🙏 온라인 시주하기',
+    other: '🙏 온라인 후원하기'
+  };
+  function getOfferingCtaLabel(orgType) {
+    return OFFERING_CTA_LABELS[orgType] || OFFERING_CTA_LABELS.other;
+  }
+
   global.WithPlus = {
     API_BASE,
     CATEGORY_MAP,
     CATEGORY_EMOJI,
     getOrgTypeName,
     getPoweredByTagline,
+    getOfferingCtaLabel,
     refreshCategoryMap,
     getCategoryMapCached,
     getCategoryEmoji,

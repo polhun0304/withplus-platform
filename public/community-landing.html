@@ -41,6 +41,11 @@
             display: inline-block; background: white; color: var(--primary-color);
             padding: 12px 28px; border-radius: 24px; font-weight: 700; text-decoration: none; font-size: 0.92em;
         }
+        .classic-hero .cta-btn-secondary {
+            display: inline-block; background: transparent; color: white; border: 1.5px solid rgba(255,255,255,0.85);
+            padding: 10px 24px; border-radius: 24px; font-weight: 700; text-decoration: none; font-size: 0.86em;
+            margin-top: 10px;
+        }
 
         .classic-stats-row {
             max-width: 680px; margin: -28px auto 0; padding: 0 20px;
@@ -107,6 +112,10 @@
             display: inline-block; color: white; padding: 13px 28px; font-weight: 700; font-size: 0.88em;
             text-decoration: none; border-radius: 3px;
         }
+        .modern-hero .cta-btn-secondary {
+            display: inline-block; background: transparent; padding: 11px 26px; font-weight: 700; font-size: 0.85em;
+            text-decoration: none; border-radius: 3px; border: 1.5px solid; margin-top: 10px;
+        }
 
         .modern-stats { display: flex; border-top: 1px solid var(--border-color); border-bottom: 1px solid var(--border-color); }
         .modern-stats .m-stat { flex: 1; padding: 18px 16px; text-align: center; }
@@ -159,6 +168,11 @@
         .warm-hero .cta-btn {
             display: inline-block; background: white; padding: 13px 30px; border-radius: 30px;
             font-weight: 800; text-decoration: none; font-size: 0.88em;
+        }
+        .warm-hero .cta-btn-secondary {
+            display: inline-block; background: transparent; color: white; border: 1.5px solid rgba(255,255,255,0.85);
+            padding: 11px 26px; border-radius: 30px; font-weight: 800; text-decoration: none; font-size: 0.84em;
+            margin-top: 10px;
         }
 
         .warm-stats { display: flex; gap: 12px; padding: 0 20px; margin-top: -34px; position: relative; z-index: 2; }
@@ -276,7 +290,7 @@
                     <h1>${WithPlus.escapeHtml(heroTitle)}</h1>
                     <p>${WithPlus.escapeHtml(heroSubtitle)}</p>
                     <a href="/welcome?community=${encodeURIComponent(community.slug)}" class="cta-btn">WITH+ 쇼핑 시작하기 →</a>
-                    <div style="margin-top:12px;"><a href="/give/${encodeURIComponent(community.slug)}" style="color:white; font-size:0.85em; text-decoration:underline;">🙏 온라인 헌금·후원 하기 →</a></div>
+                    <div><a href="/give/${encodeURIComponent(community.slug)}" class="cta-btn-secondary">${WithPlus.getOfferingCtaLabel(community.org_type)} →</a></div>
                 </section>
 
                 <div class="classic-stats-row">
@@ -363,7 +377,7 @@
                     <h1>${WithPlus.escapeHtml(heroTitle)}</h1>
                     <p>${WithPlus.escapeHtml(heroSubtitle)}</p>
                     <a href="/welcome?community=${encodeURIComponent(community.slug)}" class="cta-btn" style="background:${primaryColor};">WITH+ 쇼핑 시작하기 →</a>
-                    <div style="margin-top:10px;"><a href="/give/${encodeURIComponent(community.slug)}" style="color:${primaryColor}; font-size:0.85em; text-decoration:underline;">🙏 온라인 헌금·후원 하기 →</a></div>
+                    <div><a href="/give/${encodeURIComponent(community.slug)}" class="cta-btn-secondary" style="color:${primaryColor}; border-color:${primaryColor};">${WithPlus.getOfferingCtaLabel(community.org_type)} →</a></div>
                 </section>
 
                 <div class="modern-stats">
@@ -470,7 +484,7 @@
                     <h1>${WithPlus.escapeHtml(heroTitle)}</h1>
                     <p>${WithPlus.escapeHtml(heroSubtitle)}</p>
                     <a href="/welcome?community=${encodeURIComponent(community.slug)}" class="cta-btn" style="color:${primaryColor};">WITH+ 쇼핑 시작하기 →</a>
-                    <div style="margin-top:10px;"><a href="/give/${encodeURIComponent(community.slug)}" style="color:${primaryColor}; font-size:0.85em; text-decoration:underline;">🙏 온라인 헌금·후원 하기 →</a></div>
+                    <div><a href="/give/${encodeURIComponent(community.slug)}" class="cta-btn-secondary">${WithPlus.getOfferingCtaLabel(community.org_type)} →</a></div>
                 </section>
 
                 <div class="warm-stats">
