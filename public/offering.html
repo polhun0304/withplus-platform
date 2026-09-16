@@ -34,14 +34,26 @@
         .state-box { text-align: center; padding: 70px 20px; color: var(--text-gray); }
         .state-box .emoji { font-size: 2.4em; margin-bottom: 12px; }
 
-        .item-row { display: flex; align-items: center; gap: 10px; padding: 13px 0; border-bottom: 1px solid var(--border-color); }
-        .item-row label { flex: 1; display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 0.95em; cursor: pointer; }
-        .item-row input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--primary-color); }
-        .item-row input[type="number"] { width: 130px; padding: 9px 10px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.95em; text-align: right; }
-        .item-row input[type="number"]:disabled { background: #F5F5F5; color: #bbb; }
+        .item-chip-hint { font-size: 0.82em; color: var(--text-gray); margin-bottom: 10px; }
+        .item-chip-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 18px; }
+        .item-chip {
+            padding: 11px 18px; border: 1.5px solid var(--border-color); border-radius: 22px;
+            background: white; font-size: 0.92em; font-weight: 700; color: var(--text-dark); cursor: pointer;
+        }
+        .item-chip.active { background: var(--primary-color); border-color: var(--primary-color); color: white; }
 
-        .quick-amounts { display: flex; gap: 6px; margin-top: 20px; flex-wrap: wrap; }
-        .quick-amounts button { padding: 6px 12px; border: 1px solid var(--border-color); border-radius: 16px; background: white; font-size: 0.82em; color: var(--text-gray); cursor: pointer; }
+        .item-amount-block { padding: 16px 0; border-bottom: 1px solid var(--border-color); }
+        .item-amount-block .ia-label { font-weight: 700; font-size: 0.92em; margin-bottom: 10px; }
+        .item-amount-block .ia-quick { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+        .item-amount-block .ia-quick button {
+            padding: 7px 13px; border: 1px solid var(--border-color); border-radius: 16px;
+            background: var(--bg-light); font-size: 0.84em; color: var(--text-dark); cursor: pointer; font-weight: 600;
+        }
+        .item-amount-block .ia-quick button.active { background: var(--primary-color); border-color: var(--primary-color); color: white; }
+        .item-amount-block input[type="number"] {
+            width: 100%; padding: 11px 12px; border: 1px solid var(--border-color); border-radius: 8px;
+            font-size: 1em; text-align: right; font-weight: 700;
+        }
 
         .form-row { margin-top: 20px; }
         .form-row label { display: block; font-size: 0.88em; font-weight: 600; margin-bottom: 8px; }
@@ -154,18 +166,26 @@
         const labelEntries = Object.entries(labels);
 
         // ===== 헌금하기 폼 렌더 =====
+        // 항목(십일조/시주 등)을 체크박스가 아니라 버튼(칩)으로 눌러 선택하고, 선택된 항목마다
+        // 그 조직에서 자주 쓰는 금액이 원탭 버튼으로 바로 뜬다 - 종교별 항목명은 community.offering_labels가
+        // org_type(church/catholic/buddhist/other)에 따라 이미 자동으로 다르게 내려온다(예: 불교는 "시주").
+        const QUICK_AMOUNT_PRESETS = [10000, 30000, 50000, 100000, 300000];
         giveBox.innerHTML = `
             <form id="give-form">
-                ${labelEntries.map(([key, label], i) => `
-                    <div class="item-row">
-                        <label>
-                            <input type="checkbox" class="item-check" data-key="${WithPlus.escapeHtml(key)}" data-label="${WithPlus.escapeHtml(label)}" ${i === 0 ? 'checked' : ''}>
-                            ${WithPlus.escapeHtml(label)}
-                        </label>
-                        <input type="number" class="item-amount" data-key="${WithPlus.escapeHtml(key)}" min="0" step="1000" placeholder="0" ${i === 0 ? '' : 'disabled'}>
-                    </div>`).join('')}
-                <div class="quick-amounts" id="quick-amounts">
-                    ${[10000, 30000, 50000, 100000, 300000].map(v => `<button type="button" data-amount="${v}">${WithPlus.formatPrice(v)}</button>`).join('')}
+                <div class="item-chip-hint">헌금·후원할 항목을 눌러 선택해주세요 (여러 개 선택 가능)</div>
+                <div class="item-chip-grid" id="item-chip-grid">
+                    ${labelEntries.map(([key, label], i) => `
+                        <button type="button" class="item-chip ${i === 0 ? 'active' : ''}" data-key="${WithPlus.escapeHtml(key)}">${WithPlus.escapeHtml(label)}</button>`).join('')}
+                </div>
+                <div id="item-amount-blocks">
+                    ${labelEntries.map(([key, label], i) => `
+                        <div class="item-amount-block" data-key-row="${WithPlus.escapeHtml(key)}" style="${i === 0 ? '' : 'display:none;'}">
+                            <div class="ia-label">${WithPlus.escapeHtml(label)} 금액</div>
+                            <div class="ia-quick" data-key-quick="${WithPlus.escapeHtml(key)}">
+                                ${QUICK_AMOUNT_PRESETS.map(v => `<button type="button" data-key="${WithPlus.escapeHtml(key)}" data-amount="${v}">${WithPlus.formatPrice(v)}</button>`).join('')}
+                            </div>
+                            <input type="number" class="item-amount" data-key="${WithPlus.escapeHtml(key)}" min="0" step="1000" placeholder="직접 입력">
+                        </div>`).join('')}
                 </div>
                 <div class="form-row">
                     <label for="memo-input">기도제목·감사제목 (선택)</label>
@@ -188,36 +208,59 @@
 
         function recalcTotal() {
             let total = 0;
-            document.querySelectorAll('.item-check:checked').forEach(chk => {
-                const input = document.querySelector(`.item-amount[data-key="${CSS.escape(chk.dataset.key)}"]`);
-                total += Number(input.value || 0);
+            document.querySelectorAll('.item-chip.active').forEach(chip => {
+                const input = document.querySelector(`.item-amount[data-key="${CSS.escape(chip.dataset.key)}"]`);
+                total += Number((input && input.value) || 0);
             });
             document.getElementById('total-amount').textContent = WithPlus.formatPrice(total);
             return total;
         }
-        document.querySelectorAll('.item-check').forEach(chk => {
-            chk.addEventListener('change', () => {
-                const input = document.querySelector(`.item-amount[data-key="${CSS.escape(chk.dataset.key)}"]`);
-                input.disabled = !chk.checked;
-                if (!chk.checked) input.value = '';
+        // 항목 버튼(칩) 토글 - 누르면 그 항목의 금액 입력 영역이 나타나고, 다시 누르면 숨겨지며 입력값이 지워진다
+        document.querySelectorAll('.item-chip').forEach(chip => {
+            chip.addEventListener('click', () => {
+                const key = chip.dataset.key;
+                const nowActive = !chip.classList.contains('active');
+                chip.classList.toggle('active', nowActive);
+                const block = document.querySelector(`.item-amount-block[data-key-row="${CSS.escape(key)}"]`);
+                if (block) block.style.display = nowActive ? '' : 'none';
+                if (!nowActive) {
+                    const input = document.querySelector(`.item-amount[data-key="${CSS.escape(key)}"]`);
+                    if (input) input.value = '';
+                    document.querySelectorAll(`.ia-quick[data-key-quick="${CSS.escape(key)}"] button`).forEach(b => b.classList.remove('active'));
+                }
                 recalcTotal();
             });
         });
-        document.querySelectorAll('.item-amount').forEach(inp => inp.addEventListener('input', recalcTotal));
-        document.getElementById('quick-amounts').addEventListener('click', (e) => {
-            if (e.target.tagName !== 'BUTTON') return;
-            const checkedFirst = document.querySelector('.item-check:checked');
-            if (!checkedFirst) return;
-            document.querySelector(`.item-amount[data-key="${CSS.escape(checkedFirst.dataset.key)}"]`).value = e.target.dataset.amount;
-            recalcTotal();
+        // 항목별 금액 원탭 버튼 - 눌린 금액이 바로 입력되고, 같은 항목의 다른 버튼을 누르면 선택이 바뀐다
+        document.querySelectorAll('.ia-quick').forEach(quickRow => {
+            quickRow.addEventListener('click', (e) => {
+                if (e.target.tagName !== 'BUTTON') return;
+                const key = e.target.dataset.key;
+                quickRow.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                const input = document.querySelector(`.item-amount[data-key="${CSS.escape(key)}"]`);
+                if (input) input.value = e.target.dataset.amount;
+                recalcTotal();
+            });
+        });
+        // 직접 금액을 타이핑하면 방금 눌렀던 원탭 버튼의 선택 표시는 해제한다(값이 더 이상 그 프리셋과 다를 수 있으므로)
+        document.querySelectorAll('.item-amount').forEach(inp => {
+            inp.addEventListener('input', () => {
+                const quickRow = document.querySelector(`.ia-quick[data-key-quick="${CSS.escape(inp.dataset.key)}"]`);
+                if (quickRow) {
+                    const matched = [...quickRow.querySelectorAll('button')].find(b => b.dataset.amount === String(inp.value));
+                    quickRow.querySelectorAll('button').forEach(b => b.classList.toggle('active', b === matched));
+                }
+                recalcTotal();
+            });
         });
 
         const giveMsg = document.getElementById('give-msg');
         document.getElementById('give-submit-btn').addEventListener('click', async () => {
             const items = [];
-            document.querySelectorAll('.item-check:checked').forEach(chk => {
-                const amount = Number(document.querySelector(`.item-amount[data-key="${CSS.escape(chk.dataset.key)}"]`).value || 0);
-                if (amount > 0) items.push({ key: chk.dataset.key, amount });
+            document.querySelectorAll('.item-chip.active').forEach(chip => {
+                const amount = Number(document.querySelector(`.item-amount[data-key="${CSS.escape(chip.dataset.key)}"]`).value || 0);
+                if (amount > 0) items.push({ key: chip.dataset.key, amount });
             });
             if (items.length === 0) {
                 giveMsg.className = 'msg error';
