@@ -33,3 +33,15 @@ services:
         sync: false
       - key: SITE_URL
         sync: false
+      # 대표자 2단계 인증(원가/정산 열람용) SMS 발송 - 알리고(aligo) 연동. 값을 비워두면(또는
+      # ALIGO_API_KEY 등을 설정하지 않으면) SMS 인증수단만 501로 비활성화되고 TOTP/이메일은 정상 동작한다.
+      - key: SMS_PROVIDER
+        value: aligo
+      - key: ALIGO_API_KEY
+        sync: false
+      - key: ALIGO_USER_ID
+        sync: false
+      - key: ALIGO_SENDER
+        sync: false
+      - key: ALIGO_TEST_MODE
+        value: "false"
