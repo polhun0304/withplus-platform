@@ -9269,6 +9269,14 @@
                             const msg = document.getElementById('mfa-msg');
                             startBtn.disabled = true;
                             try {
+                                // 이전에 QR 스캔/코드 입력을 끝까지 마치지 못하고 중단된 미인증(unverified) TOTP
+                                // factor가 남아있으면, Supabase가 동일 friendlyName("" 기본값) 충돌로 enroll()을
+                                // 거부한다 - "A factor with the friendly name "" for this user already exists".
+                                // 새로 시작하기 전에 미인증 factor를 정리해서 재시도가 항상 되도록 한다.
+                                const staleFactors = (factorsData?.totp || []).filter(f => f.status !== 'verified');
+                                for (const stale of staleFactors) {
+                                    try { await client.auth.mfa.unenroll({ factorId: stale.id }); } catch (_) { /* 이미 삭제됐으면 무시 */ }
+                                }
                                 const { data: enrollData, error: enrollErr } = await client.auth.mfa.enroll({ factorType: 'totp' });
                                 if (enrollErr) throw enrollErr;
                                 const box = document.getElementById('mfa-enroll-box');
