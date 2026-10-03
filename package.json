@@ -21,5 +21,8 @@
     "nodemailer": "^9.0.5",
     "otplib": "^12.0.1",
     "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "marked": "^18.0.14"
   }
 }
