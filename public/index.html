@@ -1366,6 +1366,37 @@
             .recently-viewed .product-meta,
             .recently-viewed .add-to-cart-btn { display: none; }
         }
+
+        /* ===== 오늘의 특가 슬라이더 (이유몰식 메인 상품 배너) ===== */
+        .hero.hero-slider { position: relative; padding: 0; overflow: hidden; }
+        .hero-track { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+        .hero-track::-webkit-scrollbar { display: none; }
+        .hero-slide { flex: 0 0 100%; scroll-snap-align: start; padding: 44px 48px; box-sizing: border-box; max-width: none; margin: 0; }
+        .deal-slide { display: grid; grid-template-columns: 1fr minmax(140px, 38%); align-items: center; gap: 20px; text-decoration: none; color: #1E1E1E; }
+        .deal-kicker { display: inline-flex; align-items: center; gap: 8px; font-size: 1.05em; font-weight: 600; }
+        .deal-kicker b { background: #E8125C; color: #fff; border-radius: 999px; padding: 3px 12px; font-size: .95em; }
+        .deal-name { font-size: 1.9em; font-weight: 800; letter-spacing: -0.02em; line-height: 1.25; margin: 12px 0 10px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .deal-price { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+        .deal-price .now { font-size: 1.7em; font-weight: 800; color: #E8125C; }
+        .deal-price .was { color: #999; text-decoration: line-through; }
+        .deal-cta { display: inline-block; margin-top: 18px; background: #E8125C; color: #fff; font-weight: 700; border-radius: 999px; padding: 11px 22px; }
+        .deal-img { aspect-ratio: 1 / 1; border-radius: 18px; background: #fff center / cover no-repeat; box-shadow: 0 10px 26px rgba(232,18,92,0.15); display: flex; align-items: center; justify-content: center; font-size: 3.5em; }
+        .hero-counter { position: absolute; right: 16px; bottom: 14px; background: rgba(0,0,0,0.45); color: #fff; font-size: 13px; font-weight: 600; border-radius: 999px; padding: 4px 12px; }
+        .hero-dots { position: absolute; left: 0; right: 0; bottom: 14px; display: flex; justify-content: center; gap: 6px; pointer-events: none; }
+        .hero-dots span { width: 7px; height: 7px; border-radius: 50%; background: rgba(232,18,92,0.25); transition: all .2s; }
+        .hero-dots span.on { width: 18px; border-radius: 4px; background: #E8125C; }
+        @media (max-width: 768px) {
+            .hero.hero-slider { padding: 0; }
+            .hero-slide { padding: 26px 22px 34px; }
+            .deal-slide { grid-template-columns: 1fr 42%; gap: 12px; }
+            .deal-kicker { font-size: .9em; }
+            .deal-name { font-size: 1.3em; margin: 8px 0 6px; }
+            .deal-price .now { font-size: 1.3em; }
+            .deal-price .was { font-size: .85em; }
+            .deal-cta { margin-top: 12px; padding: 8px 16px; font-size: .9em; }
+            .hero-counter { right: 12px; bottom: 10px; font-size: 12px; }
+            .hero-dots { bottom: 12px; }
+        }
     </style>
 </head>
 <body>
@@ -1435,8 +1466,9 @@
     </div>
 
     <!-- HERO SECTION -->
-    <section class="hero">
-        <div class="hero-content">
+    <section class="hero hero-slider" id="hero-slider" aria-roledescription="carousel" aria-label="오늘의 특가">
+        <div class="hero-track" id="hero-track">
+        <div class="hero-content hero-slide">
             <h1>함께할수록 더 큰 나눔</h1>
             <p>구매할 때마다 개인 1% + 커뮤니티 2% 적립</p>
             <div class="hero-carousel">
@@ -1446,6 +1478,9 @@
                 <a href="#community-highlight" class="carousel-slide">🌟 성장</a>
             </div>
         </div>
+        </div>
+        <span class="hero-counter" id="hero-counter" hidden>1/1</span>
+        <div class="hero-dots" id="hero-dots" hidden></div>
     </section>
 
     <!-- CATEGORY ICON MENU (관리자 카테고리 설정 그대로 반영) -->
@@ -1907,6 +1942,60 @@
             // 각 섹션의 전체 상품 수가 이보다 적으면 해당 버튼은 자동으로 숨겨진다(mountCountControl 참고).
             const COUNT_OPTIONS = [8, 16, 24];
 
+
+            // ============================================
+            // 오늘의 특가 슬라이더: 할인율이 큰 실제 상품(재고 있는 것) 최대 6개를 메인 배너 뒤에 이어 붙이고,
+            // 손가락으로 넘기거나 4초마다 자동으로 넘어간다. 할인 상품이 없으면 기존 배너 한 장만 보인다.
+            // ============================================
+            function mountDealSlider(products) {
+                const track = document.getElementById('hero-track');
+                if (!track || track.dataset.deals) return;
+                const deals = (products || [])
+                    .filter(p => p.discount_price && Number(p.discount_price) < Number(p.price) && Number(p.stock) > 0)
+                    .map(p => ({ p, rate: Math.round((1 - Number(p.discount_price) / Number(p.price)) * 100) }))
+                    .sort((a, b) => b.rate - a.rate)
+                    .slice(0, 6);
+                if (deals.length === 0) return;
+                track.dataset.deals = '1';
+                track.insertAdjacentHTML('beforeend', deals.map(({ p, rate }) => {
+                    const img = Array.isArray(p.images_urls) && p.images_urls[0] ? p.images_urls[0] : null;
+                    return `
+                    <a class="hero-slide deal-slide" href="/product/${encodeURIComponent(p.id)}">
+                        <div>
+                            <span class="deal-kicker">오늘의 특가 <b>-${rate}%</b></span>
+                            <div class="deal-name">${WithPlus.escapeHtml(p.name)}</div>
+                            <div class="deal-price"><span class="now">${WithPlus.formatPrice(p.discount_price)}</span><span class="was">${WithPlus.formatPrice(p.price)}</span></div>
+                            <span class="deal-cta">특가 상품 보러가기 ›</span>
+                        </div>
+                        <div class="deal-img" ${img ? `style="background-image:url('${WithPlus.safeUrlAttr(img)}')"` : ''}>${img ? '' : '🎁'}</div>
+                    </a>`;
+                }).join(''));
+
+                const slides = track.querySelectorAll('.hero-slide');
+                const counter = document.getElementById('hero-counter');
+                const dots = document.getElementById('hero-dots');
+                dots.innerHTML = Array.from(slides).map((_, i) => `<span class="${i === 0 ? 'on' : ''}"></span>`).join('');
+                counter.hidden = false;
+                dots.hidden = false;
+                let index = 0;
+                const update = () => {
+                    index = Math.round(track.scrollLeft / track.clientWidth);
+                    counter.textContent = `${index + 1}/${slides.length}`;
+                    dots.querySelectorAll('span').forEach((d, i) => d.classList.toggle('on', i === index));
+                };
+                update();
+                track.addEventListener('scroll', () => requestAnimationFrame(update), { passive: true });
+                // 자동 넘김 — 사용자가 만지는 동안/화면 밖일 때는 멈춘다
+                let paused = false;
+                ['pointerdown', 'touchstart', 'mouseenter'].forEach(ev => track.addEventListener(ev, () => { paused = true; }, { passive: true }));
+                ['pointerup', 'touchend', 'mouseleave'].forEach(ev => track.addEventListener(ev, () => { setTimeout(() => { paused = false; }, 3000); }, { passive: true }));
+                setInterval(() => {
+                    if (paused || document.hidden) return;
+                    const next = (index + 1) % slides.length;
+                    track.scrollTo({ left: next * track.clientWidth, behavior: 'smooth' });
+                }, 4000);
+            }
+
             async function loadProductSections() {
                 const bestGrid = document.getElementById('best-products-grid');
                 const bestCount = document.getElementById('best-products-count');
@@ -1921,6 +2010,7 @@
                         return;
                     }
 
+                    mountDealSlider(products);
                     const byRating = [...products].sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0));
                     // 평점순 전체를 넘겨두고, 처음엔 일부만(기본 8개) 보여준 뒤 버튼으로 늘려볼 수 있게 한다
                     WithPlus.mountCountControl(bestCount, bestGrid, byRating, {

@@ -515,6 +515,31 @@
       </div>`;
   }
 
+  // ============================================
+  // 🏷️ 상품 카드 상태 배지 / 한 줄 소개 (이유몰식) — 실제 데이터로만 판단한다
+  //  - 유통임박: 유통기한(expiry_date)이 오늘~60일 이내
+  //  - 품절임박: 재고 1~5개 / 품절: 재고 0
+  //  - 한 줄 소개: 상품 설명(description)의 첫 문장
+  // ============================================
+  const EXPIRY_SOON_DAYS = 60;
+  function getProductBadges(product) {
+    const badges = [];
+    const stock = Number(product.stock);
+    if (product.expiry_date) {
+      const days = Math.ceil((new Date(product.expiry_date) - new Date()) / 86400000);
+      if (days >= 0 && days <= EXPIRY_SOON_DAYS) badges.push({ label: '유통임박', cls: 'is-expiry' });
+    }
+    if (stock <= 0) badges.push({ label: '품절', cls: 'is-soldout' });
+    else if (stock <= 5) badges.push({ label: '품절임박', cls: 'is-low' });
+    return badges;
+  }
+  function getProductCatchLine(product) {
+    const text = String(product.description || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!text) return '';
+    const first = text.split(/(?<=[.!?。])\s/)[0];
+    return first.length > 40 ? first.slice(0, 40) + '…' : first;
+  }
+
   function renderProductCard(product) {
     const emoji = CATEGORY_EMOJI[product.category] || CATEGORY_EMOJI.default;
     const hasDiscount = product.discount_price && Number(product.discount_price) < Number(product.price);
@@ -527,6 +552,8 @@
     const outOfStock = Number(product.stock) <= 0;
     const imageUrl = Array.isArray(product.images_urls) && product.images_urls.length > 0 ? product.images_urls[0] : null;
     const rates = cachedMileageRates;
+    const badges = getProductBadges(product);
+    const catchLine = getProductCatchLine(product);
 
     return `
     <div class="product-card" data-product-id="${product.id}" style="cursor:pointer;">
@@ -540,13 +567,15 @@
                 <button class="action-btn" type="button">🛒</button>
             </div>
             ${imageUrl ? '' : emoji}
+            ${badges.length ? `<div class="wp-card-badges">${badges.map(b => `<span class="wp-card-badge ${b.cls}">${b.label}</span>`).join('')}</div>` : ''}
         </div>
         <div class="product-info">
+            ${catchLine ? `<p class="wp-card-catch">${escapeHtml(catchLine)}</p>` : ''}
             <h3 class="product-name">${escapeHtml(product.name)}</h3>
             <div class="product-price">
+                ${hasDiscount ? `<span class="discount-rate">${discountRate}%</span>` : ''}
                 <span class="current-price">${formatPrice(currentPrice)}</span>
-                ${hasDiscount ? `<span class="original-price">${formatPrice(product.price)}</span>
-                <span class="discount-rate">${discountRate}%</span>` : ''}
+                ${hasDiscount ? `<span class="original-price">${formatPrice(product.price)}</span>` : ''}
             </div>
             <div class="product-rating-line">${renderStars(rating, 14)} <span class="product-review-count">(${Number(reviewCount).toLocaleString('ko-KR')})</span></div>
             <div class="product-meta">
@@ -1062,6 +1091,38 @@
       .wp-drawer-link svg { color: #C9AAB4; }
       body.wp-drawer-lock { overflow: hidden; }
 
+      /* 상품 카드 공통 (이유몰식): 상태 배지 · 한 줄 소개 · 빨간 할인율 */
+      .product-image .wp-card-badges { position: absolute; left: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px; z-index: 2; }
+      .wp-card-badge { font-size: 11px; font-weight: 700; line-height: 1; padding: 5px 7px; border-radius: 4px; background: #fff; border: 1.5px solid currentColor; }
+      .wp-card-badge.is-expiry { color: #8E24AA; }
+      .wp-card-badge.is-low { color: #E8590C; }
+      .wp-card-badge.is-soldout { color: #fff; background: #555; border-color: #555; }
+      .product-card .wp-card-catch { font-size: 12px; color: #888; margin: 0 0 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .product-card .product-price { flex-wrap: wrap; align-items: baseline; }
+      .product-card .discount-rate { color: #E8125C; font-size: 1.15em; font-weight: 800; }
+      .product-card .current-price { font-weight: 800; }
+
+      /* 맨 위로 버튼 (모바일) */
+      .wp-scroll-top { position: fixed; left: 14px; bottom: calc(80px + env(safe-area-inset-bottom)); z-index: 890; width: 44px; height: 44px; border-radius: 50%; border: 1px solid #EEE; background: rgba(255,255,255,0.96); box-shadow: 0 4px 12px rgba(0,0,0,0.12); color: #333; display: none; align-items: center; justify-content: center; cursor: pointer; }
+      .wp-scroll-top.show { display: flex; }
+
+      @media (max-width: 768px) {
+        /* 카테고리/검색 등 상품 목록: 휴대폰에서는 꽉 찬 2열 + 사진 정사각형, 버튼은 사진 위 아이콘으로 */
+        body.wp-m-grid .product-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 22px 10px; }
+        body.wp-m-grid .product-card { border: none; border-radius: 0; box-shadow: none; }
+        body.wp-m-grid .product-card:hover { transform: none; box-shadow: none; }
+        body.wp-m-grid .product-image { height: auto; aspect-ratio: 1 / 1; border-radius: 10px; }
+        body.wp-m-grid .product-actions { opacity: 1; top: auto; bottom: 8px; right: 8px; }
+        body.wp-m-grid .product-actions .wishlist-btn { display: none; }
+        body.wp-m-grid .product-image .wp-card-badges { bottom: auto; top: 36px; }
+        body.wp-m-grid .product-info { padding: 8px 2px 0; }
+        body.wp-m-grid .product-name { font-size: 0.9em; font-weight: 500; }
+        body.wp-m-grid .add-to-cart-btn, body.wp-m-grid .product-meta { display: none; }
+        .product-card .wp-card-catch { font-size: 11.5px; }
+        /* 헤더 카테고리 메뉴가 화면보다 넓어져 페이지 전체가 옆으로 밀리던 문제 방지 — 메뉴 안에서만 가로 스크롤 */
+        .header .nav-menu { align-self: stretch; max-width: 100%; min-width: 0; }
+      }
+
       .wp-tabbar { display: none; }
       @media (max-width: 1024px) {
         body.wp-has-tabbar { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
@@ -1249,13 +1310,37 @@
     badges.forEach(b => { b.textContent = count > 99 ? '99+' : String(count); b.dataset.count = String(count); });
   }
 
+  function mountScrollTop() {
+    if (document.getElementById('wp-scroll-top')) return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.id = 'wp-scroll-top';
+    btn.className = 'wp-scroll-top';
+    btn.setAttribute('aria-label', '맨 위로');
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 14l6-6 6 6"/></svg>';
+    btn.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+    document.body.appendChild(btn);
+    let ticking = false;
+    window.addEventListener('scroll', () => {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(() => {
+        btn.classList.toggle('show', window.innerWidth <= 1024 && window.scrollY > 600);
+        ticking = false;
+      });
+    }, { passive: true });
+  }
+
   function mountAppShell() {
     ensureShellStyle();
     applyBrandLogo();
     if (!isShellPage()) return;
+    if (getActiveTab() !== 'home') document.body.classList.add('wp-m-grid'); // 홈은 자체 가로 진열(2.5열)을 쓴다
     buildDrawer();
     mountMenuButton();
-    mountTabBar();
+    // 상품 상세처럼 하단에 구매 버튼 바가 있는 화면은 탭바 대신 그 바를 보여준다
+    if (!document.body.hasAttribute('data-wp-no-tabbar')) mountTabBar();
+    mountScrollTop();
     refreshNotificationBadge();
   }
 

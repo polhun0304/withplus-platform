@@ -126,11 +126,19 @@
 
         @media (max-width: 768px) {
             .detail-grid { grid-template-columns: 1fr; gap: 25px; }
-            .detail-image { height: 300px; font-size: 5em; }
+            .detail-image { height: auto; aspect-ratio: 1 / 1; font-size: 5em; }
+            /* 휴대폰: 장바구니/바로구매 버튼을 화면 하단에 항상 고정 (쇼핑앱 방식) */
+            body { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+            .detail-actions {
+                position: fixed; left: 0; right: 0; bottom: 0; z-index: 950;
+                margin: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+                background: rgba(255,255,255,0.98); box-shadow: 0 -2px 14px rgba(0,0,0,0.10);
+            }
+            .detail-actions .btn { flex: 1; padding: 15px 0; font-size: 1.02em; border-radius: 10px; }
         }
     </style>
 </head>
-<body>
+<body data-wp-no-tabbar>
     <header class="header">
         <div class="header-main">
             <a href="/" class="logo" aria-label="WITH+ 홈"><img src="/images/brand/withplus-logo.webp" alt="WITH+" class="wp-logo-img" width="130" height="40"><span class="wp-logo-tagline">함께할수록 <b>더해지는 가치</b></span></a>

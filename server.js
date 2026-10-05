@@ -9846,6 +9846,153 @@ app.patch('/api/admin/orders/:id/status', authenticate, requireRole(['admin', 's
   }
 });
 
+// ============================================
+// 📦 택배 송장 대량 업로드 — 엑셀/CSV에서 읽은 [주문번호, 택배사, 송장번호] 행을 한꺼번에 등록한다.
+// - 파일 파싱은 관리자 화면(SheetJS)에서 하고, 서버는 정리된 행만 받는다(상품 일괄등록과 같은 방식).
+// - 한 번에 최대 BULK_TRACKING_MAX_ROWS행. 화면은 대용량 파일을 이 단위로 나눠 순서대로 보낸다.
+// - dry_run=true면 저장하지 않고 행별 검증 결과만 돌려준다(업로드 전 미리보기).
+// - mark_shipped=true면 결제완료/준비중 주문을 "배송중"으로 바꾸고, notify=true면 고객에게 배송 안내 메일을 보낸다.
+//   (결제 전·취소·환불 주문은 송장을 붙이지 않고 오류로 돌려준다)
+// ============================================
+const BULK_TRACKING_MAX_ROWS = 500;
+const COURIER_ALIASES = [
+  { name: 'CJ대한통운', keys: ['cj', '대한통운', 'cjlogistics'] },
+  { name: '우체국택배', keys: ['우체국', 'epost', '우편'] },
+  { name: '한진택배', keys: ['한진', 'hanjin'] },
+  { name: '롯데택배', keys: ['롯데', 'lotte', '현대택배'] },
+  { name: '로젠택배', keys: ['로젠', 'logen', 'ilogen'] },
+  { name: '대신택배', keys: ['대신'] },
+  { name: '경동택배', keys: ['경동', 'kdexp'] },
+  { name: 'GS Postbox 택배', keys: ['gs', 'postbox', 'cvsnet'] },
+  { name: 'CU 편의점택배', keys: ['cu', 'cupost'] },
+  { name: '일양로지스', keys: ['일양', 'ilyang'] }
+];
+function normalizeCourierName(raw) {
+  const v = String(raw || '').trim();
+  if (!v) return null;
+  const exact = COURIERS.find(c => c.name === v);
+  if (exact) return exact.name;
+  const key = v.replace(/\s+/g, '').toLowerCase();
+  const hit = COURIER_ALIASES.find(a => a.name.replace(/\s+/g, '').toLowerCase() === key || a.keys.some(k => key.startsWith(k)));
+  return hit ? hit.name : v; // 목록에 없는 택배사는 입력값 그대로 저장(조회 링크만 생성되지 않음)
+}
+
+app.post('/api/admin/orders/bulk-tracking', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { rows, dry_run, mark_shipped, notify } = req.body || {};
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '업로드할 송장 행(rows)이 없습니다', timestamp: new Date().toISOString() });
+    }
+    if (rows.length > BULK_TRACKING_MAX_ROWS) {
+      return res.status(400).json({ error: 'Bad Request', message: `한 번에 최대 ${BULK_TRACKING_MAX_ROWS}행까지 보낼 수 있습니다 (화면에서 자동으로 나눠 보냅니다)`, timestamp: new Date().toISOString() });
+    }
+
+    // 1) 행 정리 + 기본 검증
+    const results = rows.map((r, i) => {
+      const orderNumber = String(r.order_number || '').trim();
+      const trackingNumber = String(r.tracking_number || '').replace(/[\s-]/g, '');
+      const courierName = normalizeCourierName(r.courier_name);
+      const base = { row: Number(r.row) || i + 1, order_number: orderNumber, courier_name: courierName, tracking_number: trackingNumber };
+      if (!orderNumber) return { ...base, ok: false, message: '주문번호가 비어 있습니다' };
+      if (!courierName) return { ...base, ok: false, message: '택배사가 비어 있습니다' };
+      if (!trackingNumber) return { ...base, ok: false, message: '송장번호가 비어 있습니다' };
+      if (!/^[0-9A-Za-z]{6,30}$/.test(trackingNumber)) return { ...base, ok: false, message: '송장번호 형식이 올바르지 않습니다(숫자/영문 6~30자)' };
+      return { ...base, ok: true };
+    });
+
+    // 같은 묶음 안에서 같은 주문번호가 두 번 나오면 마지막 행만 쓰고 앞 행은 중복으로 표시
+    const lastIndexByOrder = {};
+    results.forEach((r, i) => { if (r.ok) lastIndexByOrder[r.order_number] = i; });
+    results.forEach((r, i) => {
+      if (r.ok && lastIndexByOrder[r.order_number] !== i) { r.ok = false; r.message = '같은 주문번호가 중복되어 아래쪽 행으로 등록합니다'; }
+    });
+
+    // 2) 주문 조회 (주문번호로, 조회 주소가 너무 길어지지 않게 150개씩)
+    const orderNumbers = [...new Set(results.filter(r => r.ok).map(r => r.order_number))];
+    const orderMap = {};
+    for (let i = 0; i < orderNumbers.length; i += 150) {
+      const { data, error } = await supabase
+        .from('orders_with')
+        .select('id, order_number, status, tracking_number, courier_name')
+        .in('order_number', orderNumbers.slice(i, i + 150));
+      if (error) throw error;
+      (data || []).forEach(o => { orderMap[o.order_number] = o; });
+    }
+
+    const SHIPPABLE = ['paid', 'processing'];
+    results.forEach(r => {
+      if (!r.ok) return;
+      const order = orderMap[r.order_number];
+      if (!order) { r.ok = false; r.message = '주문번호에 해당하는 주문이 없습니다'; return; }
+      r.order_id = order.id;
+      r.current_status = order.status;
+      if (['cancelled', 'refunded'].includes(order.status)) { r.ok = false; r.message = '취소/환불된 주문에는 송장을 등록할 수 없습니다'; return; }
+      if (order.status === 'pending') { r.ok = false; r.message = '결제 전(주문접수) 주문입니다'; return; }
+      r.will_ship = !!mark_shipped && SHIPPABLE.includes(order.status);
+      const isUpdate = !!order.tracking_number && order.tracking_number !== r.tracking_number;
+      r.message = isUpdate
+        ? `기존 송장(${order.courier_name || ''} ${order.tracking_number})을 바꿉니다`
+        : (r.will_ship ? '송장 등록 + 배송중 처리' : '송장 등록');
+    });
+
+    const okRows = results.filter(r => r.ok);
+    const summary = {
+      total: results.length,
+      valid: okRows.length,
+      invalid: results.length - okRows.length,
+      will_ship: okRows.filter(r => r.will_ship).length
+    };
+    if (dry_run) {
+      return res.json({ success: true, dry_run: true, summary, results, timestamp: new Date().toISOString() });
+    }
+
+    // 3) 저장 — 동시에 20건씩 업데이트
+    const shippedOrders = [];
+    const CONCURRENCY = 20;
+    for (let i = 0; i < okRows.length; i += CONCURRENCY) {
+      await Promise.all(okRows.slice(i, i + CONCURRENCY).map(async r => {
+        const updates = {
+          courier_name: r.courier_name,
+          tracking_number: r.tracking_number,
+          tracking_url: buildTrackingUrl(r.courier_name, r.tracking_number)
+        };
+        if (r.will_ship) updates.status = 'shipped';
+        const { data, error } = await supabase.from('orders_with').update(updates).eq('id', r.order_id).select().single();
+        if (error || !data) { r.ok = false; r.message = '저장 실패: ' + (error ? error.message : '알 수 없는 오류'); return; }
+        r.saved = true;
+        if (r.will_ship) shippedOrders.push(data);
+      }));
+    }
+
+    const saved = results.filter(r => r.saved).length;
+    const finalSummary = { ...summary, saved, shipped: shippedOrders.length, failed: summary.valid - saved };
+
+    // 4) 배송 안내 메일 — 응답을 늦추지 않도록 응답 후 백그라운드에서 한 건씩 보낸다
+    if (notify && shippedOrders.length > 0) {
+      setImmediate(async () => {
+        try {
+          const userIds = [...new Set(shippedOrders.map(o => o.user_id).filter(Boolean))];
+          const emailById = {};
+          if (userIds.length > 0) {
+            const { data: profiles } = await supabase.from('profiles').select('id, email').in('id', userIds);
+            (profiles || []).forEach(p => { emailById[p.id] = p.email; });
+          }
+          for (const order of shippedOrders) {
+            await sendOrderStatusEmail(order, emailById[order.user_id], 'shipped').catch(() => {});
+          }
+        } catch (e) {
+          console.error('Bulk tracking notify error:', e);
+        }
+      });
+    }
+
+    res.json({ success: true, dry_run: false, summary: finalSummary, results, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error bulk-updating tracking numbers:', err);
+    res.status(500).json({ error: 'Failed to bulk update tracking', message: (process.env.NODE_ENV === 'production' ? '송장 일괄 등록에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
+  }
+});
+
 // 공급자(판매자)용 "내 상품이 포함된 주문" 확인 - 읽기 전용
 // orders_with.items 는 여러 판매자의 상품이 한 주문에 섞여 담길 수 있는 장바구니형 구조이므로,
 // 다른 공급자의 매출/구매자 정보가 노출되지 않도록 응답에는 본인 상품에 해당하는 라인아이템만 골라서 내려준다.
