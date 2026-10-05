@@ -262,6 +262,7 @@
         <div class="header-main">
             <a href="/" class="logo" aria-label="WITH+ 홈"><img src="/images/brand/withplus-logo.webp" alt="WITH+" class="wp-logo-img" width="130" height="40"><span>관리자 페이지</span></a>
             <div class="header-right">
+                <a id="admin-manual-link" href="/manual.html" target="_blank" rel="noopener" style="display:none; font-size:0.88em; color:var(--text-dark); text-decoration:none; margin-right:12px;" title="사용설명서 (관리자 전용)">📖 사용설명서</a>
                 <div id="admin-notif-wrap" style="position:relative; display:none;">
                     <button id="admin-notif-bell" style="background:none; border:none; cursor:pointer; font-size:1.2em; position:relative;" title="알림">🔔<span id="admin-notif-badge" style="display:none; position:absolute; top:-4px; right:-8px; background:#E53935; color:#fff; border-radius:10px; font-size:0.6em; padding:1px 5px; font-weight:bold;">0</span></button>
                     <div id="admin-notif-panel" style="display:none; position:absolute; right:0; top:130%; width:320px; max-height:420px; overflow-y:auto; background:#fff; border:1px solid var(--border-color); border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,0.12); z-index:1000;">
@@ -1013,6 +1014,7 @@
 
             const ADMIN_ROLES = ['admin', 'super_admin'];
             const isAdmin = ADMIN_ROLES.includes(ME.role);
+            if (isAdmin) { const ml = document.getElementById('admin-manual-link'); if (ml) ml.style.display = ''; }
             const isProvider = ME.role === 'provider';
             const isSuperAdmin = ME.role === 'super_admin';
             // 대표자(원가/마진율 열람 가능 후보) - 실제 열람은 여기에 더해 2FA 스텝업까지 통과해야 한다.

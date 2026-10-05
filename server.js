@@ -15497,6 +15497,18 @@ app.get('/live', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'live.html'));
 });
 
+// ============================================
+// 📖 사용설명서 (관리자 전용) — 본문은 public 밖(private/manual-content.html)에 두고
+// 관리자(admin/super_admin) 인증을 통과한 요청에만 내려준다. /manual.html 은 내용 없는 껍데기 화면.
+// ============================================
+app.get('/api/admin/manual', authenticate, requireRole(['admin', 'super_admin']), (req, res) => {
+  fs.readFile(path.join(__dirname, 'private', 'manual-content.html'), 'utf8', (err, html) => {
+    if (err) return res.status(500).json({ error: 'Failed to load manual', message: '사용설명서를 불러오지 못했습니다', timestamp: new Date().toISOString() });
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, html, timestamp: new Date().toISOString() });
+  });
+});
+
 // 푸터 하위 정보 페이지 (회사소개/고객지원/약관·정책/함께하기)
 const STATIC_INFO_PAGES = [
   'about', 'careers', 'press', 'sustainability',
