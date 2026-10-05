@@ -15316,6 +15316,262 @@ STATIC_INFO_PAGES.forEach(slug => {
 });
 
 // ============================================
+// 🔐 EKOS SSO (OIDC) 로그인 — 중앙 신원서버(EKOS) 계정으로 로그인 (비파괴 추가)
+// 기존 로그인(이메일/비밀번호, 구글/카카오/네이버)은 그대로 두고 "EKOS로 로그인"만 추가한다.
+// 흐름:
+//   /auth/ekos/login    : PKCE(verifier)+state+nonce 생성 → 단명 httpOnly 쿠키 저장 → EKOS authorize로 302
+//   /auth/ekos/callback : state(CSRF) 검증 → 토큰 교환(client_secret_post) → ID토큰 JWKS 서명검증(RS256,
+//                         iss/aud/exp/nonce) → 이메일 확보 → service_role로 사용자 find-or-create →
+//                         magiclink hashed_token 발급 → /auth/ekos/complete 로 token_hash를 URL 프래그먼트(#)로 전달
+//   /auth/ekos/complete : 브라우저에서 verifyOtp({type:'email', token_hash})로 localStorage 세션 수립 후 홈/next 이동
+// 보안: 시크릿/코드/토큰은 서버에서만 다루고 로그·URL(query)·에러메시지에 민감값을 남기지 않는다
+//       (token_hash는 프래그먼트로만). 쿠키는 httpOnly·SameSite=Lax·(https면)Secure.
+// ENV(EKOS_ISSUER/EKOS_CLIENT_ID/EKOS_CLIENT_SECRET)는 Render에 설정되어 있으며 process.env로만 읽는다.
+// ============================================
+const { createRemoteJWKSet: _ekosCreateRemoteJWKSet, jwtVerify: _ekosJwtVerify } = require('jose');
+
+const EKOS_ISSUER = (process.env.EKOS_ISSUER || '').replace(/\/$/, '');
+const EKOS_CLIENT_ID = process.env.EKOS_CLIENT_ID;
+const EKOS_CLIENT_SECRET = process.env.EKOS_CLIENT_SECRET;
+const EKOS_AUTHORIZE_URL = EKOS_ISSUER ? EKOS_ISSUER + '/api/oauth/authorize' : null;
+const EKOS_TOKEN_URL = EKOS_ISSUER ? EKOS_ISSUER + '/api/oauth/token' : null;
+const EKOS_JWKS_URL = EKOS_ISSUER ? EKOS_ISSUER + '/api/oauth/jwks' : null;
+
+// JWKS는 최초 1회만 원격 로드 후 jose가 내부 캐시/키로테이션을 관리한다.
+let _ekosJwks = null;
+function getEkosJwks() {
+  if (!_ekosJwks) _ekosJwks = _ekosCreateRemoteJWKSet(new URL(EKOS_JWKS_URL));
+  return _ekosJwks;
+}
+
+function ekosConfigured() {
+  return !!(EKOS_ISSUER && EKOS_CLIENT_ID && EKOS_CLIENT_SECRET);
+}
+
+// cookie-parser 미도입 코드베이스라 Cookie 헤더를 직접 파싱한다(EKOS 흐름 전용).
+function ekosParseCookies(req) {
+  const header = req.headers.cookie;
+  const out = {};
+  if (!header) return out;
+  header.split(';').forEach((part) => {
+    const idx = part.indexOf('=');
+    if (idx > -1) {
+      const k = part.slice(0, idx).trim();
+      const v = part.slice(idx + 1).trim();
+      if (k) { try { out[k] = decodeURIComponent(v); } catch (_) { out[k] = v; } }
+    }
+  });
+  return out;
+}
+
+// 내부 경로만 허용(오픈 리다이렉트 방지): '/'로 시작하되 '//' 또는 '/\'(프로토콜상대/백슬래시 우회)는 거부.
+function ekosSafeNext(next) {
+  if (typeof next !== 'string' || next.length === 0) return '/';
+  if (next.charAt(0) !== '/') return '/';
+  if (next.charAt(1) === '/' || next.charAt(1) === '\\') return '/';
+  return next;
+}
+
+const EKOS_COOKIE = 'ekos_oidc';
+const EKOS_COOKIE_PATH = '/auth/ekos';
+
+function ekosIsSecure(req) {
+  return String(req.headers['x-forwarded-proto'] || req.protocol || '').split(',')[0].trim() === 'https';
+}
+
+// 1) 로그인 시작: 로그인 화면의 "EKOS로 로그인" 버튼이 location.href로 이 URL에 직접 진입한다.
+app.get('/auth/ekos/login', (req, res) => {
+  if (!ekosConfigured()) {
+    return res.redirect('/login?social_error=' + encodeURIComponent('EKOS 로그인이 아직 설정되지 않았습니다. 다른 방법으로 로그인해주세요.'));
+  }
+  try {
+    const verifier = crypto.randomBytes(32).toString('base64url');
+    const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
+    const state = crypto.randomBytes(16).toString('base64url');
+    const nonce = crypto.randomBytes(16).toString('base64url');
+    const next = ekosSafeNext(typeof req.query.next === 'string' ? req.query.next : '/');
+
+    res.cookie(EKOS_COOKIE, JSON.stringify({ v: verifier, s: state, n: nonce, next }), {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: ekosIsSecure(req),
+      maxAge: 10 * 60 * 1000,
+      path: EKOS_COOKIE_PATH
+    });
+
+    const redirectUri = getBaseUrl(req) + '/auth/ekos/callback';
+    const authorizeUrl = EKOS_AUTHORIZE_URL + '?' + new URLSearchParams({
+      response_type: 'code',
+      client_id: EKOS_CLIENT_ID,
+      redirect_uri: redirectUri,
+      scope: 'openid profile email',
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      state,
+      nonce
+    }).toString();
+    res.redirect(authorizeUrl);
+  } catch (err) {
+    console.error('[EKOS] login start error:', err.message);
+    res.redirect('/login?social_error=' + encodeURIComponent('EKOS 로그인을 시작하지 못했습니다. 잠시 후 다시 시도해주세요.'));
+  }
+});
+
+// 2) 콜백: state 검증 → 토큰 교환 → ID토큰 검증 → find-or-create → magiclink hashed_token → complete로 전달
+app.get('/auth/ekos/callback', async (req, res) => {
+  const fail = (msg) => res.redirect('/login?social_error=' + encodeURIComponent(msg));
+  try {
+    if (!ekosConfigured()) return fail('EKOS 로그인이 아직 설정되지 않았습니다.');
+
+    const { code, state, error: oidcErr } = req.query;
+    const cookies = ekosParseCookies(req);
+    let saved = null;
+    try { saved = JSON.parse(cookies[EKOS_COOKIE] || 'null'); } catch (_) { saved = null; }
+
+    // 상태쿠키는 성공/실패와 무관하게 즉시 폐기(일회성).
+    res.clearCookie(EKOS_COOKIE, { httpOnly: true, sameSite: 'lax', secure: ekosIsSecure(req), path: EKOS_COOKIE_PATH });
+
+    if (oidcErr) return fail('EKOS 로그인이 취소되었거나 거부되었습니다.');
+    if (!saved || !saved.s || !state || String(state) !== saved.s) {
+      return fail('로그인 요청이 만료되었거나 올바르지 않습니다. 다시 시도해주세요.');
+    }
+    if (!code) return fail('EKOS 인가코드를 받지 못했습니다.');
+
+    const redirectUri = getBaseUrl(req) + '/auth/ekos/callback';
+    const tokenResp = await fetch(EKOS_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Accept': 'application/json' },
+      body: new URLSearchParams({
+        grant_type: 'authorization_code',
+        code: String(code),
+        redirect_uri: redirectUri,
+        client_id: EKOS_CLIENT_ID,
+        client_secret: EKOS_CLIENT_SECRET,
+        code_verifier: saved.v
+      }).toString(),
+      signal: AbortSignal.timeout(15000)
+    });
+    const tokenJson = await tokenResp.json().catch(() => null);
+    if (!tokenResp.ok || !tokenJson || !tokenJson.id_token) {
+      console.error('[EKOS] token exchange failed. status=', tokenResp.status);
+      return fail('EKOS 인증 서버 응답에 실패했습니다. 잠시 후 다시 시도해주세요.');
+    }
+
+    // ID 토큰 서명/클레임 검증 (iss, aud, exp, RS256). nonce는 아래에서 별도 비교.
+    let payload;
+    try {
+      const verified = await _ekosJwtVerify(tokenJson.id_token, getEkosJwks(), {
+        issuer: EKOS_ISSUER,
+        audience: EKOS_CLIENT_ID,
+        algorithms: ['RS256']
+      });
+      payload = verified.payload;
+    } catch (ve) {
+      console.error('[EKOS] id_token verify failed:', ve.message);
+      return fail('EKOS 신원 토큰 검증에 실패했습니다. 다시 시도해주세요.');
+    }
+    if (!payload.nonce || payload.nonce !== saved.n) {
+      return fail('로그인 요청 검증(nonce)에 실패했습니다. 다시 시도해주세요.');
+    }
+
+    const email = payload.email;
+    if (!email || typeof email !== 'string') {
+      return fail('EKOS 계정에서 이메일을 받지 못했습니다. 관리자에게 문의해주세요.');
+    }
+
+    // service_role로 사용자 find-or-create (있으면 그대로 사용).
+    const { data: existingProfile } = await supabase.from('profiles').select('id').eq('email', email).maybeSingle();
+    let userId = existingProfile && existingProfile.id;
+    if (!userId) {
+      const { data: created, error: createErr } = await supabase.auth.admin.createUser({
+        email,
+        email_confirm: true,
+        user_metadata: { full_name: payload.name || null, oauth_provider: 'ekos', ekos_sub: payload.sub || null }
+      });
+      if (createErr) {
+        // 이미 Auth에는 있으나 profiles에 없던 경우 등: magiclink 발급은 이메일 기준이라 계속 진행한다.
+        console.error('[EKOS] createUser error (continuing with magiclink):', createErr.message);
+      } else if (created && created.user) {
+        userId = created.user.id;
+        await supabase.from('profiles').upsert(
+          [{ id: userId, email, full_name: payload.name || null, role: 'member', member_type: 'general' }],
+          { onConflict: 'id', ignoreDuplicates: true }
+        );
+      }
+    }
+
+    // 매직링크 발급 → hashed_token 확보(브라우저가 verifyOtp로 세션 수립). action_link로 리다이렉트하지 않는다.
+    const { data: linkData, error: linkErr } = await supabase.auth.admin.generateLink({ type: 'magiclink', email });
+    const tokenHash = linkData && linkData.properties && linkData.properties.hashed_token;
+    if (linkErr || !tokenHash) {
+      console.error('[EKOS] generateLink failed:', linkErr ? linkErr.message : 'no hashed_token');
+      return fail('로그인 세션 발급에 실패했습니다. 잠시 후 다시 시도해주세요.');
+    }
+
+    const next = ekosSafeNext(saved.next);
+    // token_hash는 프래그먼트(#)로만 전달 → 서버/프록시 접근로그(query)에 남지 않는다.
+    return res.redirect('/auth/ekos/complete?' + new URLSearchParams({ next }).toString() + '#' + encodeURIComponent(tokenHash));
+  } catch (err) {
+    console.error('[EKOS] callback error:', err.message);
+    return fail('EKOS 로그인 처리 중 오류가 발생했습니다.');
+  }
+});
+
+// 3) 완료 페이지: 프래그먼트의 token_hash로 클라이언트 Supabase 세션(localStorage)을 수립한 뒤 홈/next로 이동.
+//    기존 클라이언트 초기화 방식 재사용(/api/config의 URL/ANON + 동일 supabase-js UMD).
+app.get('/auth/ekos/complete', (req, res) => {
+  const html = `<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>로그인 처리 중 - WITH+</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<style>
+  body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;margin:0;background:#fafafa;color:#333}
+  .box{text-align:center;padding:24px}
+  .spin{width:36px;height:36px;border:4px solid #eee;border-top-color:#E65100;border-radius:50%;animation:ekspin .8s linear infinite;margin:0 auto 16px}
+  @keyframes ekspin{to{transform:rotate(360deg)}}
+  .err{color:#c0392b}
+  a{color:#E65100}
+</style>
+</head>
+<body>
+<div class="box">
+  <div class="spin" id="spin"></div>
+  <p id="msg">EKOS 로그인 처리 중입니다...</p>
+</div>
+<script>
+(async function(){
+  var msg=document.getElementById('msg'), spin=document.getElementById('spin');
+  function showErr(t){ if(spin)spin.style.display='none'; msg.className='err'; msg.textContent=t;
+    var p=document.createElement('p'); p.innerHTML='<a href="/login">로그인 화면으로 돌아가기</a>'; msg.parentNode.appendChild(p); }
+  try {
+    var hash=(location.hash||'').replace(/^#/,'');
+    var tokenHash = hash ? decodeURIComponent(hash) : '';
+    if(!tokenHash){ showErr('로그인 토큰을 찾지 못했습니다. 다시 시도해주세요.'); return; }
+    // 프래그먼트를 주소창에서 즉시 제거(뒤로가기/공유 시 노출 방지).
+    try { history.replaceState(null,'',location.pathname+location.search); } catch(_){}
+    var params=new URLSearchParams(location.search);
+    var next=params.get('next')||'/';
+    if(!(next.charAt(0)==='/' && next.charAt(1)!=='/' && next.charAt(1)!=='\\\\')) next='/';
+    var cfg=await (await fetch('/api/config')).json();
+    if(!window.supabase||!window.supabase.createClient){ showErr('로그인 모듈 로드에 실패했습니다. 새로고침 후 다시 시도해주세요.'); return; }
+    var client=window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey);
+    var r=await client.auth.verifyOtp({ type:'email', token_hash: tokenHash });
+    if(r.error){ showErr('로그인 세션 수립에 실패했습니다. 다시 시도해주세요.'); return; }
+    location.replace(next);
+  } catch(e){ showErr('로그인 처리 중 오류가 발생했습니다.'); }
+})();
+</script>
+</body>
+</html>`;
+  res.type('html').send(html);
+});
+
+
+// ============================================
 // 404 핸들러
 // - 브라우저 탐색(HTML 요청)은 사용자 친화적인 404 페이지로 안내
 // - API/프로그램 요청은 기존처럼 JSON으로 응답

@@ -91,6 +91,9 @@
                     <button type="button" id="social-naver-btn" style="width:100%; padding:12px; border:none; border-radius:8px; background:#03C75A; color:#fff; font-weight:600; font-size:0.95em; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px;">
                         <span aria-hidden="true">N</span> 네이버로 로그인
                     </button>
+                    <button type="button" id="social-ekos-btn" style="width:100%; padding:12px; border:none; border-radius:8px; background:#1A237E; color:#fff; font-weight:600; font-size:0.95em; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px;">
+                        <span aria-hidden="true">🔐</span> EKOS로 로그인
+                    </button>
                 </div>
                 <div class="msg" id="social-msg"></div>
             </div>
@@ -169,6 +172,9 @@
             });
             document.getElementById('social-naver-btn').addEventListener('click', () => {
                 location.href = '/api/auth/naver/login';
+            });
+            document.getElementById('social-ekos-btn').addEventListener('click', () => {
+                location.href = '/auth/ekos/login';
             });
 
             // 이미 로그인되어 있으면 - 단, 2단계 인증이 걸려있는 계정이 아직 인증 코드를 입력하지 않은
