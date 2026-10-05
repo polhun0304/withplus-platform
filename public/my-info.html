@@ -42,6 +42,13 @@
         .form-msg { margin-top: 12px; font-size: 0.88em; padding: 10px 14px; border-radius: 8px; display: none; }
         .form-msg.error { display: block; background: #FDEAEA; color: #C62828; }
         .form-msg.ok { display: block; background: #E8F5E9; color: var(--success); }
+        /* 🔐 비밀번호 / 로그인 정보 */
+        .sec-title { font-size: 1.15em; font-weight: 700; margin: 34px 0 12px; scroll-margin-top: 90px; }
+        .login-info { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 0.9em; color: var(--text-gray); margin-bottom: 14px; }
+        .login-info b { color: var(--text-dark); }
+        .provider-chip { display: inline-block; background: #fff; border: 1px solid var(--border-color); border-radius: 999px; padding: 2px 10px; margin-right: 4px; font-size: 0.85em; }
+        .pw-hint { font-size: 0.8em; color: var(--text-gray); margin-top: 6px; }
+        .pw-toggle { background: none; border: none; color: var(--primary-color); font-size: 0.82em; cursor: pointer; padding: 4px 0; }
         .state-box { text-align: center; padding: 50px 20px; color: var(--text-gray); }
         .state-box .emoji { font-size: 2.5em; margin-bottom: 10px; }
 
@@ -110,7 +117,25 @@
                         <div class="form-msg" id="mi-msg"></div>
                     </form>
                 </div>
+
+                <h2 class="sec-title" id="password">🔐 로그인 · 비밀번호</h2>
+                <div class="form-box">
+                    <div class="login-info" id="pw-login-info">불러오는 중...</div>
+                    <form id="pw-form" autocomplete="on">
+                        <input type="text" name="username" autocomplete="username" value="${WithPlus.escapeHtml(profile.email || '')}" hidden>
+                        <div class="field" id="pw-current-field"><label>현재 비밀번호</label><input type="password" id="pw-current" autocomplete="current-password"></div>
+                        <div class="row2">
+                            <div class="field"><label>새 비밀번호</label><input type="password" id="pw-new" autocomplete="new-password" required minlength="8"></div>
+                            <div class="field"><label>새 비밀번호 확인</label><input type="password" id="pw-new2" autocomplete="new-password" required minlength="8"></div>
+                        </div>
+                        <div class="pw-hint">8자 이상, 영문과 숫자를 함께 사용해주세요. <button type="button" class="pw-toggle" id="pw-toggle">비밀번호 보기</button></div>
+                        <button type="submit" id="pw-submit">비밀번호 변경</button>
+                        <div class="form-msg" id="pw-msg"></div>
+                    </form>
+                    <p class="pw-hint" style="margin-top:14px;">비밀번호가 기억나지 않으면 로그아웃 후 로그인 화면의 <a href="/login">비밀번호 찾기</a>를 이용해주세요.</p>
+                </div>
             `;
+            initPasswordForm();
             document.getElementById('my-info-form').addEventListener('submit', async (e) => {
                 e.preventDefault();
                 const btn = e.target.querySelector('button[type="submit"]');
@@ -142,6 +167,76 @@
                     btn.disabled = false; btn.textContent = '저장하기';
                 }
             });
+        }
+
+        // 🔐 비밀번호 변경/설정 — 현재 비밀번호 확인은 서버(/api/me/password)에서 한다
+        async function initPasswordForm() {
+            const info = document.getElementById('pw-login-info');
+            const PROVIDER_LABEL = { email: '이메일', kakao: '카카오', naver: '네이버', google: '구글', ekos: 'EKOS' };
+            let hasPassword = true;
+            try {
+                const token = await WithPlus.getAccessToken();
+                const res = await fetch('/api/me/login-methods', { headers: { Authorization: 'Bearer ' + token } });
+                const json = await res.json();
+                if (res.ok && json.success) {
+                    const d = json.data;
+                    hasPassword = d.has_password;
+                    info.innerHTML = `<span>로그인 이메일 <b>${WithPlus.escapeHtml(d.email || '')}</b></span>
+                        <span>로그인 방식 ${(d.providers || []).map(p => `<span class="provider-chip">${WithPlus.escapeHtml(PROVIDER_LABEL[p] || p)}</span>`).join('') || '-'}</span>
+                        ${d.last_sign_in_at ? `<span>최근 로그인 <b>${new Date(d.last_sign_in_at).toLocaleString('ko-KR')}</b></span>` : ''}`;
+                } else {
+                    info.textContent = '';
+                }
+            } catch (e) { info.textContent = ''; }
+
+            if (!hasPassword) {
+                document.getElementById('pw-current-field').style.display = 'none';
+                document.getElementById('pw-submit').textContent = '비밀번호 설정';
+                info.insertAdjacentHTML('beforeend', '<span style="flex-basis:100%;">소셜 계정으로 가입하셔서 아직 비밀번호가 없어요. 설정하면 이메일+비밀번호로도 로그인할 수 있습니다.</span>');
+            }
+
+            document.getElementById('pw-toggle').addEventListener('click', (e) => {
+                const inputs = ['pw-current', 'pw-new', 'pw-new2'].map(id => document.getElementById(id));
+                const show = inputs[1].type === 'password';
+                inputs.forEach(i => { i.type = show ? 'text' : 'password'; });
+                e.target.textContent = show ? '비밀번호 숨기기' : '비밀번호 보기';
+            });
+
+            document.getElementById('pw-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const msg = document.getElementById('pw-msg');
+                const btn = document.getElementById('pw-submit');
+                const current = document.getElementById('pw-current').value;
+                const next = document.getElementById('pw-new').value;
+                const next2 = document.getElementById('pw-new2').value;
+                msg.className = 'form-msg'; msg.textContent = '';
+                const fail = (t) => { msg.className = 'form-msg error'; msg.textContent = t; };
+                if (hasPassword && !current) return fail('현재 비밀번호를 입력해주세요');
+                if (next.length < 8 || !/[A-Za-z]/.test(next) || !/[0-9]/.test(next)) return fail('새 비밀번호는 8자 이상, 영문과 숫자를 함께 사용해주세요');
+                if (next !== next2) return fail('새 비밀번호가 서로 일치하지 않습니다');
+                const label = btn.textContent;
+                btn.disabled = true; btn.textContent = '처리 중...';
+                try {
+                    const token = await WithPlus.getAccessToken();
+                    const res = await fetch('/api/me/password', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+                        body: JSON.stringify({ current_password: hasPassword ? current : undefined, new_password: next })
+                    });
+                    const json = await res.json().catch(() => ({}));
+                    if (!res.ok || !json.success) throw new Error(json.message || '비밀번호 변경에 실패했습니다');
+                    msg.className = 'form-msg ok';
+                    msg.textContent = json.message || '비밀번호가 변경되었습니다';
+                    e.target.reset();
+                    if (!hasPassword) { hasPassword = true; document.getElementById('pw-current-field').style.display = ''; }
+                } catch (err) {
+                    fail(err.message);
+                } finally {
+                    btn.disabled = false; btn.textContent = hasPassword ? '비밀번호 변경' : label;
+                }
+            });
+
+            if (location.hash === '#password') document.getElementById('password').scrollIntoView({ behavior: 'smooth' });
         }
 
         async function init() {
