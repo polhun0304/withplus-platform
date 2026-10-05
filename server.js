@@ -15302,6 +15302,14 @@ app.get('/board/:type/:id', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'board-detail.html'));
 });
 
+// 📺 하단 탭바 "LIVE" — 실시간 라이브 판매는 별도 서비스(LIVE+)에서 제공한다.
+// LIVEPLUS_URL 환경변수가 설정돼 있으면 그쪽으로 보내고, 아직 없으면 준비중 안내 화면을 보여준다.
+app.get('/live', (req, res) => {
+  const liveplusUrl = process.env.LIVEPLUS_URL;
+  if (liveplusUrl && /^https?:\/\//i.test(liveplusUrl)) return res.redirect(302, liveplusUrl);
+  res.sendFile(path.join(__dirname, 'public', 'live.html'));
+});
+
 // 푸터 하위 정보 페이지 (회사소개/고객지원/약관·정책/함께하기)
 const STATIC_INFO_PAGES = [
   'about', 'careers', 'press', 'sustainability',

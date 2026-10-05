@@ -3,7 +3,7 @@
 // 정적 리소스(이미지/CSS/JS/아이콘)는 캐시 우선으로 빠르게, HTML 페이지는 네트워크 우선(항상 최신 시도) +
 // 실패 시 캐시 → 그마저 없으면 오프라인 안내 페이지로 대체한다.
 
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3'; // v3: WITH+ 브랜드 로고·앱형 메뉴(공통 JS) 교체 — 캐시된 옛 공통 JS를 비운다
 const CACHE_NAME = `withplus-${CACHE_VERSION}`;
 const OFFLINE_URL = '/offline.html';
 

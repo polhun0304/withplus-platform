@@ -45,6 +45,7 @@
       return;
     }
     if (existing) return; // 이미 떠 있으면 다시 그리지 않음
+    if (document.getElementById('wp-community-bar')) return; // 홈의 공동체 바가 같은 역할(매장 표시 + 전체 쇼핑몰 보기)을 대신한다
     let name = '';
     try { name = localStorage.getItem('withplus_preferred_community_name') || ''; } catch (e) {}
     const bar = document.createElement('div');
@@ -155,9 +156,10 @@
       if (cats.length === 0) {
         gridEl.innerHTML = '<a href="/" class="category-item"><div class="category-icon">🛍️</div><div class="category-name">전체 상품</div></a>';
       } else {
+        // 홈 카테고리 아이콘 메뉴 — WITH+ 기본틀처럼 원형 배경 위 라인 아이콘으로 보여준다
         gridEl.innerHTML = cats.map(c => `
           <a href="/category/${c.slug}" class="category-item">
-              <div class="category-icon">${c.emoji}</div>
+              <div class="category-icon">${getCategoryLineIcon(c)}</div>
               <div class="category-name">${escapeHtml(c.label)}</div>
           </a>`).join('');
       }
@@ -387,8 +389,10 @@
   }
 
   function refreshCartBadge() {
+    const count = getCartCount();
     document.querySelectorAll('.cart-badge').forEach(el => {
-      el.textContent = getCartCount();
+      el.textContent = count;
+      el.dataset.count = String(count); // .wp-icon-badge[data-count="0"]는 숨김 처리
     });
   }
 
@@ -894,6 +898,297 @@
     return OFFERING_CTA_LABELS[orgType] || OFFERING_CTA_LABELS.other;
   }
 
+  // ============================================
+  // 📱 WITH+ 앱 셸 (기본틀 메뉴) — 브랜드 로고 / ☰ 전체메뉴(드로어) / 🔔 알림 배지 / 하단 탭바
+  // WITH+ 기본틀 디자인(모바일 앱형)의 메뉴 구성을 모든 쇼핑 화면에 공통으로 붙인다.
+  //  - 하단 탭바: 홈 · 카테고리 · LIVE · 찜 · 마이페이지 (태블릿/모바일 폭에서만 노출, 데스크톱은 상단 메뉴 사용)
+  //  - ☰ 버튼: 헤더 로고 왼쪽에 자동으로 붙고, 누르면 카테고리/게시판/고객센터 전체메뉴 드로어가 열린다
+  //  - 관리자/로그인·가입 같은 단독 화면은 SHELL_EXCLUDED_PATHS로 제외한다
+  // ============================================
+  const BRAND_LOGO_SRC = '/images/brand/withplus-logo.webp';
+  const SHELL_EXCLUDED_PATHS = /^\/(admin|login|join|reset-password|verify-phone|payment-result|welcome|offline|404)(\.html)?(\/|$)/;
+
+  const SHELL_ICONS = {
+    menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+    close: '<path d="M6 6l12 12M18 6L6 18"/>',
+    search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/>',
+    bell: '<path d="M6 9a6 6 0 1 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9z"/><path d="M10.3 20a1.9 1.9 0 0 0 3.4 0"/>',
+    cart: '<path d="M3 4h2.2l2.3 11h10.8l2.2-8H6.6"/><circle cx="9.5" cy="19.5" r="1.4"/><circle cx="17" cy="19.5" r="1.4"/>',
+    home: '<path d="M3.5 10.5L12 3.5l8.5 7V20a1 1 0 0 1-1 1H15v-6h-6v6H4.5a1 1 0 0 1-1-1z"/>',
+    grid: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.6"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.6"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.6"/>',
+    live: '<circle cx="12" cy="12" r="9"/><path d="M10 8.8v6.4l5.2-3.2z"/>',
+    heart: '<path d="M12 20s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.2a4.3 4.3 0 0 1 7.5 2.6C19.5 15.4 12 20 12 20z"/>',
+    user: '<circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c1.2-3.6 4-5.3 7.5-5.3s6.3 1.7 7.5 5.3"/>',
+    pin: '<path d="M12 21s-6.5-6.2-6.5-11.3a6.5 6.5 0 0 1 13 0C18.5 14.8 12 21 12 21z"/><circle cx="12" cy="9.7" r="2.4"/>',
+    chevronDown: '<path d="M6 9l6 6 6-6"/>',
+    chevronRight: '<path d="M9 6l6 6-6 6"/>'
+  };
+  function shellIcon(name, size) {
+    const s = size || 24;
+    return `<svg viewBox="0 0 24 24" width="${s}" height="${s}" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SHELL_ICONS[name] || ''}</svg>`;
+  }
+
+  // 홈 화면 카테고리 아이콘 메뉴용 라인 아이콘 — 카테고리는 관리자가 DB에서 관리하므로
+  // 슬러그/이름에 들어있는 키워드로 아이콘을 고르고, 맞는 게 없으면 카테고리 이모지를 그대로 쓴다.
+  const CATEGORY_LINE_ICONS = [
+    { keys: ['diet', '다이어트', '슬림'], svg: '<path d="M8 3c-.5 3 .5 5 1.5 6.5M16 3c.5 3-.5 5-1.5 6.5"/><path d="M9.5 9.5C8 12 7.5 14.5 8.5 17.5c.6 1.8 2 3 3.5 3s2.9-1.2 3.5-3c1-3 .5-5.5-1-8"/><path d="M5 12h3M16 12h3M5 12l1.3-1.3M5 12l1.3 1.3M19 12l-1.3-1.3M19 12l-1.3 1.3"/>' },
+    { keys: ['beauty', 'cosmetic', '화장품', '뷰티'], svg: '<rect x="5" y="9" width="6" height="12" rx="1.5"/><path d="M6.5 9V6.5h3V9M8 6.5V4h3"/><rect x="13" y="7" width="6" height="14" rx="1.5"/><path d="M14.5 7V4.5h3V7M13 12h6"/>' },
+    { keys: ['health', 'functional', 'vitamin', 'probiotic', '건강', '기능', '비타민', '유산균', '영양'], svg: '<rect x="3.2" y="9" width="11" height="6" rx="3" transform="rotate(-35 8.7 12)"/><path d="M6.2 15.4l4.9-3.4"/><circle cx="16.5" cy="15.5" r="4.3"/><path d="M13.5 18.5l6-6"/>' },
+    { keys: ['food', 'tea', '식품', '음료', '차', '간식'], svg: '<path d="M3.5 12h17a8.5 8.5 0 0 1-17 0z"/><circle cx="9" cy="8.5" r="2.3"/><circle cx="14" cy="7.5" r="2.6"/><path d="M11.5 4.5c.5-1 1.5-1.5 2.5-1.3"/>' },
+    { keys: ['lifestyle', 'living', 'household', '생활', '리빙'], svg: '<path d="M9 3h4v3H9z"/><path d="M13 4.5h3l1.5 2"/><path d="M8 9a3 3 0 0 1 3-3h0a3 3 0 0 1 3 3v10a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2z"/><path d="M15.5 17c0-3 3.5-3.5 4-6 1 2.5.5 6-2 7.5"/>' },
+    { keys: ['fashion', 'cloth', 'apparel', '패션', '의류'], svg: '<path d="M8.5 3.5L4 6l1.8 4.2 2.2-.9V20.5h8V9.3l2.2.9L20 6l-4.5-2.5a3.5 3.5 0 0 1-7 0z"/>' },
+    { keys: ['special', 'event', 'promotion', 'exhibition', '기획', '이벤트', '특가'], svg: '<path d="M3.5 12.5l8-8h7.5a1.5 1.5 0 0 1 1.5 1.5v7.5l-8 8a1.5 1.5 0 0 1-2.1 0L3.5 14.6a1.5 1.5 0 0 1 0-2.1z"/><circle cx="16" cy="8" r="1.4"/><path d="M9.5 15.5l4-4M10 11.8h.01M13.2 15h.01"/>' }
+  ];
+  function getCategoryLineIcon(cat) {
+    const hay = ((cat.slug || '') + ' ' + (cat.label || '')).toLowerCase();
+    const hit = CATEGORY_LINE_ICONS.find(i => i.keys.some(k => hay.indexOf(k) !== -1));
+    return hit
+      ? `<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${hit.svg}</svg>`
+      : `<span class="wp-cat-emoji">${escapeHtml(cat.emoji || '🎁')}</span>`;
+  }
+
+  function isShellPage() {
+    if (document.body && document.body.hasAttribute('data-wp-no-shell')) return false;
+    return !SHELL_EXCLUDED_PATHS.test(location.pathname);
+  }
+
+  let shellStyleInjected = false;
+  function ensureShellStyle() {
+    if (shellStyleInjected) return;
+    shellStyleInjected = true;
+    const style = document.createElement('style');
+    style.id = 'wp-shell-style';
+    style.textContent = `
+      .wp-logo-img { height: 40px; width: auto; display: block; }
+      a.logo:has(.wp-logo-img), .top-logo a:has(.wp-logo-img) { display: inline-flex; flex-direction: column; align-items: center; line-height: 1.1; text-decoration: none; }
+      /* 로고 마크 아래 슬로건 — 브랜드 이미지와 같은 배색(앞 검정 · 뒤 핑크) */
+      .logo .wp-logo-tagline, .top-logo .wp-logo-tagline { display: block; margin: 3px 0 0; font-size: 11.5px; font-weight: 800; color: #333; letter-spacing: -0.03em; white-space: nowrap; line-height: 1.2; }
+      .logo .wp-logo-tagline b, .top-logo .wp-logo-tagline b { color: #E8125C; font-weight: 800; }
+      .top-logo .wp-logo-tagline { font-size: 13px; margin-top: 4px; }
+      .wp-icon-btn { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 42px; border: none; background: none; color: #222; cursor: pointer; border-radius: 50%; text-decoration: none; flex-shrink: 0; }
+      .wp-icon-btn:hover { background: #FFF0F4; color: #E8125C; }
+      .wp-icon-badge { position: absolute; top: 2px; right: 0; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #E8125C; color: #fff; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center; border: 2px solid #fff; box-sizing: content-box; }
+      .wp-icon-badge[data-count="0"] { display: none; }
+      .wp-menu-btn { margin-right: 4px; }
+
+      .wp-drawer-backdrop { position: fixed; inset: 0; background: rgba(20,10,15,0.45); z-index: 1000; opacity: 0; pointer-events: none; transition: opacity .2s; }
+      .wp-drawer-backdrop.open { opacity: 1; pointer-events: auto; }
+      .wp-drawer { position: fixed; top: 0; left: 0; bottom: 0; width: min(340px, 88vw); background: #fff; z-index: 1001; transform: translateX(-100%); transition: transform .25s ease; display: flex; flex-direction: column; box-shadow: 4px 0 24px rgba(0,0,0,0.12); }
+      .wp-drawer.open { transform: translateX(0); }
+      .wp-drawer-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 12px 14px 18px; border-bottom: 1px solid #F3E3E8; }
+      .wp-drawer-head img { height: 34px; }
+      .wp-drawer-user { margin: 14px 16px 6px; padding: 14px 16px; border-radius: 14px; background: linear-gradient(135deg, #FFF0F4, #FFE3EC); font-size: 14px; color: #333; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+      .wp-drawer-user a { color: #E8125C; font-weight: 700; text-decoration: none; white-space: nowrap; }
+      .wp-drawer-body { overflow-y: auto; padding: 6px 0 24px; flex: 1; }
+      .wp-drawer-section { padding: 12px 18px 4px; font-size: 12px; font-weight: 700; color: #E8125C; letter-spacing: .02em; }
+      .wp-drawer-cats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; padding: 6px 12px 8px; }
+      .wp-drawer-cats a { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 10px 4px; border-radius: 12px; text-decoration: none; color: #333; font-size: 13px; }
+      .wp-drawer-cats a:hover { background: #FFF0F4; }
+      .wp-drawer-cats .wp-cat-ico { width: 46px; height: 46px; border-radius: 50%; background: #FFF0F4; color: #E8125C; display: flex; align-items: center; justify-content: center; }
+      .wp-drawer-cats .wp-cat-ico svg { width: 24px; height: 24px; }
+      .wp-cat-emoji { font-size: 22px; line-height: 1; }
+      .wp-drawer-link { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; color: #222; text-decoration: none; font-size: 15px; }
+      .wp-drawer-link:hover { background: #FFF7F9; color: #E8125C; }
+      .wp-drawer-link svg { color: #C9AAB4; }
+      body.wp-drawer-lock { overflow: hidden; }
+
+      .wp-tabbar { display: none; }
+      @media (max-width: 1024px) {
+        body.wp-has-tabbar { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+        .wp-tabbar { display: grid; grid-template-columns: repeat(5, 1fr); position: fixed; left: 0; right: 0; bottom: 0; z-index: 900; background: rgba(255,255,255,0.97); backdrop-filter: blur(8px); border-top: 1px solid #F1E4E8; padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); box-shadow: 0 -2px 12px rgba(0,0,0,0.04); }
+        .wp-tabbar a, .wp-tabbar button { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 0; font-size: 11px; color: #777; text-decoration: none; background: none; border: none; cursor: pointer; font-family: inherit; }
+        .wp-tabbar .active { color: #E8125C; font-weight: 700; }
+        .wp-tabbar .active svg { fill: currentColor; fill-opacity: .12; }
+      }
+    `;
+    document.head.appendChild(style);
+  }
+
+  // 정적 HTML에 아직 텍스트 로고("WITH+")가 남아있는 화면이 있으면 브랜드 마크 이미지로 바꿔준다
+  function applyBrandLogo() {
+    document.querySelectorAll('a.logo, .top-logo a').forEach(el => {
+      if (el.querySelector('img')) return;
+      const sub = el.querySelector('span');
+      const subText = sub ? sub.textContent.trim() : '';
+      el.innerHTML = `<img src="${BRAND_LOGO_SRC}" alt="WITH+" class="wp-logo-img">` +
+        (subText && subText !== '함께할수록 더해지는 가치'
+          ? `<span>${escapeHtml(subText)}</span>`
+          : '<span class="wp-logo-tagline">함께할수록 <b>더해지는 가치</b></span>');
+      el.setAttribute('aria-label', 'WITH+ 홈');
+    });
+  }
+
+  function buildDrawer() {
+    if (document.getElementById('wp-drawer')) return;
+    const backdrop = document.createElement('div');
+    backdrop.className = 'wp-drawer-backdrop';
+    backdrop.id = 'wp-drawer-backdrop';
+    const drawer = document.createElement('aside');
+    drawer.className = 'wp-drawer';
+    drawer.id = 'wp-drawer';
+    drawer.setAttribute('aria-label', '전체 메뉴');
+    drawer.setAttribute('aria-hidden', 'true');
+    const link = (href, label) => `<a class="wp-drawer-link" href="${href}"><span>${label}</span>${shellIcon('chevronRight', 18)}</a>`;
+    drawer.innerHTML = `
+      <div class="wp-drawer-head">
+        <a href="/" class="logo" aria-label="WITH+ 홈"><img src="${BRAND_LOGO_SRC}" alt="WITH+" class="wp-logo-img" style="height:34px;"><span class="wp-logo-tagline">함께할수록 <b>더해지는 가치</b></span></a>
+        <button type="button" class="wp-icon-btn" id="wp-drawer-close" aria-label="메뉴 닫기">${shellIcon('close')}</button>
+      </div>
+      <div class="wp-drawer-user" id="wp-drawer-user"><span>로그인하고 적립 혜택을 받아보세요</span><a href="/login">로그인</a></div>
+      <div class="wp-drawer-body">
+        <div class="wp-drawer-section" id="wp-drawer-cats-title">카테고리</div>
+        <div class="wp-drawer-cats" id="wp-drawer-cats"></div>
+        <div class="wp-drawer-section">쇼핑</div>
+        ${link('/search', '상품 검색')}
+        ${link('/cart', '장바구니')}
+        ${link('/mypage#wish', '찜한 상품')}
+        ${link('/live', 'LIVE 라이브 쇼핑')}
+        <div class="wp-drawer-section">커뮤니티</div>
+        ${link('/communities', '공동체(커뮤니티) 혜택 안내')}
+        ${link('/notice', '공지사항')}
+        ${link('/board/review', '사용후기')}
+        ${link('/board/qa', 'Q&amp;A')}
+        ${link('/board/free', '자유게시판')}
+        <div class="wp-drawer-section">고객지원</div>
+        ${link('/support', '고객센터')}
+        ${link('/faq', '자주 묻는 질문')}
+        ${link('/manual.html', '사용설명서')}
+      </div>`;
+    document.body.appendChild(backdrop);
+    document.body.appendChild(drawer);
+    backdrop.addEventListener('click', closeDrawer);
+    drawer.querySelector('#wp-drawer-close').addEventListener('click', closeDrawer);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
+  }
+
+  async function fillDrawer() {
+    const catsEl = document.getElementById('wp-drawer-cats');
+    if (catsEl && !catsEl.dataset.loaded) {
+      if (cachedCategoriesRaw.length === 0) await refreshCategoryMap();
+      const cats = cachedCategoriesRaw.filter(c => !c.parent_id);
+      catsEl.innerHTML = (cats.length ? cats : [{ slug: '', label: '전체 상품', emoji: '🛍️' }]).map(c => `
+        <a href="${c.slug ? '/category/' + encodeURIComponent(c.slug) : '/'}">
+          <span class="wp-cat-ico">${getCategoryLineIcon(c)}</span>
+          <span>${escapeHtml(c.label)}</span>
+        </a>`).join('');
+      catsEl.dataset.loaded = '1';
+    }
+    const userEl = document.getElementById('wp-drawer-user');
+    if (userEl) {
+      const session = await getSession();
+      if (session && session.user) {
+        userEl.innerHTML = `<span>${escapeHtml(session.user.email || '회원')}님 반가워요</span><a href="/mypage">마이페이지</a>`;
+      }
+    }
+  }
+
+  function openDrawer(focusCategories) {
+    buildDrawer();
+    document.getElementById('wp-drawer-backdrop').classList.add('open');
+    const drawer = document.getElementById('wp-drawer');
+    drawer.classList.add('open');
+    drawer.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('wp-drawer-lock');
+    fillDrawer().then(() => {
+      if (focusCategories) {
+        const t = document.getElementById('wp-drawer-cats-title');
+        if (t) t.scrollIntoView({ block: 'start' });
+      }
+    });
+  }
+
+  function closeDrawer() {
+    const drawer = document.getElementById('wp-drawer');
+    if (!drawer) return;
+    drawer.classList.remove('open');
+    drawer.setAttribute('aria-hidden', 'true');
+    document.getElementById('wp-drawer-backdrop').classList.remove('open');
+    document.body.classList.remove('wp-drawer-lock');
+  }
+
+  // 헤더 로고 왼쪽에 ☰ 버튼을 붙인다 (홈처럼 이미 #wp-menu-btn을 가진 화면은 그대로 사용)
+  function mountMenuButton() {
+    let btn = document.getElementById('wp-menu-btn');
+    if (!btn) {
+      const logo = document.querySelector('header a.logo');
+      if (!logo) return;
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.id = 'wp-menu-btn';
+      btn.className = 'wp-icon-btn wp-menu-btn';
+      btn.setAttribute('aria-label', '전체 메뉴 열기');
+      btn.innerHTML = shellIcon('menu', 26);
+      const wrap = document.createElement('span');
+      wrap.style.cssText = 'display:inline-flex;align-items:center;gap:4px;';
+      logo.parentNode.insertBefore(wrap, logo);
+      wrap.appendChild(btn);
+      wrap.appendChild(logo);
+    }
+    btn.addEventListener('click', () => openDrawer(false));
+  }
+
+  function getActiveTab() {
+    const p = location.pathname.replace(/\/$/, '') || '/';
+    if (p === '/' || p === '/index.html') return 'home';
+    if (p.startsWith('/category') || p.startsWith('/search')) return 'category';
+    if (p.startsWith('/live')) return 'live';
+    if (p.startsWith('/mypage') && location.hash === '#wish') return 'wish';
+    if (p.startsWith('/mypage') || p.startsWith('/my-info')) return 'my';
+    return '';
+  }
+
+  function mountTabBar() {
+    if (document.getElementById('wp-tabbar')) return;
+    const active = getActiveTab();
+    const nav = document.createElement('nav');
+    nav.className = 'wp-tabbar';
+    nav.id = 'wp-tabbar';
+    nav.setAttribute('aria-label', '하단 메뉴');
+    const cls = (key) => active === key ? ' class="active" aria-current="page"' : '';
+    nav.innerHTML = `
+      <a href="/"${cls('home')}>${shellIcon('home')}<span>홈</span></a>
+      <button type="button" id="wp-tab-category"${cls('category')}>${shellIcon('grid')}<span>카테고리</span></button>
+      <a href="/live"${cls('live')}>${shellIcon('live')}<span>LIVE</span></a>
+      <a href="/mypage#wish"${cls('wish')}>${shellIcon('heart')}<span>찜</span></a>
+      <a href="/mypage"${cls('my')}>${shellIcon('user')}<span>마이페이지</span></a>`;
+    document.body.appendChild(nav);
+    document.body.classList.add('wp-has-tabbar');
+    nav.querySelector('#wp-tab-category').addEventListener('click', () => openDrawer(true));
+    // 같은 /mypage 안에서 찜 ↔ 마이페이지를 오갈 때(해시만 바뀜) 활성 탭 표시를 갱신
+    window.addEventListener('hashchange', () => {
+      const now = getActiveTab();
+      nav.querySelectorAll('a, button').forEach(el => el.classList.remove('active'));
+      const map = { home: 0, category: 1, live: 2, wish: 3, my: 4 };
+      if (now in map) nav.children[map[now]].classList.add('active');
+    });
+  }
+
+  // 🔔 알림 배지 — 헤더에 .wp-noti-badge가 있는 화면에서만 읽지 않은 알림 수를 채운다
+  async function refreshNotificationBadge() {
+    const badges = document.querySelectorAll('.wp-noti-badge');
+    if (badges.length === 0) return;
+    let count = 0;
+    try {
+      const token = await getAccessToken();
+      if (token) {
+        const res = await fetch(API_BASE + '/api/me/notifications', { headers: { Authorization: 'Bearer ' + token } });
+        const json = await res.json();
+        if (res.ok && json.success) count = Number(json.unread_count) || 0;
+      }
+    } catch (e) { /* 실패 시 배지 숨김 */ }
+    badges.forEach(b => { b.textContent = count > 99 ? '99+' : String(count); b.dataset.count = String(count); });
+  }
+
+  function mountAppShell() {
+    ensureShellStyle();
+    applyBrandLogo();
+    if (!isShellPage()) return;
+    buildDrawer();
+    mountMenuButton();
+    mountTabBar();
+    refreshNotificationBadge();
+  }
+
   global.WithPlus = {
     API_BASE,
     CATEGORY_MAP,
@@ -943,7 +1238,12 @@
     applyPendingReferralIfAny,
     clearPreferredCommunity,
     renderCommunityBanner,
-    registerPwa
+    registerPwa,
+    shellIcon,
+    getCategoryLineIcon,
+    openDrawer,
+    closeDrawer,
+    refreshNotificationBadge
   };
 
   // 어느 페이지든 이 스크립트만 불러오면 자동으로 배너 여부를 판단하도록 한다
@@ -994,6 +1294,12 @@
     document.addEventListener('DOMContentLoaded', renderCommunityBanner);
   } else {
     renderCommunityBanner();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', mountAppShell);
+  } else {
+    mountAppShell();
   }
 
   registerPwa();

@@ -1127,24 +1127,228 @@
         .section-title {
             animation: slideIn 0.5s ease-out;
         }
+
+        /* ===== WITH+ 기본틀 (앱형 메뉴) ===== */
+        :root {
+            --wp-pink: #E8125C;
+            --wp-pink-soft: #FFF0F4;
+            --wp-pink-line: #F8D3DF;
+            --wp-container: 1200px;
+        }
+
+        .wp-home-header { border-bottom: none; box-shadow: 0 1px 0 #F6E6EB; }
+        .wh-row {
+            max-width: var(--wp-container);
+            margin: 0 auto;
+            padding: 12px 20px;
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+        .wp-home-header .logo { flex-shrink: 0; }
+        .wp-home-header .wp-logo-img { height: 42px; }
+        .wh-search.search-box {
+            flex: 1;
+            max-width: 560px;
+            margin: 0 auto;
+            background: #fff;
+            border: 1.5px solid var(--wp-pink-line);
+            border-radius: 999px;
+            padding: 6px 8px 6px 22px;
+        }
+        .wh-search.search-box input { width: 100%; font-size: 15px; padding: 6px 0; }
+        .wh-search.search-box input::placeholder { color: #8A8A8A; }
+        .wh-search.search-box button { color: #222; display: inline-flex; padding: 4px 6px; }
+        .wh-actions { display: flex; align-items: center; gap: 2px; flex-shrink: 0; }
+        .wh-actions .cart-badge { top: 2px; right: 0; width: auto; border-radius: 9px; display: block; font-size: 11px; }
+
+        .wh-subnav {
+            max-width: var(--wp-container);
+            margin: 0 auto;
+            padding: 0 20px 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 24px;
+        }
+        .wh-subnav .nav-menu { flex: 1; gap: 22px; flex-wrap: wrap; }
+        .wh-subnav .header-top-right { font-size: 0.85em; gap: 16px; color: var(--text-gray); }
+
+        .wp-community-bar {
+            max-width: calc(var(--wp-container) - 40px);
+            margin: 12px auto 0;
+            padding: 10px 14px 10px 20px;
+            background: linear-gradient(90deg, #FFF5F8, #FFEFF4);
+            border-radius: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .wcb-select-wrap { position: relative; }
+        .wcb-select { display: inline-flex; align-items: center; gap: 8px; background: none; border: none; cursor: pointer; font: inherit; font-size: 17px; font-weight: 700; color: #222; padding: 4px 0; }
+        .wcb-select svg:first-child { color: var(--wp-pink); }
+        .wcb-menu { position: absolute; top: calc(100% + 8px); left: 0; z-index: 120; background: #fff; border: 1px solid #F1E1E6; border-radius: 12px; box-shadow: 0 10px 24px rgba(0,0,0,0.10); min-width: 210px; padding: 6px 0; }
+        .wcb-menu a { display: block; padding: 10px 16px; color: #333; text-decoration: none; font-size: 14px; }
+        .wcb-menu a:hover { background: var(--wp-pink-soft); color: var(--wp-pink); }
+        .wcb-slogan { font-size: 15px; color: #333; }
+        .wcb-cta { flex-shrink: 0; background: #FFE1EA; color: var(--wp-pink); font-weight: 700; font-size: 14px; text-decoration: none; border-radius: 999px; padding: 8px 16px; }
+        .wcb-cta:hover { background: #FFD2DF; }
+
+        .hero {
+            max-width: calc(var(--wp-container) - 40px);
+            margin: 14px auto 0;
+            border-radius: 22px;
+            background: linear-gradient(120deg, #FFF1F5 0%, #FFE0EA 55%, #FFC9D9 100%);
+            color: #1E1E1E;
+            text-align: left;
+            padding: 44px 48px;
+        }
+        .hero h1 { font-size: 2.2em; font-weight: 800; letter-spacing: -0.02em; }
+        .hero p { color: #333; opacity: 1; }
+        .hero-carousel { justify-content: flex-start; }
+        .carousel-slide { background: rgba(255,255,255,0.7); border-color: #FFD3E0; color: #333; }
+        .carousel-slide:hover { background: #fff; }
+        .carousel-slide.active { background: var(--wp-pink); color: #fff; border-color: var(--wp-pink); }
+
+        .categories { max-width: var(--wp-container); margin: 26px auto 10px; }
+        .category-grid {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+            overflow-x: auto;
+            scrollbar-width: none;
+            padding: 4px 0;
+        }
+        .category-grid::-webkit-scrollbar { display: none; }
+        .category-item {
+            flex: 1 0 84px;
+            max-width: 130px;
+            background: none;
+            padding: 6px 4px;
+            gap: 10px;
+        }
+        .category-item:hover { background: none; color: var(--wp-pink); transform: none; box-shadow: none; }
+        .category-icon {
+            width: 72px;
+            height: 72px;
+            margin: 0;
+            border-radius: 50%;
+            background: var(--wp-pink-soft);
+            color: var(--wp-pink);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.9em;
+            transition: transform .2s, background .2s;
+        }
+        .category-item:hover .category-icon { transform: translateY(-3px); background: #FFE1EA; }
+        .category-icon svg { width: 34px; height: 34px; }
+        .category-name { font-size: 15px; font-weight: 500; }
+
+        .wp-member-strip {
+            max-width: calc(var(--wp-container) - 40px);
+            margin: 18px auto 10px;
+            border-radius: 20px;
+            background: linear-gradient(90deg, #E8125C, #F0386F);
+            color: #fff;
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            padding: 16px 0;
+            box-shadow: 0 8px 22px rgba(232,18,92,0.22);
+        }
+        .wms-cell {
+            position: relative;
+            display: grid;
+            grid-template-columns: 1fr auto;
+            grid-template-areas: "label icon" "value icon" "link link";
+            align-items: center;
+            row-gap: 4px;
+            padding: 4px 24px;
+            color: #fff;
+            text-decoration: none;
+        }
+        .wms-cell + .wms-cell { border-left: 1px solid rgba(255,255,255,0.35); }
+        .wms-label { grid-area: label; font-size: 14px; opacity: .92; }
+        .wms-value { grid-area: value; font-size: 26px; font-weight: 800; letter-spacing: -0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .wms-value small { font-size: .6em; margin-left: 2px; }
+        .wms-icon { grid-area: icon; font-size: 34px; line-height: 1; }
+        .wms-coin { width: 40px; height: 40px; border-radius: 50%; background: #FFC93C; color: #fff; font-size: 20px; font-weight: 800; display: flex; align-items: center; justify-content: center; box-shadow: inset 0 -3px 0 rgba(0,0,0,0.12); }
+        .wms-link { grid-area: link; justify-self: start; font-size: 13px; margin-top: 4px; padding: 4px 12px; border: 1px solid rgba(255,255,255,0.5); border-radius: 999px; white-space: nowrap; }
+        .wms-cell:hover .wms-link { background: rgba(255,255,255,0.18); }
+
+        @media (max-width: 1024px) {
+            .wh-subnav { display: none; }
+            .wh-actions .wh-account { display: none; }
+            .wms-cell { padding: 4px 14px; }
+            .wms-value { font-size: 21px; }
+            .wms-icon { font-size: 26px; }
+            .wms-coin { width: 32px; height: 32px; font-size: 16px; }
+        }
+        @media (max-width: 768px) {
+            .wh-row { flex-wrap: wrap; padding: 10px 14px; gap: 6px 4px; }
+            .wp-home-header .wp-logo-img { height: 34px; }
+            .wp-home-header .wp-logo-tagline { font-size: 9.6px; margin-top: 2px; }
+            .wh-actions { margin-left: auto; }
+            .wh-search.search-box { order: 3; flex-basis: 100%; max-width: none; padding-left: 18px; }
+            .wp-community-bar { margin: 10px 14px 0; padding: 8px 10px 8px 14px; border-radius: 14px; }
+            .wcb-select { font-size: 15px; }
+            .wcb-slogan { display: none; }
+            .wcb-cta { font-size: 13px; padding: 7px 12px; }
+            .hero { margin: 12px 14px 0; padding: 26px 22px; border-radius: 18px; }
+            .hero h1 { font-size: 1.45em; margin-bottom: 8px; }
+            .hero p { font-size: 0.92em; margin-bottom: 0; }
+            .hero-carousel { margin-top: 16px; gap: 8px; }
+            .carousel-slide { padding: 6px 14px; font-size: 0.88em; }
+            .categories { margin: 18px auto 6px; padding: 0 10px; }
+            .category-item { flex: 0 0 76px; }
+            .category-icon { width: 58px; height: 58px; }
+            .category-icon svg { width: 28px; height: 28px; }
+            .category-name { font-size: 13px; }
+            .wp-member-strip { margin: 12px 14px 6px; grid-template-columns: repeat(2, 1fr); row-gap: 14px; border-radius: 16px; }
+            .wms-cell:nth-child(3) { border-left: none; }
+        }
     </style>
 </head>
 <body>
-    <!-- MILEAGE INFO BAR -->
-    <div class="mileage-info-bar">
-        <span>💰 마일리지: 5,450원</span>
-        <span class="separator">|</span>
-        <span>⭐ 회원등급: 골드 회원</span>
-        <span class="separator">|</span>
-        <span>🤝 참여 커뮤니티: 2개</span>
-    </div>
-
-    <!-- HEADER -->
-    <header class="header">
-        <div class="header-top">
-            <div class="header-top-left">
-                <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+    <!-- HEADER (WITH+ 기본틀: ☰ · 로고 · 검색 · 🔔 · 🛒) -->
+    <header class="header wp-home-header">
+        <div class="wh-row">
+            <button type="button" id="wp-menu-btn" class="wp-icon-btn" aria-label="전체 메뉴 열기">
+                <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+            </button>
+            <a href="/" class="logo" aria-label="WITH+ 홈"><img src="/images/brand/withplus-logo.webp" alt="WITH+" class="wp-logo-img" width="130" height="40"><span class="wp-logo-tagline">함께할수록 <b>더해지는 가치</b></span></a>
+            <div class="search-box wh-search">
+                <input type="text" placeholder="검색어를 입력하세요" aria-label="상품 검색">
+                <button type="submit" aria-label="검색">
+                    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg>
+                </button>
             </div>
+            <div class="wh-actions">
+                <a class="wp-icon-btn" href="/mypage#notifications" aria-label="알림" title="알림">
+                    <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9a6 6 0 1 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9z"/><path d="M10.3 20a1.9 1.9 0 0 0 3.4 0"/></svg>
+                    <span class="wp-icon-badge wp-noti-badge" data-count="0">0</span>
+                </a>
+                <a class="wp-icon-btn wh-account" id="account-link" href="/login" aria-label="마이페이지">
+                    <svg viewBox="0 0 24 24" width="25" height="25" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4.5 20.5c1.2-3.6 4-5.3 7.5-5.3s6.3 1.7 7.5 5.3"/></svg>
+                </a>
+                <a class="wp-icon-btn" href="/cart" aria-label="장바구니" title="장바구니">
+                    <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h2.2l2.3 11h10.8l2.2-8H6.6"/><circle cx="9.5" cy="19.5" r="1.4"/><circle cx="17" cy="19.5" r="1.4"/></svg>
+                    <span class="wp-icon-badge cart-badge" data-count="0">0</span>
+                </a>
+            </div>
+        </div>
+        <!-- 데스크톱 전용: 카테고리 메뉴 + 게시판 링크 (모바일은 ☰ 메뉴와 하단 탭바로 대체) -->
+        <div class="wh-subnav">
+            <nav class="nav-menu" id="nav-menu">
+                <a href="/category/diet">🥗 다이어트</a>
+                <a href="/category/beauty">💄 화장품</a>
+                <a href="/category/functional">💊 건강식품</a>
+                <a href="/category/tea">🍎 식품</a>
+                <a href="/category/lifestyle">🏠 생활용품</a>
+                <a href="/category/fashion">👕 패션</a>
+                <a href="/category/special">🎁 기획전</a>
+            </nav>
             <div class="header-top-right">
                 <a href="/notice">공지사항</a>
                 <a href="/board/review">사용후기</a>
@@ -1152,32 +1356,25 @@
                 <a href="/board/free">자유게시판</a>
             </div>
         </div>
+    </header>
 
-        <div class="header-main">
-            <nav class="nav-menu" id="nav-menu">
-                <a href="/category/diet">🥗 다이어트</a>
-                <a href="/category/vitamins">💊 비타민</a>
-                <a href="/category/probiotics">🧬 유산균</a>
-                <a href="/category/beauty">💄 뷰티</a>
-                <a href="/category/functional">🌿 기능식품</a>
-                <a href="/category/tea">🍵 차/음료</a>
-                <a href="/category/lifestyle">🏠 생활용품</a>
-                <a href="/category/special">🎁 기획전</a>
-            </nav>
-
-            <div class="header-actions">
-                <div class="search-box">
-                    <input type="text" placeholder="상품을 검색해주세요">
-                    <button type="submit">🔍</button>
-                </div>
-                <a class="icon-button" id="account-link" href="/login">👤</a>
-                <a class="icon-button" href="/cart">
-                    🛒
-                    <span class="cart-badge">0</span>
-                </a>
+    <!-- 공동체 바: 지금 보고 있는 공동체(매장) · 슬로건 · 공동체 혜택 안내 -->
+    <div class="wp-community-bar" id="wp-community-bar">
+        <div class="wcb-select-wrap">
+            <button type="button" class="wcb-select" id="wcb-select" aria-haspopup="true" aria-expanded="false">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-6.5-6.2-6.5-11.3a6.5 6.5 0 0 1 13 0C18.5 14.8 12 21 12 21z"/><circle cx="12" cy="9.7" r="2.4"/></svg>
+                <span id="wcb-name">전체 쇼핑몰</span>
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <div class="wcb-menu" id="wcb-menu" hidden>
+                <a href="#" id="wcb-current" hidden>내 공동체 매장 바로가기</a>
+                <a href="#" id="wcb-reset">전체 쇼핑몰 보기</a>
+                <a href="/communities">다른 공동체 찾아보기</a>
             </div>
         </div>
-    </header>
+        <span class="wcb-slogan">함께할수록 더 큰 나눔</span>
+        <a class="wcb-cta" href="/communities">공동체 혜택 안내 <span aria-hidden="true">›</span></a>
+    </div>
 
     <!-- HERO SECTION -->
     <section class="hero">
@@ -1193,43 +1390,45 @@
         </div>
     </section>
 
-    <!-- CATEGORY SECTION -->
-    <section class="categories">
-        <h2 class="section-title">🏷️ 카테고리 둘러보기</h2>
+    <!-- CATEGORY ICON MENU (관리자 카테고리 설정 그대로 반영) -->
+    <section class="categories" aria-label="카테고리">
         <div class="category-grid" id="category-grid">
-            <a href="/category/diet" class="category-item">
-                <div class="category-icon">🥗</div>
-                <div class="category-name">다이어트</div>
-            </a>
-            <a href="/category/vitamins" class="category-item">
-                <div class="category-icon">💊</div>
-                <div class="category-name">비타민</div>
-            </a>
-            <a href="/category/probiotics" class="category-item">
-                <div class="category-icon">🧬</div>
-                <div class="category-name">유산균</div>
-            </a>
-            <a href="/category/beauty" class="category-item">
-                <div class="category-icon">💄</div>
-                <div class="category-name">뷰티</div>
-            </a>
-            <a href="/category/functional" class="category-item">
-                <div class="category-icon">🌿</div>
-                <div class="category-name">기능식품</div>
-            </a>
-            <a href="/category/tea" class="category-item">
-                <div class="category-icon">🍵</div>
-                <div class="category-name">차/음료</div>
-            </a>
-            <a href="/category/lifestyle" class="category-item">
-                <div class="category-icon">🏠</div>
-                <div class="category-name">생활용품</div>
-            </a>
-            <a href="/category/special" class="category-item">
-                <div class="category-icon">🎁</div>
-                <div class="category-name">기획전</div>
-            </a>
+            <a href="/category/diet" class="category-item"><div class="category-icon">🥗</div><div class="category-name">다이어트</div></a>
+            <a href="/category/beauty" class="category-item"><div class="category-icon">💄</div><div class="category-name">화장품</div></a>
+            <a href="/category/functional" class="category-item"><div class="category-icon">💊</div><div class="category-name">건강식품</div></a>
+            <a href="/category/tea" class="category-item"><div class="category-icon">🍎</div><div class="category-name">식품</div></a>
+            <a href="/category/lifestyle" class="category-item"><div class="category-icon">🏠</div><div class="category-name">생활용품</div></a>
+            <a href="/category/fashion" class="category-item"><div class="category-icon">👕</div><div class="category-name">패션</div></a>
+            <a href="/category/special" class="category-item"><div class="category-icon">🎁</div><div class="category-name">기획전</div></a>
         </div>
+    </section>
+
+    <!-- 회원 혜택 바: 회원등급 · 추가 적립 · 쿠폰 · 보유 적립금 (실제 회원 데이터) -->
+    <section class="wp-member-strip" id="wp-member-strip" aria-label="내 혜택">
+        <a class="wms-cell" id="wms-grade" href="/login">
+            <span class="wms-label">회원등급</span>
+            <span class="wms-value" id="wms-grade-value">비회원</span>
+            <span class="wms-icon" aria-hidden="true">👑</span>
+            <span class="wms-link" id="wms-grade-link">로그인하기 ›</span>
+        </a>
+        <a class="wms-cell" id="wms-rate" href="/communities">
+            <span class="wms-label">구매 적립</span>
+            <span class="wms-value" id="wms-rate-value">1%</span>
+            <span class="wms-icon wms-coin" aria-hidden="true">P</span>
+            <span class="wms-link" id="wms-rate-link">커뮤니티 참여 시 +2%</span>
+        </a>
+        <a class="wms-cell" id="wms-coupon" href="/join">
+            <span class="wms-label">쿠폰</span>
+            <span class="wms-value" id="wms-coupon-value">가입 혜택</span>
+            <span class="wms-icon" aria-hidden="true">🎟️</span>
+            <span class="wms-link" id="wms-coupon-link">회원가입 ›</span>
+        </a>
+        <a class="wms-cell" id="wms-mileage" href="/join">
+            <span class="wms-label">보유 적립금</span>
+            <span class="wms-value" id="wms-mileage-value">0<small>P</small></span>
+            <span class="wms-icon" aria-hidden="true">🪙</span>
+            <span class="wms-link" id="wms-mileage-link">적립금 내역 ›</span>
+        </a>
     </section>
 
     <!-- PROMOTIONAL BANNERS -->
@@ -1555,6 +1754,74 @@
             WithPlus.initCategoryNav(); // 상단 카테고리 메뉴/카테고리 둘러보기 그리드를 실제 카테고리 데이터로 렌더링 (분양 조직 방문자는 그 조직의 노출 설정 반영)
 
             // ============================================
+            // 공동체 바: 지금 보고 있는 공동체(매장) 이름 표시 + 드롭다운(매장 바로가기 / 전체 쇼핑몰 보기 / 다른 공동체 찾기)
+            // ============================================
+            (function initCommunityBar() {
+                const btn = document.getElementById('wcb-select');
+                const menu = document.getElementById('wcb-menu');
+                if (!btn || !menu) return;
+                const slug = WithPlus.getPreferredCommunitySlug();
+                let name = '';
+                try { name = localStorage.getItem('withplus_preferred_community_name') || ''; } catch (e) {}
+                const resetLink = document.getElementById('wcb-reset');
+                const currentLink = document.getElementById('wcb-current');
+                if (slug) {
+                    document.getElementById('wcb-name').textContent = name || '내 공동체';
+                    currentLink.href = '/c/' + encodeURIComponent(slug);
+                    currentLink.textContent = (name || '내 공동체') + ' 매장 바로가기';
+                    currentLink.hidden = false;
+                } else {
+                    resetLink.hidden = true;
+                }
+                const setOpen = (open) => { menu.hidden = !open; btn.setAttribute('aria-expanded', String(open)); };
+                btn.addEventListener('click', (e) => { e.stopPropagation(); setOpen(menu.hidden); });
+                document.addEventListener('click', (e) => { if (!menu.contains(e.target)) setOpen(false); });
+                resetLink.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    WithPlus.clearPreferredCommunity();
+                    location.href = '/';
+                });
+            })();
+
+            // ============================================
+            // 회원 혜택 바: 실제 회원 데이터(등급/적립률/적립금)로 채운다. 비로그인은 가입·로그인 안내를 보여준다.
+            // 개인별 쿠폰함은 없으므로(쿠폰은 코드 입력형) 숫자를 지어내지 않고 "쿠폰 등록" 진입점으로 연결한다.
+            // ============================================
+            async function loadMemberStrip() {
+                const set = (id, text) => { const el = document.getElementById(id); if (el) el.textContent = text; };
+                const rates = await WithPlus.refreshMileageRates();
+                set('wms-rate-value', WithPlus.formatPercent(rates.personalPercent) + '%');
+                set('wms-rate-link', '커뮤니티 참여 시 +' + WithPlus.formatPercent(rates.communityPercent) + '%');
+
+                const token = await WithPlus.getAccessToken();
+                if (!token) return;
+                const headers = { Authorization: 'Bearer ' + token };
+                const [gradeRes, balanceRes] = await Promise.all([
+                    fetch('/api/me/grade', { headers }).then(r => r.json()).catch(() => null),
+                    fetch('/api/me/mileage-balance', { headers }).then(r => r.json()).catch(() => null)
+                ]);
+
+                document.getElementById('wms-grade').href = '/mypage';
+                set('wms-grade-link', '등급 혜택 보기 ›');
+                const grade = gradeRes && gradeRes.success && gradeRes.data && gradeRes.data.current;
+                set('wms-grade-value', grade ? grade.label : '일반회원');
+                const bonus = grade ? Number(grade.bonus_personal_rate) || 0 : 0;
+                if (bonus > 0) {
+                    set('wms-rate-value', WithPlus.formatPercent(rates.personalPercent + bonus * 100) + '%');
+                    set('wms-rate-link', '등급 보너스 +' + WithPlus.formatPercent(bonus * 100) + '%p 포함');
+                }
+
+                document.getElementById('wms-coupon').href = '/mypage#coupon';
+                set('wms-coupon-value', '쿠폰 등록');
+                set('wms-coupon-link', '쿠폰 입력하기 ›');
+
+                document.getElementById('wms-mileage').href = '/mypage';
+                const balance = balanceRes && balanceRes.success && balanceRes.data ? Number(balanceRes.data.balance) || 0 : 0;
+                const mileageEl = document.getElementById('wms-mileage-value');
+                if (mileageEl) mileageEl.innerHTML = balance.toLocaleString('ko-KR') + '<small>P</small>';
+            }
+
+            // ============================================
             // 하단 사업자정보: 관리자 설정 화면(⚙️ 설정 > 사업자 정보)에서 입력한 값을 그대로 표시한다.
             // 실패하거나 값이 비어있으면 위 HTML에 이미 채워둔 현재 실제 값을 그대로 유지한다(빈 값으로 덮어쓰지 않음).
             // ============================================
@@ -1754,7 +2021,8 @@
                 loadRecommendedProducts(),
                 loadRecentlyViewed(),
                 loadRecentReviews(),
-                loadPlatformStats()
+                loadPlatformStats(),
+                loadMemberStrip().catch(() => { /* 실패 시 기본 안내 문구 유지 */ })
             ]);
         })();
     </script>
