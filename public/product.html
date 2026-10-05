@@ -228,12 +228,7 @@
                     </div>` : '';
 
                 const reviewsHtml = (p.reviews && p.reviews.length > 0)
-                    ? p.reviews.map(r => `
-                        <div class="review-item">
-                            <div class="review-stars">${'⭐'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}${r.verified_purchase ? ' <span style="font-size:0.7em; color:var(--primary-color); font-weight:600;">✅ 구매인증</span>' : ''}</div>
-                            <div class="review-comment">${WithPlus.escapeHtml(r.comment || '')}</div>
-                            <div class="review-date">${new Date(r.created_at).toLocaleDateString('ko-KR')}</div>
-                        </div>`).join('')
+                    ? p.reviews.map(WithPlus.renderReviewItem).join('')
                     : `<p style="color:var(--text-gray);padding:20px 0;">아직 작성된 리뷰가 없습니다. 첫 리뷰를 남겨보세요!</p>`;
 
                 const thumbStripHtml = images.length > 1
@@ -251,7 +246,7 @@
                         </div>
                         <div class="detail-info">
                             <h1>${WithPlus.escapeHtml(p.name)}</h1>
-                            <div class="detail-rating">⭐ ${rating} (${reviewCount}개 리뷰)</div>
+                            <div class="detail-rating">${WithPlus.renderRatingSummary(p.rating, reviewCount, p.review_satisfaction ? p.review_satisfaction.satisfied_count : 0, '#reviews')}</div>
                             <div class="detail-price-box">
                                 ${hasDiscount ? `<span class="detail-original-price">${WithPlus.formatPrice(p.price)}</span><span class="detail-discount">${discountRate}%</span>` : ''}
                                 <span class="detail-price">${WithPlus.formatPrice(currentPrice)}</span>
@@ -341,7 +336,7 @@
                         <div class="fbt-scroll" id="supplier-products-scroll"></div>
                     </div>
 
-                    <div class="reviews-section">
+                    <div class="reviews-section" id="reviews" style="scroll-margin-top:90px;">
                         <h2>⭐ 상품 리뷰 (${reviewCount})</h2>
                         ${p.review_satisfaction && p.review_satisfaction.percent !== null ? `<p style="color:var(--primary-color); font-weight:600; margin:-8px 0 16px;">✅ 구매자 ${p.review_satisfaction.percent}% 만족 <span style="font-weight:400; color:var(--text-gray); font-size:0.85em;">(구매인증 리뷰 ${p.review_satisfaction.verified_count}건 기준)</span></p>` : ''}
                         <div id="review-write-area"></div>
@@ -755,12 +750,7 @@
 
                         // 새 리뷰를 목록 맨 위에 즉시 반영 (전체 새로고침 없이)
                         const list = document.getElementById('reviews-list');
-                        const newItemHtml = `
-                            <div class="review-item">
-                                <div class="review-stars">${'⭐'.repeat(selectedRating)}${'☆'.repeat(5 - selectedRating)}${json.data.verified_purchase ? ' <span style="font-size:0.7em; color:var(--primary-color); font-weight:600;">✅ 구매인증</span>' : ''}</div>
-                                <div class="review-comment">${WithPlus.escapeHtml(comment)}</div>
-                                <div class="review-date">${new Date().toLocaleDateString('ko-KR')}</div>
-                            </div>`;
+                        const newItemHtml = WithPlus.renderReviewItem(Object.assign({ rating: selectedRating, comment, created_at: new Date().toISOString() }, json.data)); // 서버가 돌려준 가린 아이디(author_name) 포함
                         if (list.querySelector('p')) list.innerHTML = '';
                         list.insertAdjacentHTML('afterbegin', newItemHtml);
 

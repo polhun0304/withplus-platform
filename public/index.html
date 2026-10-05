@@ -1308,6 +1308,64 @@
             .wp-member-strip { margin: 12px 14px 6px; grid-template-columns: repeat(2, 1fr); row-gap: 14px; border-radius: 16px; }
             .wms-cell:nth-child(3) { border-left: none; }
         }
+
+        /* ===== 모바일 상품 진열 (쿠팡식) =====
+           한 화면에 상품 2개 + 3번째 상품 절반만 보이게 해서 "옆으로 더 있다"는 걸 알려주고,
+           2줄을 한 묶음으로 좌우로 넘기며(가로 스크롤) 페이지는 위아래로 이어서 내려간다. */
+        @media (max-width: 768px) {
+            .products-section .product-grid,
+            .recently-viewed .horizontal-scroll {
+                display: grid;
+                grid-auto-flow: column;
+                grid-template-rows: repeat(2, auto);
+                grid-template-columns: none;
+                grid-auto-columns: calc((100% - 24px) / 2.5);
+                gap: 18px 12px;
+                overflow-x: auto;
+                overscroll-behavior-x: contain;
+                scroll-snap-type: x proximity;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+                margin-right: -20px;
+                padding-right: 20px;
+                padding-bottom: 4px;
+            }
+            .recently-viewed .horizontal-scroll { grid-template-rows: auto; }
+            .products-section .product-grid::-webkit-scrollbar,
+            .recently-viewed .horizontal-scroll::-webkit-scrollbar { display: none; }
+            .products-section .product-grid > p { grid-row: 1 / -1; width: calc(100vw - 40px); }
+            .products-section .product-card,
+            .recently-viewed .horizontal-scroll .product-card {
+                flex: none;
+                scroll-snap-align: start;
+                border: none;
+                border-radius: 0;
+                animation: none;
+            }
+            .products-section .product-card:hover { transform: none; box-shadow: none; }
+            .products-section .product-image,
+            .recently-viewed .product-image { height: auto; aspect-ratio: 1 / 1; border-radius: 10px; font-size: 2.2em; }
+            .products-section .product-actions,
+            .recently-viewed .product-actions { opacity: 1; top: auto; bottom: 8px; right: 8px; }
+            .products-section .action-btn.wishlist-btn,
+            .recently-viewed .action-btn.wishlist-btn { display: none; }
+            .products-section .action-btn,
+            .recently-viewed .action-btn { width: 34px; height: 34px; box-shadow: 0 2px 6px rgba(0,0,0,0.15); background: #fff; }
+            .products-section .mileage-badge,
+            .recently-viewed .mileage-badge { top: 6px; left: 6px; padding: 3px 6px; }
+            .products-section .product-info,
+            .recently-viewed .product-info { padding: 8px 2px 0; }
+            .products-section .product-name,
+            .recently-viewed .product-name { font-weight: 500; font-size: 0.88em; margin-bottom: 4px; }
+            .products-section .product-price,
+            .recently-viewed .product-price { flex-wrap: wrap; gap: 2px 6px; margin-bottom: 0; }
+            .products-section .current-price,
+            .recently-viewed .current-price { color: #111; font-size: 1em; }
+            .products-section .product-meta,
+            .products-section .add-to-cart-btn,
+            .recently-viewed .product-meta,
+            .recently-viewed .add-to-cart-btn { display: none; }
+        }
     </style>
 </head>
 <body>
@@ -1654,7 +1712,7 @@
     <section class="realtime-section">
         <h2 class="section-title">🔥 실시간 활동</h2>
         <div class="activity-grid">
-            <!-- Recent Reviews (실제 리뷰 데이터, 개인정보 보호를 위해 작성자 비공개) -->
+            <!-- Recent Reviews (실제 리뷰 데이터, 작성자는 가운데를 *로 가린 이름만 표시) -->
             <div class="activity-card">
                 <h3 style="margin-bottom: 15px; font-size: 1.1em;">⭐ 최근 리뷰</h3>
                 <div id="recent-reviews-list">
@@ -1969,7 +2027,7 @@
 
                     list.innerHTML = json.data.map(r => `
                         <div class="activity-item">
-                            <span class="activity-action">${'⭐'.repeat(r.rating)} "${WithPlus.escapeHtml(r.comment || '')}" - ${WithPlus.escapeHtml(r.product_name)}</span>
+                            <span class="activity-action">${'⭐'.repeat(r.rating)} "${WithPlus.escapeHtml(r.comment || '')}" - ${WithPlus.escapeHtml(r.product_name)} · <strong>${WithPlus.escapeHtml(r.author_name || '구매자')}</strong>님</span>
                             <span class="activity-time">${WithPlus.timeAgo(r.created_at)}</span>
                         </div>`).join('');
                 } catch (err) {

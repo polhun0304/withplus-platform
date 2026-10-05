@@ -5416,10 +5416,12 @@ app.get('/api/products/:id', async (req, res) => {
 
     // 관리자가 숨김 처리한(status='hidden') 리뷰는 일반 방문자 화면에 절대 노출되지 않도록 여기서 걸러낸다
     // (nested select에서는 임베드된 리소스를 직접 필터링할 수 없어 응답 직전에 한 번 더 걸러낸다)
-    const visibleReviews = (data.reviews || []).filter(r => r.status === 'published').map(r => {
+    const visibleReviews = await attachReviewerNames((data.reviews || []).filter(r => r.status === 'published').map(r => {
       const { status, ...rest } = r;
       return rest;
-    });
+    }));
+    // 최신 리뷰가 위로 오도록 정렬
+    visibleReviews.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
     // 리뷰 신뢰도 강화 노출 (제안서 6절 "리뷰 신뢰도 강화 노출") - 실제 구매인증(verified_purchase) 리뷰만으로
     // "평점 4점 이상 비율"을 계산한다. 표본이 너무 적으면(3건 미만) 퍼센트가 왜곡되기 쉬우므로 정직하게
@@ -5427,6 +5429,8 @@ app.get('/api/products/:id', async (req, res) => {
     const REVIEW_SATISFACTION_MIN_COUNT = 3;
     const verifiedReviews = visibleReviews.filter(r => r.verified_purchase);
     const reviewSatisfaction = {
+      // "👍 N명 이상 만족했어요" — 공개된 전체 리뷰 중 평점 4점 이상을 남긴 사람 수
+      satisfied_count: visibleReviews.filter(r => Number(r.rating) >= 4).length,
       verified_count: verifiedReviews.length,
       percent: verifiedReviews.length >= REVIEW_SATISFACTION_MIN_COUNT
         ? Math.round((verifiedReviews.filter(r => Number(r.rating) >= 4).length / verifiedReviews.length) * 100)
@@ -9923,6 +9927,38 @@ app.get('/api/provider/orders', authenticate, requireRole(['provider', 'admin', 
 });
 
 // ============================================
+// 리뷰 작성자 표시 — 실명/아이디를 그대로 노출하지 않고 가운데를 *로 가린다 (예: 안지영 → 안*영, 김민 → 김*).
+// 화면에는 가린 이름만 내려주고, 원본 user_id/이름/이메일은 응답에 절대 포함하지 않는다.
+// ============================================
+function maskReviewerName(name) {
+  const chars = Array.from(String(name || '').trim());
+  if (chars.length === 0) return null;
+  if (chars.length <= 2) return chars[0] + '*';
+  return chars[0] + '*'.repeat(chars.length - 2) + chars[chars.length - 1];
+}
+
+// 리뷰 목록에 author_name(가린 이름)을 붙이고 user_id는 제거한다. 이름이 없으면 이메일 아이디(@ 앞)를 쓴다.
+async function attachReviewerNames(reviews) {
+  const list = reviews || [];
+  const userIds = [...new Set(list.map(r => r.user_id).filter(Boolean))];
+  const nameById = {};
+  if (userIds.length > 0) {
+    const { data: profiles } = await supabase
+      .from('profiles')
+      .select('id, full_name, email')
+      .in('id', userIds);
+    (profiles || []).forEach(pr => {
+      const raw = (pr.full_name && pr.full_name.trim()) || (pr.email ? pr.email.split('@')[0] : '');
+      nameById[pr.id] = maskReviewerName(raw);
+    });
+  }
+  return list.map(r => {
+    const { user_id, ...rest } = r;
+    return { ...rest, author_name: nameById[user_id] || '구매자' };
+  });
+}
+
+// ============================================
 // 리뷰 API
 // ============================================
 
@@ -9932,19 +9968,21 @@ app.get('/api/reviews/recent', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit, 10) || 5, 20);
     const { data, error } = await supabasePublic
       .from('product_reviews')
-      .select('id, rating, comment, created_at, verified_purchase, products_with(name)')
+      .select('id, rating, comment, created_at, verified_purchase, user_id, products_with(name)')
       .eq('status', 'published')
       .order('created_at', { ascending: false })
       .limit(limit);
 
     if (error) throw error;
 
-    const reviews = (data || []).map(r => ({
+    const named = await attachReviewerNames(data || []);
+    const reviews = named.map(r => ({
       id: r.id,
       rating: r.rating,
       comment: r.comment,
       created_at: r.created_at,
       verified_purchase: r.verified_purchase,
+      author_name: r.author_name,
       product_name: r.products_with ? r.products_with.name : '상품'
     }));
 
@@ -10045,9 +10083,11 @@ app.post('/api/reviews', authenticate, async (req, res) => {
 
     if (error) throw error;
 
+    const [namedReview] = await attachReviewerNames([data]);
+
     res.status(201).json({
       success: true,
-      data: data,
+      data: namedReview,
       message: 'Review created successfully',
       timestamp: new Date().toISOString()
     });

@@ -446,6 +446,75 @@
   }
 
   // 상품 카드 HTML (홈페이지/카테고리 페이지 공용)
+  // ============================================
+  // ⭐ 별점/상품평 표시 (쿠팡식) — 0.5 단위까지 채워지는 별 5개 + "N 개 상품평" + "👍 N명 이상 만족했어요"
+  // ============================================
+  let ratingStyleInjected = false;
+  function ensureRatingStyle() {
+    if (ratingStyleInjected) return;
+    ratingStyleInjected = true;
+    const style = document.createElement('style');
+    style.textContent = `
+      .wp-stars { position: relative; display: inline-block; line-height: 1; letter-spacing: 1px; color: #DADADA; white-space: nowrap; vertical-align: middle; }
+      .wp-stars-fill { position: absolute; top: 0; left: 0; overflow: hidden; color: #FF8A00; white-space: nowrap; }
+      .wp-rating-summary { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; font-size: 15px; }
+      .wp-rating-count { color: #346AFF; text-decoration: none; }
+      .wp-rating-count:hover { text-decoration: underline; }
+      .wp-rating-satisfied { color: #333; }
+      .wp-rating-satisfied b { color: #E8590C; font-weight: 700; }
+      .wp-review-head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+      .wp-review-avatar { width: 44px; height: 44px; border-radius: 50%; background: linear-gradient(135deg, #CBD3E1, #AEB8CA); flex-shrink: 0; }
+      .wp-review-author { font-weight: 700; font-size: 15px; color: #222; }
+      .wp-review-sub { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #888; margin-top: 2px; }
+      .product-rating-line { display: flex; align-items: center; gap: 4px; font-size: 12px; color: #888; margin: 4px 0 2px; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function renderStars(rating, size) {
+    ensureRatingStyle();
+    const r = Math.max(0, Math.min(5, Number(rating) || 0));
+    const pct = Math.round(r * 2) / 2 / 5 * 100; // 0.5 단위로 반올림
+    const fs = size ? `font-size:${size}px;` : '';
+    return `<span class="wp-stars" style="${fs}" role="img" aria-label="별점 5점 만점에 ${r.toFixed(1)}점">★★★★★<span class="wp-stars-fill" style="width:${pct}%">★★★★★</span></span>`;
+  }
+
+  // 만족 인원 표기 — 10명 미만은 정확히, 그 이상은 자릿수 단위로 내림해 "N명 이상"으로 보여준다 (예: 127 → 100명 이상)
+  function formatSatisfied(count) {
+    const n = Number(count) || 0;
+    if (n <= 0) return '';
+    if (n < 10) return `<b>${n}명</b>이 만족했어요`;
+    const unit = n < 100 ? 10 : n < 1000 ? 100 : 1000;
+    return `<b>${(Math.floor(n / unit) * unit).toLocaleString('ko-KR')}명 이상</b> 만족했어요`;
+  }
+
+  function renderRatingSummary(rating, reviewCount, satisfiedCount, reviewsHref) {
+    const count = Number(reviewCount) || 0;
+    const satisfied = formatSatisfied(satisfiedCount);
+    return `<div class="wp-rating-summary">
+        ${renderStars(rating, 17)}
+        <a class="wp-rating-count" href="${reviewsHref || '#reviews'}">${count.toLocaleString('ko-KR')} 개 상품평</a>
+        ${satisfied ? `<span class="wp-rating-satisfied">👍 ${satisfied}</span>` : ''}
+      </div>`;
+  }
+
+  // 리뷰 한 건 (작성자 가린 이름 + 별점 + 날짜 + 본문)
+  function renderReviewItem(r) {
+    const date = new Date(r.created_at);
+    const dateText = isNaN(date) ? '' : `${date.getFullYear()}.${String(date.getMonth() + 1).padStart(2, '0')}.${String(date.getDate()).padStart(2, '0')}`;
+    return `
+      <div class="review-item">
+        <div class="wp-review-head">
+          <span class="wp-review-avatar" aria-hidden="true"></span>
+          <div>
+            <div class="wp-review-author">${escapeHtml(r.author_name || '구매자')}</div>
+            <div class="wp-review-sub">${renderStars(r.rating, 16)}<span>${dateText}</span>${r.verified_purchase ? '<span style="color:#D32F5B; font-weight:600;">✅ 구매인증</span>' : ''}</div>
+          </div>
+        </div>
+        <div class="review-comment">${escapeHtml(r.comment || '')}</div>
+      </div>`;
+  }
+
   function renderProductCard(product) {
     const emoji = CATEGORY_EMOJI[product.category] || CATEGORY_EMOJI.default;
     const hasDiscount = product.discount_price && Number(product.discount_price) < Number(product.price);
@@ -479,8 +548,9 @@
                 ${hasDiscount ? `<span class="original-price">${formatPrice(product.price)}</span>
                 <span class="discount-rate">${discountRate}%</span>` : ''}
             </div>
+            <div class="product-rating-line">${renderStars(rating, 14)} <span class="product-review-count">(${Number(reviewCount).toLocaleString('ko-KR')})</span></div>
             <div class="product-meta">
-                ⭐ ${rating} (${reviewCount}개 리뷰) | ${outOfStock ? '품절' : '재고 ' + product.stock + '개'} | 배송비 무료
+                ${outOfStock ? '품절' : '재고 ' + product.stock + '개'} | 배송비 무료
             </div>
             <button class="add-to-cart-btn" type="button" ${outOfStock ? 'disabled' : ''}>${outOfStock ? '품절된 상품입니다' : '장바구니 담기'}</button>
         </div>
@@ -1241,6 +1311,10 @@
     registerPwa,
     shellIcon,
     getCategoryLineIcon,
+    renderStars,
+    renderRatingSummary,
+    renderReviewItem,
+    formatSatisfied,
     openDrawer,
     closeDrawer,
     refreshNotificationBadge
