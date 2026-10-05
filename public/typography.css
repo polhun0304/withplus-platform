@@ -1,0 +1,54 @@
+/* ==========================================================================
+   Typography — 선명하고 눈이 편한 글자 (WITH+ / LIVE+ 공통)
+   - 서체: Pretendard(가변) — 화면용으로 설계된 한글 서체. 작은 글자도 또렷하고 획 간격이 고르다.
+     (기존에 지정만 돼 있고 실제로는 불러오지 않던 'Noto Sans KR' 대신, 윈도우에서 흐릿하게 보이던
+      대체 글꼴(맑은 고딕)로 떨어지지 않도록 직접 불러온다)
+   - 글자색: 순검정 대신 아주 짙은 회색(눈부심↓), 보조 문구 회색은 한 단계 진하게(대비↑)
+   - 줄간격·자간·한글 줄바꿈(단어 단위)을 읽기 편하게 정리
+   ========================================================================== */
+@import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css');
+
+:root {
+    --ty-font: 'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Noto Sans KR', 'Malgun Gothic', system-ui, sans-serif;
+    --ty-text: #1C1D22;
+    --ty-muted: #4F5560;
+    --ty-subtle: #6A707C;
+    /* 각 화면이 쓰는 기본 글자색 변수를 더 또렷한 값으로 */
+    --text-dark: var(--ty-text);
+    --text-gray: var(--ty-muted);
+}
+
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+    font-family: var(--ty-font);
+    color: var(--ty-text);
+    line-height: 1.65;
+    letter-spacing: -0.012em;
+    font-kerning: normal;
+    text-rendering: optimizeLegibility;
+    word-break: keep-all;          /* 한글을 글자 중간이 아니라 단어 단위로 줄바꿈 */
+    overflow-wrap: anywhere;       /* 긴 영문/주소는 칸을 넘지 않게 */
+    -moz-osx-font-smoothing: grayscale;
+}
+button, input, select, textarea, optgroup { font-family: inherit; letter-spacing: inherit; }
+input, textarea, select { color: var(--ty-text); }
+::placeholder { color: #8A909B; opacity: 1; }
+
+h1, h2, h3, h4, .section-title, .page-title { letter-spacing: -0.025em; line-height: 1.35; color: inherit; }
+strong, b { font-weight: 700; }
+
+/* 가격·숫자는 자리 폭을 맞춰 흔들림 없이 */
+.current-price, .original-price, .discount-rate, .detail-price, .wms-value, .cart-badge, .wp-icon-badge, .deal-price, .mileage-card .value { font-variant-numeric: tabular-nums; }
+
+/* 너무 연하던 보조 문구 대비 올리기 */
+.product-meta, .review-date, .activity-time, .notification-time, .wp-review-sub, .product-rating-line,
+.wp-card-catch, .footer-bottom, .breadcrumb, .stock-info, .pw-hint, .form-hint { color: var(--ty-subtle); }
+.original-price { color: #7A808B; }
+.wp-tabbar a, .wp-tabbar button { color: #4B5160; }
+.wp-tabbar a span, .wp-tabbar button span { font-size: 11.5px; font-weight: 500; }
+
+/* 휴대폰: 기본 글자를 아주 조금 키워(16→16.5px) 작은 문구도 읽기 쉽게 */
+@media (max-width: 768px) {
+    html { font-size: 16.5px; }
+    body { line-height: 1.6; }
+}
