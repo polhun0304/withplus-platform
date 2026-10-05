@@ -3,7 +3,7 @@
 // 정적 리소스(이미지/CSS/JS/아이콘)는 캐시 우선으로 빠르게, HTML 페이지는 네트워크 우선(항상 최신 시도) +
 // 실패 시 캐시 → 그마저 없으면 오프라인 안내 페이지로 대체한다.
 
-const CACHE_VERSION = 'v4'; // v4: 상품카드·모바일 진열·특가 슬라이더 변경 — 캐시된 옛 공통 JS를 비운다
+const CACHE_VERSION = 'v5'; // 스크립트/스타일 네트워크 우선으로 변경
 const CACHE_NAME = `withplus-${CACHE_VERSION}`;
 const OFFLINE_URL = '/offline.html';
 
@@ -64,6 +64,21 @@ self.addEventListener('fetch', (event) => {
           return response;
         })
         .catch(() => caches.match(request).then((cached) => cached || caches.match(OFFLINE_URL)))
+    );
+    return;
+  }
+
+  // 스크립트/스타일: 네트워크 우선(실패 시 캐시) — 배포 직후 재방문자가 옛 공통 JS로 화면이 깨져 보이던 문제 방지.
+  // (캐시 우선이면 새 버전 배포 후 첫 방문 1회는 항상 예전 스크립트가 실행된다)
+  if (request.destination === 'script' || request.destination === 'style' || /\.(js|css)$/i.test(url.pathname)) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
+          return response;
+        })
+        .catch(() => caches.match(request))
     );
     return;
   }
