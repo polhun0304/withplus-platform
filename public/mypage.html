@@ -24,6 +24,18 @@
         h1.page-title { font-size: 1.5em; margin-bottom: 20px; }
 
         .profile-box { display: flex; justify-content: space-between; align-items: center; background: var(--bg-light); border-radius: 12px; padding: 20px 24px; margin-bottom: 30px; }
+        /* MY 메뉴 바로가기 — 마이페이지에서 자주 쓰는 기능을 한 번에 */
+        .my-menu { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin: -14px 0 30px; }
+        .my-menu a { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 14px 6px; border: 1px solid var(--border-color); border-radius: 12px; text-decoration: none; color: var(--text-dark); font-size: 0.84em; background: #fff; text-align: center; }
+        .my-menu a:hover { border-color: var(--primary-color); color: var(--primary-color); }
+        .my-menu .ico { font-size: 1.5em; line-height: 1; }
+        .profile-box .profile-actions { display: flex; gap: 8px; align-items: center; }
+        .profile-box .edit-btn { border: 1px solid var(--border-color); padding: 8px 14px; border-radius: 20px; font-size: 0.85em; color: var(--text-dark); text-decoration: none; background: #fff; }
+        @media (max-width: 768px) {
+            .my-menu { grid-template-columns: repeat(4, 1fr); gap: 8px; }
+            .my-menu a { padding: 12px 4px; font-size: 0.78em; }
+            .profile-box { flex-wrap: wrap; gap: 10px; padding: 16px 18px; }
+        }
         .profile-box .email { font-weight: 600; }
         .profile-box .logout-btn { background: none; border: 1px solid var(--border-color); padding: 8px 16px; border-radius: 20px; cursor: pointer; font-size: 0.85em; color: var(--text-gray); }
         .profile-box .logout-btn:hover { border-color: var(--primary-color); color: var(--primary-color); }
@@ -184,7 +196,6 @@
         <div class="header-main">
             <a href="/" class="logo" aria-label="WITH+ 홈"><img src="/images/brand/withplus-logo.webp" alt="WITH+" class="wp-logo-img" width="130" height="40"><span class="wp-logo-tagline">함께할수록 <b>더해지는 가치</b></span></a>
             <div style="display:flex; gap:20px; align-items:center;">
-                <a class="icon-button" href="/manual.html" title="사용설명서">📖</a>
                 <a class="icon-button" id="account-link" href="/login">👤</a>
                 <a class="icon-button" href="/cart">🛒<span class="cart-badge">0</span></a>
             </div>
@@ -199,7 +210,7 @@
     </div>
 
     <footer class="footer">
-        <p>&copy; 2024-2026 WITH+ Co., Ltd. All Rights Reserved. | <a href="/manual.html">사용설명서</a> | <a href="/">홈으로</a></p>
+        <p>&copy; 2024-2026 WITH+ Co., Ltd. All Rights Reserved. | <a href="/">홈으로</a></p>
     </footer>
 
     <div class="modal-overlay" id="address-modal-overlay">
@@ -601,20 +612,37 @@
                         <div class="mypage-tab-panel" data-panel="wish" style="display:none;">${wishlistHtml}</div>
                         <div class="mypage-tab-panel" data-panel="orders" style="display:none;">${ordersHtml}</div>
                     ` : `
-                        <h2 class="section-title">🚚 배송지 관리</h2>
+                        <h2 class="section-title" id="mypage-addr">🚚 배송지 관리</h2>
                         <div id="address-section">${addressesHtml}</div>
                         <button type="button" class="add-address-btn" id="add-address-btn">+ 새 배송지 추가</button>
                         <h2 class="section-title" id="mypage-wish">🖤 찜한 상품 (${(wishlist || []).length}개)</h2>
                         ${wishlistHtml}
-                        <h2 class="section-title">📋 주문 내역 (${orders.length}건)</h2>
+                        <h2 class="section-title" id="mypage-orders">📋 주문 내역 (${orders.length}건)</h2>
                         ${ordersHtml}
                     `;
 
                     area.innerHTML = `
                         <div class="profile-box">
                             <span class="email">👤 ${WithPlus.escapeHtml(session.user.email)}</span>
-                            <button class="logout-btn" id="logout-btn">로그아웃</button>
+                            <span class="profile-actions">
+                                <a class="edit-btn" href="/my-info">내 정보 수정</a>
+                                <button class="logout-btn" id="logout-btn">로그아웃</button>
+                            </span>
                         </div>
+                        <nav class="my-menu" aria-label="MY 메뉴">
+                            <a href="/my-info"><span class="ico">👤</span>내 정보 수정</a>
+                            <a href="/my-info#password"><span class="ico">🔐</span>비밀번호 변경</a>
+                            <a href="#orders"><span class="ico">📦</span>주문·배송조회</a>
+                            <a href="#orders"><span class="ico">↩️</span>취소·반품</a>
+                            <a href="#addr"><span class="ico">🚚</span>배송지 관리</a>
+                            <a href="#wish"><span class="ico">🖤</span>찜한 상품</a>
+                            <a href="#coupon"><span class="ico">🎫</span>쿠폰 등록</a>
+                            <a href="#notifications"><span class="ico">🔔</span>알림</a>
+                            <a href="/my-info"><span class="ico">📮</span>수신 동의 설정</a>
+                            <a href="/board/qa"><span class="ico">💬</span>1:1 문의</a>
+                            <a href="/support"><span class="ico">🎧</span>고객센터</a>
+                            <a href="#withdraw"><span class="ico">🚪</span>회원탈퇴</a>
+                        </nav>
                         ${gradeHtml}
                         <div class="mileage-summary">
                             <div class="mileage-card highlight"><div class="label">💰 사용 가능한 마일리지</div><div class="value">${mileageBalance.toLocaleString('ko-KR')}원</div></div>
@@ -662,6 +690,12 @@
                     function applyMypageHash() {
                         const key = location.hash.replace('#', '');
                         if (!key) return;
+                        if (key === 'withdraw') {
+                            // 탈퇴 모달 버튼 이벤트가 화면 렌더링 직후에 연결되므로 한 박자 늦게 연다
+                            setTimeout(() => { const wl = document.getElementById('withdraw-open-link'); if (wl) wl.click(); }, 50);
+                            history.replaceState(null, '', location.pathname);
+                            return;
+                        }
                         let target = document.getElementById('mypage-' + key);
                         if (useTabs && (key === 'wish' || key === 'orders' || key === 'addr')) {
                             const tabBtn = area.querySelector(`.mypage-tab-btn[data-panel="${key}"]`);

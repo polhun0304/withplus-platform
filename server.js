@@ -660,6 +660,69 @@ app.get('/api/me', authenticate, async (req, res) => {
 // 회원 본인 정보(이름/연락처/생년월일/성별/지역) + 마케팅 정보 활용 동의 수정 - 인구통계 타겟 마케팅(관리자
 // 세그먼트 필터링)의 입력 데이터가 되는 항목들이다. 모두 선택 입력이며, marketing_consent가 true인 회원만
 // 관리자의 타겟 마케팅 발송 대상이 된다(GET/POST /api/admin/marketing-segments/*).
+// ============================================
+// 🔐 비밀번호 변경 (마이페이지 > 내 정보)
+// - 이메일/비밀번호로 가입한 계정: 현재 비밀번호를 서버에서 따로 확인한 뒤에만 변경
+//   (확인용 클라이언트는 세션을 저장하지 않아 사용자의 로그인 상태·2단계 인증에 영향 없음)
+// - 소셜(카카오/네이버/구글)·EKOS로만 가입해 비밀번호가 없던 계정: 새 비밀번호 "설정"만 가능
+// - 무차별 대입 방지를 위해 15분에 10회로 제한
+// ============================================
+const passwordChangeLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too Many Requests', message: '비밀번호 변경 시도가 너무 많습니다. 15분 후 다시 시도해주세요.' }
+});
+function validateNewPassword(pw) {
+  if (typeof pw !== 'string' || pw.length < 8) return '새 비밀번호는 8자 이상이어야 합니다';
+  if (pw.length > 72) return '새 비밀번호는 72자 이하로 입력해주세요';
+  if (!/[A-Za-z]/.test(pw) || !/[0-9]/.test(pw)) return '새 비밀번호는 영문과 숫자를 모두 포함해야 합니다';
+  return null;
+}
+app.post('/api/me/password', passwordChangeLimiter, authenticate, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body || {};
+    const invalid = validateNewPassword(new_password);
+    if (invalid) return res.status(400).json({ error: 'Bad Request', message: invalid, timestamp: new Date().toISOString() });
+
+    const { data: userData, error: userErr } = await supabase.auth.admin.getUserById(req.user.id);
+    if (userErr || !userData || !userData.user) throw userErr || new Error('사용자 정보를 확인할 수 없습니다');
+    const user = userData.user;
+    const providers = (user.app_metadata && user.app_metadata.providers) || [];
+    const hasPassword = providers.includes('email') || (user.identities || []).some(i => i.provider === 'email');
+
+    if (hasPassword) {
+      if (!current_password) return res.status(400).json({ error: 'Bad Request', message: '현재 비밀번호를 입력해주세요', timestamp: new Date().toISOString() });
+      if (current_password === new_password) return res.status(400).json({ error: 'Bad Request', message: '새 비밀번호가 현재 비밀번호와 같습니다', timestamp: new Date().toISOString() });
+      const verifier = createClient(supabaseUrl, supabaseAnonKey, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+      const { error: signInErr } = await verifier.auth.signInWithPassword({ email: user.email, password: String(current_password) });
+      if (signInErr) return res.status(400).json({ error: 'Bad Request', message: '현재 비밀번호가 올바르지 않습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { error: updErr } = await supabase.auth.admin.updateUserById(req.user.id, { password: new_password });
+    if (updErr) throw updErr;
+    res.json({ success: true, message: hasPassword ? '비밀번호가 변경되었습니다' : '비밀번호가 설정되었습니다. 이제 이메일과 비밀번호로도 로그인할 수 있어요.', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error changing password:', err);
+    res.status(500).json({ error: 'Failed to change password', message: (process.env.NODE_ENV === 'production' ? '비밀번호 변경에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
+  }
+});
+
+// 로그인 방식 확인 (내 정보 화면에서 "비밀번호 변경" / "비밀번호 설정" 중 무엇을 보여줄지 결정)
+app.get('/api/me/login-methods', authenticate, async (req, res) => {
+  try {
+    const { data: userData, error } = await supabase.auth.admin.getUserById(req.user.id);
+    if (error || !userData || !userData.user) throw error || new Error('사용자 정보를 확인할 수 없습니다');
+    const user = userData.user;
+    const providers = [...new Set([...(((user.app_metadata || {}).providers) || []), ...((user.identities || []).map(i => i.provider))])];
+    res.json({ success: true, data: { email: user.email, providers, has_password: providers.includes('email'), last_sign_in_at: user.last_sign_in_at || null, created_at: user.created_at }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching login methods:', err);
+    res.status(500).json({ error: 'Failed to fetch login methods', message: (process.env.NODE_ENV === 'production' ? '로그인 정보를 불러오지 못했습니다' : err.message), timestamp: new Date().toISOString() });
+  }
+});
+
 app.patch('/api/me/profile', authenticate, async (req, res) => {
   try {
     const { full_name, phone, birth_date, gender, region, marketing_consent } = req.body;
@@ -15495,6 +15558,18 @@ app.get('/live', (req, res) => {
   const liveplusUrl = process.env.LIVEPLUS_URL;
   if (liveplusUrl && /^https?:\/\//i.test(liveplusUrl)) return res.redirect(302, liveplusUrl);
   res.sendFile(path.join(__dirname, 'public', 'live.html'));
+});
+
+// ============================================
+// 📖 사용설명서 (관리자 전용) — 본문은 public 밖(private/manual-content.html)에 두고
+// 관리자(admin/super_admin) 인증을 통과한 요청에만 내려준다. /manual.html 은 내용 없는 껍데기 화면.
+// ============================================
+app.get('/api/admin/manual', authenticate, requireRole(['admin', 'super_admin']), (req, res) => {
+  fs.readFile(path.join(__dirname, 'private', 'manual-content.html'), 'utf8', (err, html) => {
+    if (err) return res.status(500).json({ error: 'Failed to load manual', message: '사용설명서를 불러오지 못했습니다', timestamp: new Date().toISOString() });
+    res.set('Cache-Control', 'no-store');
+    res.json({ success: true, html, timestamp: new Date().toISOString() });
+  });
 });
 
 // 푸터 하위 정보 페이지 (회사소개/고객지원/약관·정책/함께하기)

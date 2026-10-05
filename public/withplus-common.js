@@ -1183,7 +1183,6 @@
         <div class="wp-drawer-section">고객지원</div>
         ${link('/support', '고객센터')}
         ${link('/faq', '자주 묻는 질문')}
-        ${link('/manual.html', '사용설명서')}
       </div>`;
     document.body.appendChild(backdrop);
     document.body.appendChild(drawer);
