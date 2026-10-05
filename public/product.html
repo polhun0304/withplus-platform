@@ -126,14 +126,22 @@
 
         @media (max-width: 768px) {
             .detail-grid { grid-template-columns: 1fr; gap: 25px; }
-            .detail-image { height: 300px; font-size: 5em; }
+            .detail-image { height: auto; aspect-ratio: 1 / 1; font-size: 5em; }
+            /* 휴대폰: 장바구니/바로구매 버튼을 화면 하단에 항상 고정 (쇼핑앱 방식) */
+            body { padding-bottom: calc(76px + env(safe-area-inset-bottom)); }
+            .detail-actions {
+                position: fixed; left: 0; right: 0; bottom: 0; z-index: 950;
+                margin: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+                background: rgba(255,255,255,0.98); box-shadow: 0 -2px 14px rgba(0,0,0,0.10);
+            }
+            .detail-actions .btn { flex: 1; padding: 15px 0; font-size: 1.02em; border-radius: 10px; }
         }
     </style>
 </head>
-<body>
+<body data-wp-no-tabbar>
     <header class="header">
         <div class="header-main">
-            <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+            <a href="/" class="logo" aria-label="WITH+ 홈"><img src="/images/brand/withplus-logo.webp" alt="WITH+" class="wp-logo-img" width="130" height="40"><span class="wp-logo-tagline">함께할수록 <b>더해지는 가치</b></span></a>
             <div class="header-actions">
                 <a class="icon-button" id="account-link" href="/login" style="text-decoration:none;">👤</a>
                 <a class="icon-button" href="/cart" style="text-decoration:none;">🛒<span class="cart-badge">0</span></a>
@@ -228,12 +236,7 @@
                     </div>` : '';
 
                 const reviewsHtml = (p.reviews && p.reviews.length > 0)
-                    ? p.reviews.map(r => `
-                        <div class="review-item">
-                            <div class="review-stars">${'⭐'.repeat(r.rating)}${'☆'.repeat(5 - r.rating)}${r.verified_purchase ? ' <span style="font-size:0.7em; color:var(--primary-color); font-weight:600;">✅ 구매인증</span>' : ''}</div>
-                            <div class="review-comment">${WithPlus.escapeHtml(r.comment || '')}</div>
-                            <div class="review-date">${new Date(r.created_at).toLocaleDateString('ko-KR')}</div>
-                        </div>`).join('')
+                    ? p.reviews.map(WithPlus.renderReviewItem).join('')
                     : `<p style="color:var(--text-gray);padding:20px 0;">아직 작성된 리뷰가 없습니다. 첫 리뷰를 남겨보세요!</p>`;
 
                 const thumbStripHtml = images.length > 1
@@ -251,7 +254,7 @@
                         </div>
                         <div class="detail-info">
                             <h1>${WithPlus.escapeHtml(p.name)}</h1>
-                            <div class="detail-rating">⭐ ${rating} (${reviewCount}개 리뷰)</div>
+                            <div class="detail-rating">${WithPlus.renderRatingSummary(p.rating, reviewCount, p.review_satisfaction ? p.review_satisfaction.satisfied_count : 0, '#reviews')}</div>
                             <div class="detail-price-box">
                                 ${hasDiscount ? `<span class="detail-original-price">${WithPlus.formatPrice(p.price)}</span><span class="detail-discount">${discountRate}%</span>` : ''}
                                 <span class="detail-price">${WithPlus.formatPrice(currentPrice)}</span>
@@ -341,7 +344,7 @@
                         <div class="fbt-scroll" id="supplier-products-scroll"></div>
                     </div>
 
-                    <div class="reviews-section">
+                    <div class="reviews-section" id="reviews" style="scroll-margin-top:90px;">
                         <h2>⭐ 상품 리뷰 (${reviewCount})</h2>
                         ${p.review_satisfaction && p.review_satisfaction.percent !== null ? `<p style="color:var(--primary-color); font-weight:600; margin:-8px 0 16px;">✅ 구매자 ${p.review_satisfaction.percent}% 만족 <span style="font-weight:400; color:var(--text-gray); font-size:0.85em;">(구매인증 리뷰 ${p.review_satisfaction.verified_count}건 기준)</span></p>` : ''}
                         <div id="review-write-area"></div>
@@ -755,12 +758,7 @@
 
                         // 새 리뷰를 목록 맨 위에 즉시 반영 (전체 새로고침 없이)
                         const list = document.getElementById('reviews-list');
-                        const newItemHtml = `
-                            <div class="review-item">
-                                <div class="review-stars">${'⭐'.repeat(selectedRating)}${'☆'.repeat(5 - selectedRating)}${json.data.verified_purchase ? ' <span style="font-size:0.7em; color:var(--primary-color); font-weight:600;">✅ 구매인증</span>' : ''}</div>
-                                <div class="review-comment">${WithPlus.escapeHtml(comment)}</div>
-                                <div class="review-date">${new Date().toLocaleDateString('ko-KR')}</div>
-                            </div>`;
+                        const newItemHtml = WithPlus.renderReviewItem(Object.assign({ rating: selectedRating, comment, created_at: new Date().toISOString() }, json.data)); // 서버가 돌려준 가린 아이디(author_name) 포함
                         if (list.querySelector('p')) list.innerHTML = '';
                         list.insertAdjacentHTML('afterbegin', newItemHtml);
 

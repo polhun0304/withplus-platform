@@ -134,6 +134,24 @@
         .stat-card.clickable { cursor: pointer; transition: box-shadow 0.15s, transform 0.15s; position: relative; }
         .stat-card.clickable:hover { box-shadow: 0 4px 14px rgba(233, 30, 99, 0.18); transform: translateY(-2px); }
         .stat-card.clickable .stat-label::after { content: ' →'; color: var(--primary-color); font-weight: 600; }
+        /* 📦 송장 일괄 업로드 */
+        .bt-panel { background: white; border: 1px solid var(--border-color); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+        .bt-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }
+        .bt-step { background: var(--bg-light, #F5F5F5); border-radius: 10px; padding: 14px 16px; font-size: 0.88em; }
+        .bt-step p { color: var(--text-gray); margin: 6px 0 10px; line-height: 1.6; }
+        .bt-step-title { font-weight: 700; font-size: 1.05em; }
+        .bt-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; font-size: 0.92em; }
+        .bt-row select { padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 6px; }
+        .bt-msg { margin-top: 12px; font-size: 0.88em; color: var(--text-gray); }
+        .bt-msg.error { color: #C62828; font-weight: 600; }
+        .bt-progress { height: 8px; background: #EEE; border-radius: 4px; overflow: hidden; margin-top: 8px; }
+        .bt-progress span { display: block; height: 100%; background: var(--primary-color); transition: width .2s; }
+        .bt-summary { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 16px 0 6px; font-size: 0.95em; }
+        .bt-summary .good b { color: #2E7D32; }
+        .bt-summary .bad b { color: #C62828; }
+        .bt-table-wrap { max-height: 420px; overflow: auto; margin-top: 10px; border: 1px solid var(--border-color); border-radius: 8px; }
+        .bt-table-wrap table { width: 100%; font-size: 0.85em; }
+        .bt-table-wrap tr.bt-bad td { background: #FFF4F4; color: #B71C1C; }
         .filter-banner { background: #FFF3E0; border: 1px solid #FFCC80; border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; font-size: 0.88em; display: flex; justify-content: space-between; align-items: center; gap: 10px; }
         .filter-banner a { color: var(--primary-color); font-weight: 600; text-decoration: none; cursor: pointer; }
         .dash-section { background: white; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
@@ -242,7 +260,7 @@
 <body>
     <header class="header">
         <div class="header-main">
-            <a href="/" class="logo">WITH+ <span>관리자 페이지</span></a>
+            <a href="/" class="logo" aria-label="WITH+ 홈"><img src="/images/brand/withplus-logo.webp" alt="WITH+" class="wp-logo-img" width="130" height="40"><span>관리자 페이지</span></a>
             <div class="header-right">
                 <div id="admin-notif-wrap" style="position:relative; display:none;">
                     <button id="admin-notif-bell" style="background:none; border:none; cursor:pointer; font-size:1.2em; position:relative;" title="알림">🔔<span id="admin-notif-badge" style="display:none; position:absolute; top:-4px; right:-8px; background:#E53935; color:#fff; border-radius:10px; font-size:0.6em; padding:1px 5px; font-weight:bold;">0</span></button>
@@ -1727,6 +1745,38 @@
                             <option value="amount-desc">금액 높은순</option>
                             <option value="amount-asc">금액 낮은순</option>
                         </select>
+                    </div>
+                    <!-- 📦 택배 송장 일괄 업로드 (엑셀/CSV, 대용량은 자동으로 나눠서 전송) -->
+                    <div class="panel-toolbar" style="justify-content:flex-start;">
+                        <button type="button" class="btn btn-primary" id="bulk-tracking-toggle">📦 송장 일괄 업로드</button>
+                    </div>
+                    <div id="bulk-tracking-panel" class="bt-panel" hidden>
+                        <div class="bt-steps">
+                            <div class="bt-step">
+                                <div class="bt-step-title">① 양식 받기</div>
+                                <p>발송할 주문(결제완료·준비중)이 미리 채워진 엑셀을 받아 <b>택배사</b>와 <b>송장번호</b>만 채우세요. 택배사 프로그램에서 받은 엑셀(주문번호·송장번호 열 포함)도 그대로 올릴 수 있습니다.</p>
+                                <div class="bt-row">
+                                    <button type="button" class="btn btn-secondary" id="bt-download-pending">⬇️ 발송 대기 주문 양식</button>
+                                    <button type="button" class="btn btn-secondary" id="bt-download-blank">⬇️ 빈 양식</button>
+                                </div>
+                            </div>
+                            <div class="bt-step">
+                                <div class="bt-step-title">② 파일 올리기</div>
+                                <input type="file" id="bt-file" accept=".xlsx,.xls,.csv">
+                                <div class="bt-row" style="margin-top:10px;">
+                                    <label>택배사 열이 비어 있으면
+                                        <select id="bt-default-courier"><option value="">(지정 안 함)</option></select>
+                                    </label>
+                                </div>
+                                <div class="bt-row">
+                                    <label><input type="checkbox" id="bt-mark-shipped" checked> 결제완료·준비중 주문을 <b>배송중</b>으로 변경</label>
+                                </div>
+                                <div class="bt-row">
+                                    <label><input type="checkbox" id="bt-notify" checked> 고객에게 배송 안내 메일 발송</label>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="bt-preview"></div>
                     </div>
                     <div id="orders-since-banner"></div>
                     <div id="orders-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
@@ -5876,6 +5926,193 @@
                         loadOrders();
                     }
                 }, { once: false });
+
+
+                // ===== 📦 택배 송장 일괄 업로드 =====
+                // 파일은 브라우저에서 SheetJS로 읽고, 서버에는 [주문번호/택배사/송장번호] 행만 BT_CHUNK개씩 나눠 보낸다.
+                // 먼저 검증(dry_run)으로 행별 결과를 보여준 뒤, 확인을 누르면 실제로 저장한다.
+                (function initBulkTracking() {
+                    const BT_CHUNK = 500;
+                    const panel = document.getElementById('bulk-tracking-panel');
+                    const preview = document.getElementById('bt-preview');
+                    let parsedRows = [];
+
+                    document.getElementById('bulk-tracking-toggle').addEventListener('click', async () => {
+                        panel.hidden = !panel.hidden;
+                        if (!panel.hidden) {
+                            const sel = document.getElementById('bt-default-courier');
+                            if (sel.options.length <= 1) {
+                                const couriers = await getCouriers();
+                                sel.insertAdjacentHTML('beforeend', couriers.filter(c => c !== '기타').map(c => `<option value="${escapeHtmlAttr(c)}">${escapeHtmlAttr(c)}</option>`).join(''));
+                            }
+                        }
+                    });
+
+                    function escapeHtmlAttr(v) { return WithPlus.escapeHtml(String(v == null ? '' : v)); }
+
+                    function todayStamp() {
+                        const d = new Date();
+                        return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+                    }
+
+                    const HEADER = ['주문번호', '택배사', '송장번호', '주문자', '상품', '배송지', '주문일'];
+                    function downloadSheet(rows, filename) {
+                        const ws = XLSX.utils.aoa_to_sheet([HEADER, ...rows]);
+                        ws['!cols'] = [{ wch: 20 }, { wch: 14 }, { wch: 18 }, { wch: 14 }, { wch: 36 }, { wch: 40 }, { wch: 12 }];
+                        // 송장번호 열은 텍스트로 지정해 엑셀이 긴 숫자를 1.23E+11처럼 바꾸지 않게 한다
+                        for (let r = 1; r <= rows.length + 200; r++) {
+                            const ref = XLSX.utils.encode_cell({ r, c: 2 });
+                            if (!ws[ref]) ws[ref] = { t: 's', v: '' };
+                            ws[ref].z = '@';
+                        }
+                        ws['!ref'] = XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rows.length + 200, c: HEADER.length - 1 } });
+                        const wb = XLSX.utils.book_new();
+                        XLSX.utils.book_append_sheet(wb, ws, '송장등록');
+                        XLSX.writeFile(wb, filename);
+                    }
+
+                    document.getElementById('bt-download-blank').addEventListener('click', () => {
+                        downloadSheet([], `송장업로드_양식_${todayStamp()}.xlsx`);
+                    });
+
+                    document.getElementById('bt-download-pending').addEventListener('click', async (e) => {
+                        const btn = e.currentTarget;
+                        btn.disabled = true;
+                        try {
+                            const [paid, processing] = await Promise.all([
+                                authedFetch('/api/admin/orders?status=paid'),
+                                authedFetch('/api/admin/orders?status=processing')
+                            ]);
+                            const orders = [...((paid.json && paid.json.data) || []), ...((processing.json && processing.json.data) || [])]
+                                .filter(o => !o.tracking_number)
+                                .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
+                            if (orders.length === 0) { alert('송장을 등록할 발송 대기 주문(결제완료·준비중, 송장 미등록)이 없습니다.'); return; }
+                            const rows = orders.map(o => {
+                                const items = Array.isArray(o.items) ? o.items : [];
+                                const itemText = items.map(i => `${i.name || '상품'} x${i.quantity || 1}`).join(', ');
+                                return [o.order_number || '', '', '', o.buyer_name || o.buyer_email || '', itemText, o.shipping_address || '', new Date(o.created_at).toLocaleDateString('ko-KR')];
+                            });
+                            downloadSheet(rows, `발송대기주문_${todayStamp()}_${orders.length}건.xlsx`);
+                        } catch (err) {
+                            alert('발송 대기 주문을 불러오지 못했습니다: ' + err.message);
+                        } finally {
+                            btn.disabled = false;
+                        }
+                    });
+
+                    // 헤더 이름이 조금 달라도(택배사 프로그램 엑셀 등) 알아서 맞춘다 — 공백 제거·소문자 비교
+                    const ALIASES = {
+                        order_number: ['주문번호', '주문no', '주문코드', '주문서번호', 'ordernumber', 'order_number', 'orderno', '고객주문번호'],
+                        courier_name: ['택배사', '택배회사', '배송업체', '배송사', 'courier', 'courier_name', 'carrier'],
+                        tracking_number: ['송장번호', '운송장번호', '운송장', '송장', '등기번호', 'tracking', 'tracking_number', 'trackingno', 'invoice', 'invoiceno']
+                    };
+                    function findKey(headers, field) {
+                        const norm = s => String(s).replace(/\s+/g, '').toLowerCase();
+                        return headers.find(h => ALIASES[field].includes(norm(h))) || null;
+                    }
+
+                    document.getElementById('bt-file').addEventListener('change', (e) => {
+                        const file = e.target.files && e.target.files[0];
+                        if (!file) return;
+                        preview.innerHTML = `<div class="bt-msg">⏳ 파일을 읽는 중...</div>`;
+                        const reader = new FileReader();
+                        reader.onload = async (ev) => {
+                            try {
+                                const wb = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
+                                const sheet = wb.Sheets[wb.SheetNames[0]];
+                                // raw:false → 셀에 보이는 글자 그대로 읽어 긴 송장번호가 지수표기로 깨지지 않게 한다
+                                const json = XLSX.utils.sheet_to_json(sheet, { defval: '', raw: false });
+                                if (json.length === 0) throw new Error('파일에 데이터가 없습니다');
+                                const headers = Object.keys(json[0]);
+                                const kOrder = findKey(headers, 'order_number');
+                                const kCourier = findKey(headers, 'courier_name');
+                                const kTracking = findKey(headers, 'tracking_number');
+                                if (!kOrder || !kTracking) throw new Error('"주문번호"와 "송장번호" 열을 찾지 못했습니다. 첫 줄(제목줄)을 확인해주세요.');
+                                const defaultCourier = document.getElementById('bt-default-courier').value;
+                                parsedRows = json
+                                    .map((r, i) => ({
+                                        row: i + 2, // 엑셀 행 번호(1행은 제목)
+                                        order_number: String(r[kOrder] || '').trim(),
+                                        courier_name: String((kCourier && r[kCourier]) || defaultCourier || '').trim(),
+                                        tracking_number: String(r[kTracking] || '').trim()
+                                    }))
+                                    .filter(r => r.order_number || r.tracking_number); // 완전히 빈 줄은 무시
+                                if (parsedRows.length === 0) throw new Error('주문번호/송장번호가 채워진 행이 없습니다');
+                                await runBulk(true);
+                            } catch (err) {
+                                preview.innerHTML = `<div class="bt-msg error">❌ ${WithPlus.escapeHtml(err.message)}</div>`;
+                            }
+                        };
+                        reader.readAsArrayBuffer(file);
+                    });
+
+                    // dryRun=true: 검증만, false: 실제 저장. 대용량은 BT_CHUNK씩 순서대로 보내며 진행률을 보여준다.
+                    async function runBulk(dryRun) {
+                        const markShipped = document.getElementById('bt-mark-shipped').checked;
+                        const notify = document.getElementById('bt-notify').checked;
+                        const all = [];
+                        const total = parsedRows.length;
+                        for (let i = 0; i < total; i += BT_CHUNK) {
+                            preview.innerHTML = `<div class="bt-msg">⏳ ${dryRun ? '검사' : '등록'} 중... ${Math.min(i, total).toLocaleString()} / ${total.toLocaleString()}행
+                                <div class="bt-progress"><span style="width:${Math.round(i / total * 100)}%"></span></div></div>`;
+                            const { ok, json } = await authedFetch('/api/admin/orders/bulk-tracking', {
+                                method: 'POST',
+                                body: JSON.stringify({ rows: parsedRows.slice(i, i + BT_CHUNK), dry_run: dryRun, mark_shipped: markShipped, notify })
+                            });
+                            if (!ok || !json.success) {
+                                preview.innerHTML = `<div class="bt-msg error">❌ ${WithPlus.escapeHtml((json && json.message) || '처리에 실패했습니다')} (${(i + 1).toLocaleString()}행부터 중단)</div>`;
+                                if (!dryRun) loadOrders();
+                                return;
+                            }
+                            all.push(...json.results);
+                        }
+                        renderResult(all, dryRun);
+                        if (!dryRun) loadOrders();
+                    }
+
+                    function renderResult(results, dryRun) {
+                        const ok = results.filter(r => dryRun ? r.ok : r.saved);
+                        const bad = results.filter(r => dryRun ? !r.ok : !r.saved);
+                        const willShip = ok.filter(r => r.will_ship).length;
+                        const rowsHtml = [...bad, ...ok].slice(0, 300).map(r => `
+                            <tr class="${(dryRun ? r.ok : r.saved) ? '' : 'bt-bad'}">
+                                <td>${r.row}</td><td>${escapeHtmlAttr(r.order_number)}</td><td>${escapeHtmlAttr(r.courier_name)}</td>
+                                <td>${escapeHtmlAttr(r.tracking_number)}</td><td>${escapeHtmlAttr(r.message)}</td>
+                            </tr>`).join('');
+                        preview.innerHTML = `
+                            <div class="bt-summary">
+                                <span>전체 <b>${results.length.toLocaleString()}</b>행</span>
+                                <span class="good">${dryRun ? '등록 가능' : '등록 완료'} <b>${ok.length.toLocaleString()}</b></span>
+                                ${willShip ? `<span>배송중 처리 <b>${willShip.toLocaleString()}</b></span>` : ''}
+                                <span class="bad">오류 <b>${bad.length.toLocaleString()}</b></span>
+                            </div>
+                            <div class="bt-row">
+                                ${dryRun && ok.length > 0 ? `<button type="button" class="btn btn-primary" id="bt-confirm">✅ ${ok.length.toLocaleString()}건 송장 등록하기</button>` : ''}
+                                ${bad.length > 0 ? `<button type="button" class="btn btn-secondary" id="bt-download-errors">⬇️ 오류 행 엑셀로 받기</button>` : ''}
+                            </div>
+                            ${!dryRun && ok.length > 0 && document.getElementById('bt-notify').checked && willShip ? '<div class="bt-msg">📧 배송 안내 메일은 순서대로 발송됩니다(건수가 많으면 몇 분 걸릴 수 있어요).</div>' : ''}
+                            <div class="bt-table-wrap"><table>
+                                <thead><tr><th>행</th><th>주문번호</th><th>택배사</th><th>송장번호</th><th>결과</th></tr></thead>
+                                <tbody>${rowsHtml}</tbody>
+                            </table></div>
+                            ${results.length > 300 ? `<div class="bt-msg">오류 행을 먼저, 최대 300행까지만 표시합니다.</div>` : ''}`;
+                        const confirmBtn = document.getElementById('bt-confirm');
+                        if (confirmBtn) confirmBtn.addEventListener('click', () => {
+                            const shipText = document.getElementById('bt-mark-shipped').checked ? ` (배송중 처리 ${willShip}건)` : '';
+                            if (!confirm(`${ok.length.toLocaleString()}건의 송장을 등록할까요?${shipText}`)) return;
+                            const okRowNums = new Set(ok.map(r => r.row));
+                            parsedRows = parsedRows.filter(p => okRowNums.has(p.row));
+                            runBulk(false);
+                        });
+                        const errBtn = document.getElementById('bt-download-errors');
+                        if (errBtn) errBtn.addEventListener('click', () => {
+                            const ws = XLSX.utils.aoa_to_sheet([['엑셀행', '주문번호', '택배사', '송장번호', '오류내용'], ...bad.map(r => [r.row, r.order_number, r.courier_name, r.tracking_number, r.message])]);
+                            const wb = XLSX.utils.book_new();
+                            XLSX.utils.book_append_sheet(wb, ws, '오류');
+                            XLSX.writeFile(wb, `송장업로드_오류_${todayStamp()}.xlsx`);
+                        });
+                    }
+                })();
 
                 // 대시보드 통계 카드에서 이 탭으로 드릴다운할 때 호출되는 브릿지 (since=null이면 전체, ISO 문자열이면 그 시점 이후만)
                 window.__wpOrdersDrill = function (since) {

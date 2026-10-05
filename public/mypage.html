@@ -182,7 +182,7 @@
 <body>
     <header class="header">
         <div class="header-main">
-            <a href="/" class="logo">WITH+ <span>함께할수록 더해지는 가치</span></a>
+            <a href="/" class="logo" aria-label="WITH+ 홈"><img src="/images/brand/withplus-logo.webp" alt="WITH+" class="wp-logo-img" width="130" height="40"><span class="wp-logo-tagline">함께할수록 <b>더해지는 가치</b></span></a>
             <div style="display:flex; gap:20px; align-items:center;">
                 <a class="icon-button" href="/manual.html" title="사용설명서">📖</a>
                 <a class="icon-button" id="account-link" href="/login">👤</a>
@@ -520,7 +520,7 @@
 
                     // 🎫 시리얼 쿠폰 - 이벤트·SNS 등으로 배포받은 코드를 등록하면 즉시 마일리지가 지급된다
                     const serialCouponHtml = `
-                        <div class="serial-coupon-box">
+                        <div class="serial-coupon-box" id="mypage-coupon">
                             <span class="serial-coupon-title">🎫 시리얼 쿠폰 등록</span>
                             <form id="serial-coupon-form" class="serial-coupon-form">
                                 <input type="text" id="serial-coupon-input" placeholder="시리얼 코드를 입력해주세요" autocomplete="off">
@@ -589,7 +589,7 @@
                     // 배송지/찜한상품/주문내역 3개 섹션 — "기본형"은 위→아래로 순서대로,
                     // "탭형"은 탭으로 전환해서 보여준다(데이터/로직은 동일, 배치만 다름).
                     const sectionsHtml = useTabs ? `
-                        <div class="mypage-tabs">
+                        <div class="mypage-tabs" id="mypage-tabs">
                             <button type="button" class="mypage-tab-btn active" data-panel="addr">🚚 배송지</button>
                             <button type="button" class="mypage-tab-btn" data-panel="wish">🖤 찜한 상품 (${(wishlist || []).length})</button>
                             <button type="button" class="mypage-tab-btn" data-panel="orders">📋 주문내역 (${orders.length})</button>
@@ -604,7 +604,7 @@
                         <h2 class="section-title">🚚 배송지 관리</h2>
                         <div id="address-section">${addressesHtml}</div>
                         <button type="button" class="add-address-btn" id="add-address-btn">+ 새 배송지 추가</button>
-                        <h2 class="section-title">🖤 찜한 상품 (${(wishlist || []).length}개)</h2>
+                        <h2 class="section-title" id="mypage-wish">🖤 찜한 상품 (${(wishlist || []).length}개)</h2>
                         ${wishlistHtml}
                         <h2 class="section-title">📋 주문 내역 (${orders.length}건)</h2>
                         ${ordersHtml}
@@ -635,7 +635,7 @@
                         </div>
                         ${restockSubsHtml}
                         ${subscriptionsHtml}
-                        <h2 class="section-title notification-section-title">
+                        <h2 class="section-title notification-section-title" id="mypage-notifications">
                             <span>🔔 알림 ${unreadCount > 0 ? `(${unreadCount})` : ''}</span>
                             ${unreadCount > 0 ? `<button type="button" class="notification-mark-all-btn" id="notification-mark-all-btn">모두 읽음</button>` : ''}
                         </h2>
@@ -657,6 +657,21 @@
                             });
                         });
                     }
+
+                    // 하단 탭바/헤더 아이콘에서 넘어오는 바로가기(#wish 찜, #coupon 쿠폰, #notifications 알림) 처리
+                    function applyMypageHash() {
+                        const key = location.hash.replace('#', '');
+                        if (!key) return;
+                        let target = document.getElementById('mypage-' + key);
+                        if (useTabs && (key === 'wish' || key === 'orders' || key === 'addr')) {
+                            const tabBtn = area.querySelector(`.mypage-tab-btn[data-panel="${key}"]`);
+                            if (tabBtn) tabBtn.click();
+                            target = document.getElementById('mypage-tabs');
+                        }
+                        if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                    applyMypageHash();
+                    window.addEventListener('hashchange', applyMypageHash);
 
                     document.getElementById('logout-btn').addEventListener('click', async () => {
                         await WithPlus.signOut();

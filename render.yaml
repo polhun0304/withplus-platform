@@ -45,3 +45,6 @@ services:
         sync: false
       - key: ALIGO_TEST_MODE
         value: "false"
+      # 하단 탭바 "LIVE" 버튼이 이동할 LIVE+(라이브커머스) 주소. 비워두면 /live에서 준비중 안내를 보여준다.
+      - key: LIVEPLUS_URL
+        sync: false
