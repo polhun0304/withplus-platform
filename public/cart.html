@@ -126,6 +126,15 @@
 
         .footer { background: var(--text-dark); color: rgba(255,255,255,0.7); padding: 30px 20px; text-align: center; font-size: 0.85em; margin-top: 40px; }
         .footer a { color: var(--primary-color); text-decoration: none; }
+        /* 💳 결제수단 선택 + 밀어서 결제하기 */
+        .pay-methods { max-width: 480px; margin: 0 auto; display: grid; gap: 8px; }
+        .pay-method-btn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 15px 16px; border: 1.5px solid var(--border-color); border-radius: 14px; background: #fff; color: var(--text-dark); font-size: 1em; font-weight: 600; cursor: pointer; font-family: inherit; text-align: left; transition: border-color .15s, box-shadow .15s; }
+        .pay-method-btn .pm-icon { font-size: 1.2em; }
+        .pay-method-btn .pm-label { flex: 1; }
+        .pay-method-btn .pm-soon { font-size: 0.75em; color: var(--text-gray); background: rgba(0,0,0,0.06); border-radius: 999px; padding: 3px 8px; }
+        .pay-method-btn .pm-last { font-size: 0.75em; color: var(--primary-color); background: rgba(232,18,92,0.08); border-radius: 999px; padding: 3px 8px; }
+        .pay-method-btn.selected { border-color: var(--text-dark); box-shadow: 0 0 0 3px rgba(28,29,34,0.08); }
+        .pay-method-btn.selected::after { content: '✓'; font-weight: 800; color: var(--text-dark); }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -266,61 +275,62 @@
                 } catch (err) { /* 실패해도 주문완료 화면 자체에는 지장 없음 */ }
             }
 
-            // 결제(PG) 연동이 켜져있을 때 - 활성화된 결제수단(토스/카카오페이/네이버페이) 중 고를 수 있게 보여준다
+            // 결제(PG) 연동이 켜져있을 때 — 결제수단을 고르고 "밀어서 결제하기"로 바로 결제창을 연다(간편결제).
+            // 지난번에 쓴 결제수단을 기억해 미리 골라두므로, 보통은 밀기 한 번이면 결제가 시작된다.
             async function renderPaymentStep(order, mileage, pgConfigs, customerInfo) {
                 const methods = [];
-                if (pgConfigs.kakaopay && pgConfigs.kakaopay.enabled) methods.push({ key: 'kakaopay', label: '🟡 카카오페이로 결제' });
-                if (pgConfigs.naverpay && pgConfigs.naverpay.enabled) methods.push({ key: 'naverpay', label: '🟢 네이버페이로 결제' });
-                if (pgConfigs.toss && pgConfigs.toss.enabled) methods.push({ key: 'toss', label: '💳 신용카드 등(토스페이먼츠)' });
+                if (pgConfigs.kakaopay && pgConfigs.kakaopay.enabled) methods.push({ key: 'kakaopay', label: '카카오페이', icon: '🟡', color: '#FEE500', text: '#191600' });
+                if (pgConfigs.naverpay && pgConfigs.naverpay.enabled) methods.push({ key: 'naverpay', label: '네이버페이', icon: '🟢', color: '#03C75A', text: '#fff' });
+                // 토스(카드결제)는 켜져 있으면 항상 보여주고, 키가 아직 없으면 '준비 중'으로 표시한다(키 등록 시 자동 활성화)
+                if (pgConfigs.toss && pgConfigs.toss.enabled) methods.push({ key: 'toss', label: '신용·체크카드 등', icon: '💳', color: '#3182F6', text: '#fff', soon: !pgConfigs.toss.clientKey });
+
+                let selected = null;
+                try { selected = localStorage.getItem('wp_last_pay_method'); } catch (e) {}
+                const usable = methods.filter(m => !m.soon);
+                if (!usable.some(m => m.key === selected)) selected = usable.length ? usable[0].key : null;
 
                 area.innerHTML = `
                     <div class="order-complete">
                         <h2>주문이 접수되었습니다</h2>
                         <div class="order-no">주문번호: ${WithPlus.escapeHtml(order.order_number)} · 결제 금액 ${WithPlus.formatPrice(order.final_price)}</div>
-                        <p style="color:var(--text-gray); font-size:0.85em; margin:10px 0 20px;">아래에서 결제를 완료해야 주문이 최종 확정됩니다.</p>
-                        <div id="pay-method-select" style="max-width:480px; margin:0 auto; display:flex; flex-direction:column; gap:8px;">
-                            ${methods.map(m => `<button type="button" class="checkout-btn pay-method-btn" data-method="${m.key}" style="background:#fff; color:var(--text-dark); border:1px solid var(--border-color);">${m.label}</button>`).join('')}
+                        <p style="color:var(--text-gray); font-size:0.88em; margin:10px 0 18px;">결제수단을 고르고 <b>아래 버튼을 오른쪽으로 밀면</b> 바로 결제가 시작됩니다.</p>
+                        <div id="pay-method-select" class="pay-methods" role="radiogroup" aria-label="결제수단">
+                            ${methods.map(m => `
+                                <button type="button" class="pay-method-btn${m.key === selected ? ' selected' : ''}" role="radio" aria-checked="${m.key === selected}" data-method="${m.key}">
+                                    <span class="pm-icon">${m.icon}</span><span class="pm-label">${m.label}</span>${m.soon ? '<span class="pm-soon">준비 중</span>' : (m.key === selected ? '<span class="pm-last">최근 사용</span>' : '')}
+                                </button>`).join('')}
                         </div>
                         <div id="toss-payment-method" style="text-align:left; max-width:480px; margin:16px auto 0; display:none;"></div>
                         <div id="toss-agreement" style="text-align:left; max-width:480px; margin:10px auto; display:none;"></div>
-                        <button type="button" id="toss-pay-btn" class="checkout-btn" style="max-width:480px; margin:16px auto 0; display:none;">${WithPlus.formatPrice(order.final_price)} 결제하기</button>
+                        <div id="slide-pay" style="max-width:480px; margin:18px auto 0;"></div>
                         <div class="msg" id="toss-pay-msg" style="max-width:480px; margin:10px auto 0;"></div>
                     </div>`;
 
                 const msg = document.getElementById('toss-pay-msg');
                 let tossWidget = null;
+                const amountText = WithPlus.formatPrice(order.final_price);
 
                 // 카카오페이/네이버페이는 서버가 결제창 URL을 만들어주면 그쪽으로 페이지를 이동시키기만 하면 된다
                 async function payWithRedirectPg(method) {
-                    const btns = document.querySelectorAll('.pay-method-btn');
-                    btns.forEach(b => b.disabled = true);
                     msg.className = 'msg';
                     msg.textContent = '결제창을 준비하는 중입니다...';
-                    try {
-                        const token = await WithPlus.getAccessToken();
-                        const endpoint = method === 'kakaopay' ? `/api/orders/${order.id}/kakaopay/ready` : `/api/orders/${order.id}/naverpay/reserve`;
-                        const res = await fetch(endpoint, { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
-                        const json = await res.json();
-                        if (!res.ok || !json.success) throw new Error(json.message || '결제창 준비에 실패했습니다');
-                        if (method === 'kakaopay') {
-                            const isMobile = /Mobi|Android/i.test(navigator.userAgent);
-                            location.href = (isMobile && json.data.redirect_url_mobile) ? json.data.redirect_url_mobile : json.data.redirect_url;
-                        } else {
-                            // 네이버페이는 reserveId로 결제창을 연다(네이버페이 SDK/URL 규격에 맞춰 최종 연결 - 형님의 실제 파트너 승인 후 확정)
-                            location.href = `https://npay.naver.com/pay/${json.data.mode === 'live' ? '' : 'test/'}${json.data.reserve_id}`;
-                        }
-                    } catch (err) {
-                        msg.textContent = '결제 진행 중 오류가 발생했습니다: ' + (err.message || err);
-                        msg.className = 'msg error';
-                        btns.forEach(b => b.disabled = false);
+                    const token = await WithPlus.getAccessToken();
+                    const endpoint = method === 'kakaopay' ? `/api/orders/${order.id}/kakaopay/ready` : `/api/orders/${order.id}/naverpay/reserve`;
+                    const res = await fetch(endpoint, { method: 'POST', headers: { Authorization: 'Bearer ' + token } });
+                    const json = await res.json();
+                    if (!res.ok || !json.success) throw new Error(json.message || '결제창 준비에 실패했습니다');
+                    if (method === 'kakaopay') {
+                        const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+                        location.href = (isMobile && json.data.redirect_url_mobile) ? json.data.redirect_url_mobile : json.data.redirect_url;
+                    } else {
+                        location.href = `https://npay.naver.com/pay/${json.data.mode === 'live' ? '' : 'test/'}${json.data.reserve_id}`;
                     }
                 }
 
                 async function showTossWidget() {
                     document.getElementById('toss-payment-method').style.display = 'block';
                     document.getElementById('toss-agreement').style.display = 'block';
-                    document.getElementById('toss-pay-btn').style.display = 'block';
-
+                    if (tossWidget) return;
                     if (!document.getElementById('toss-sdk-script')) {
                         await new Promise((resolve, reject) => {
                             const s = document.createElement('script');
@@ -331,25 +341,16 @@
                             document.head.appendChild(s);
                         });
                     }
-
                     tossWidget = PaymentWidget(pgConfigs.toss.clientKey, customerInfo.userId || PaymentWidget.ANONYMOUS);
                     tossWidget.renderPaymentMethods('#toss-payment-method', { value: order.final_price });
                     tossWidget.renderAgreement('#toss-agreement');
                 }
 
-                document.querySelectorAll('.pay-method-btn').forEach(btn => {
-                    btn.addEventListener('click', async () => {
-                        const method = btn.dataset.method;
-                        if (method === 'toss') { await showTossWidget(); return; }
-                        await payWithRedirectPg(method);
-                    });
-                });
-
-                // 결제수단이 하나뿐이면 고르는 수고 없이 바로 그 결제수단으로 진행되도록 함
-                if (methods.length === 1 && methods[0].key === 'toss') await showTossWidget();
-
-                document.getElementById('toss-pay-btn').addEventListener('click', async () => {
-                    try {
+                async function payNow() {
+                    if (!selected) throw new Error('결제수단을 선택해주세요');
+                    try { localStorage.setItem('wp_last_pay_method', selected); } catch (e) {}
+                    if (selected === 'toss') {
+                        if (!tossWidget) { await showTossWidget(); throw new Error('카드 결제 정보를 확인한 뒤 다시 밀어주세요'); }
                         await tossWidget.requestPayment({
                             orderId: order.order_number,
                             orderName: `WITH+ 주문 (${order.order_number})`,
@@ -359,12 +360,54 @@
                             customerName: customerInfo.name || undefined,
                             customerMobilePhone: (customerInfo.phone || '').replace(/[^0-9]/g, '') || undefined
                         });
-                        // 성공 시 토스 결제창으로 페이지가 이동하므로 이 아래 코드는 보통 실행되지 않음
-                    } catch (err) {
-                        msg.textContent = '결제 진행 중 오류가 발생했습니다: ' + (err.message || err);
-                        msg.className = 'msg error';
+                        return;
+                    }
+                    await payWithRedirectPg(selected);
+                }
+
+                const methodOf = (k) => methods.find(m => m.key === k) || {};
+                const slider = WithPlus.mountSlideToPay(document.getElementById('slide-pay'), {
+                    label: `밀어서 ${amountText} 결제하기`,
+                    doneLabel: '결제창으로 이동 중...',
+                    color: methodOf(selected).color,
+                    onComplete: async () => {
+                        try { await payNow(); }
+                        catch (err) {
+                            msg.textContent = err.message || String(err);
+                            msg.className = 'msg error';
+                            throw err;
+                        }
                     }
                 });
+                if (!usable.length) {
+                    slider.setDisabled(true);
+                    msg.textContent = '사용 가능한 결제수단이 없습니다. 고객센터로 문의해주세요.';
+                    msg.className = 'msg error';
+                }
+
+                document.querySelectorAll('.pay-method-btn').forEach(btn => {
+                    btn.addEventListener('click', async () => {
+                        if (methodOf(btn.dataset.method).soon) {
+                            msg.textContent = '카드 결제는 준비 중입니다. 카카오페이·네이버페이를 이용해주세요.';
+                            msg.className = 'msg error';
+                            return;
+                        }
+                        selected = btn.dataset.method;
+                        document.querySelectorAll('.pay-method-btn').forEach(b => {
+                            const on = b === btn;
+                            b.classList.toggle('selected', on);
+                            b.setAttribute('aria-checked', String(on));
+                        });
+                        document.querySelector('#slide-pay .wp-slide').style.setProperty('--slide-color', methodOf(selected).color || '');
+                        msg.textContent = ''; msg.className = 'msg';
+                        if (selected === 'toss') await showTossWidget();
+                        else {
+                            document.getElementById('toss-payment-method').style.display = 'none';
+                            document.getElementById('toss-agreement').style.display = 'none';
+                        }
+                    });
+                });
+                if (selected === 'toss') await showTossWidget();
             }
 
             async function renderCart() {

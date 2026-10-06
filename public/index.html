@@ -1399,6 +1399,17 @@
         }
         #pub-biz-phone:not(:empty)::before, #pub-biz-email:not(:empty)::before { content: ' · '; }
         .footer-bottom .pub-mail-order:not(:empty)::before { content: ' · 통신판매업 '; }
+
+        /* 🔥 실시간 랭킹 */
+        .rank-tabs { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: -10px 0 18px; padding-bottom: 2px; }
+        .rank-tabs::-webkit-scrollbar { display: none; }
+        .rank-tab { flex-shrink: 0; border: 1px solid var(--border-color); background: #fff; color: var(--text-dark); border-radius: 999px; padding: 8px 16px; font-size: 0.9em; font-weight: 600; cursor: pointer; font-family: inherit; }
+        .rank-tab.active { background: var(--text-dark); color: #fff; border-color: var(--text-dark); }
+        .rank-updated { font-size: 0.8em; color: var(--text-gray); }
+        .wp-ranking .product-image[data-rank]::before { content: attr(data-rank); position: absolute; left: 0; top: 0; z-index: 4; min-width: 30px; height: 30px; padding: 0 8px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; color: #fff; background: rgba(28,29,34,0.88); border-radius: 10px 0 10px 0; }
+        .wp-ranking .product-image[data-rank="1"]::before, .wp-ranking .product-image[data-rank="2"]::before, .wp-ranking .product-image[data-rank="3"]::before { background: var(--primary-color); }
+        .wp-ranking .mileage-badge { top: 36px; }
+        @media (max-width: 768px) { .wp-ranking .product-grid { grid-template-rows: auto !important; } }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -1553,6 +1564,16 @@
                 </div>
             </a>
         </div>
+    </section>
+
+    <!-- 🔥 실시간 랭킹 (실시간 인기 · 구매순 · 오래 본 순 · 노출순 — 서버가 3분마다 자동 계산) -->
+    <section class="products-section wp-ranking" id="ranking-section">
+        <div class="section-header">
+            <h2 class="section-title">🔥 실시간 랭킹</h2>
+            <span class="rank-updated" id="rank-updated"></span>
+        </div>
+        <div class="rank-tabs" id="rank-tabs" role="tablist"></div>
+        <div class="product-grid" id="ranking-grid"></div>
     </section>
 
     <!-- BEST PRODUCTS -->
@@ -1999,6 +2020,34 @@
                 }, 4000);
             }
 
+            // ============================================
+            // 🔥 실시간 랭킹 — 탭을 누르면 실시간 인기/구매순/오래 본 순/노출순으로 상위 12개를 보여준다
+            // ============================================
+            async function mountRanking(products) {
+                const tabs = document.getElementById('rank-tabs');
+                const grid = document.getElementById('ranking-grid');
+                if (!tabs || !grid) return;
+                const inStock = (products || []).filter(p => Number(p.stock) > 0);
+                const scores = await WithPlus.getRankingScores();
+                const keys = Object.keys(WithPlus.RANKING_SORTS);
+                let active = 'popular';
+                try { active = localStorage.getItem('wp_rank_tab') || 'popular'; } catch (e) {}
+                if (!keys.includes(active)) active = 'popular';
+                function render() {
+                    tabs.innerHTML = keys.map(k => `<button type="button" role="tab" aria-selected="${k === active}" class="rank-tab${k === active ? ' active' : ''}" data-key="${k}">${WithPlus.RANKING_SORTS[k].emoji} ${WithPlus.RANKING_SORTS[k].label}</button>`).join('');
+                    const top = WithPlus.sortProductsBy(inStock, active, scores).slice(0, 12);
+                    grid.innerHTML = top.map((p, i) => WithPlus.renderProductCard(p).replace('<div class="product-image"', `<div class="product-image" data-rank="${i + 1}"`)).join('');
+                    WithPlus.syncWishlistHearts();
+                    tabs.querySelectorAll('.rank-tab').forEach(b => b.addEventListener('click', () => {
+                        active = b.dataset.key;
+                        try { localStorage.setItem('wp_rank_tab', active); } catch (e) {}
+                        render();
+                    }));
+                }
+                render();
+                const upd = document.getElementById('rank-updated');
+                if (upd) upd.textContent = '실시간 자동 집계';
+            }
             async function loadProductSections() {
                 const bestGrid = document.getElementById('best-products-grid');
                 const bestCount = document.getElementById('best-products-count');
@@ -2014,6 +2063,7 @@
                     }
 
                     mountDealSlider(products);
+                    mountRanking(products);
                     const byRating = [...products].sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0));
                     // 평점순 전체를 넘겨두고, 처음엔 일부만(기본 8개) 보여준 뒤 버튼으로 늘려볼 수 있게 한다
                     WithPlus.mountCountControl(bestCount, bestGrid, byRating, {

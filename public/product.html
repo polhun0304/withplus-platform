@@ -370,10 +370,16 @@
                         });
                     });
                 }
+                // 🛡️ 상품 사진 워터마크 + 복사 방지(우클릭·끌기·길게눌러 저장 차단)
+                WithPlus.protectImages(document);
+                if (mainImageEl) WithPlus.applyWatermark(mainImageEl);
+                if (thumbStrip) thumbStrip.classList.add('wp-protect');
+                wrap.querySelectorAll('.detail-section-block img').forEach(img => WithPlus.watermarkImage(img));
                 if (mainImageEl && images.length > 0) {
                     const lightboxOverlay = document.getElementById('lightbox-overlay');
                     const lightboxImg = document.getElementById('lightbox-img');
                     const lightboxClose = document.getElementById('lightbox-close');
+                    WithPlus.watermarkImage(lightboxImg);
                     mainImageEl.addEventListener('click', () => {
                         lightboxImg.src = images[activeImageIndex];
                         lightboxOverlay.classList.add('open');

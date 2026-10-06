@@ -167,13 +167,12 @@
                 const { error } = await client.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + '/' } });
                 if (error) { socialMsg.textContent = 'Google 로그인을 시작하지 못했습니다: ' + error.message; socialMsg.className = 'msg error'; }
             });
-            document.getElementById('social-kakao-btn').addEventListener('click', async () => {
-                const client = await WithPlus.getClient();
-                const { error } = await client.auth.signInWithOAuth({ provider: 'kakao', options: { redirectTo: location.origin + '/' } });
-                if (error) { socialMsg.textContent = '카카오 로그인을 시작하지 못했습니다: ' + error.message; socialMsg.className = 'msg error'; }
-            });
-            document.getElementById('social-naver-btn').addEventListener('click', () => {
-                location.href = '/api/auth/naver/login';
+            // 카카오·네이버: 키가 등록돼 '준비 완료'된 경우에만 로그인 화면으로 이동, 아니면 준비중 안내
+            ['kakao', 'naver'].forEach(provider => {
+                document.getElementById('social-' + provider + '-btn').addEventListener('click', async () => {
+                    try { await WithPlus.socialLogin(provider); }
+                    catch (err) { socialMsg.textContent = err.message; socialMsg.className = 'msg error'; }
+                });
             });
             document.getElementById('social-ekos-btn').addEventListener('click', () => {
                 location.href = '/auth/ekos/login';

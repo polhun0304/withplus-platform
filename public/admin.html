@@ -255,6 +255,16 @@
             tbody td { border: none; padding: 8px 14px; }
             tbody td::before { content: attr(data-label); display: block; font-size: 0.75em; color: var(--text-gray); margin-bottom: 2px; }
         }
+        /* 📣 푸시 알림 */
+        .push-admin { display: grid; gap: 16px; max-width: 720px; }
+        .pa-stats { background: #fff; border: 1px solid var(--border-color); border-radius: 12px; padding: 14px 16px; font-size: 0.92em; }
+        .pa-form, .pa-review { background: #fff; border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; display: grid; gap: 10px; }
+        .pa-form input[type=text], .pa-form input[type=email], .pa-form textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--border-color); border-radius: 8px; font-family: inherit; font-size: 0.92em; box-sizing: border-box; }
+        .pa-target { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 0.92em; }
+        .pa-target small { color: var(--text-gray); }
+        .pa-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+        .pa-msg { font-size: 0.88em; color: var(--text-gray); }
+        .pa-review p { margin: 0; font-size: 0.86em; color: var(--text-gray); }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -1641,6 +1651,7 @@
                     ${isAdmin ? '<button class="tab-btn" data-tab="settings">⚙️ 설정</button>' : ''}
                     ${(isAdmin || isProvider) ? '<button class="tab-btn" data-tab="wms">🏭 창고관리(WMS)</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="marketing">📢 마케팅자동화</button>' : ''}
+                    ${isAdmin ? '<button class="tab-btn" data-tab="push">📣 푸시 알림</button>' : ''}
                     ${isSuperAdmin ? '<button class="tab-btn" data-tab="audit-log">🕵️ 감사로그</button>' : ''}
                     ${isSuperAdmin ? '<button class="tab-btn" data-tab="owner-management">👑 대표자 관리</button>' : ''}
                     ${isOwner ? '<button class="tab-btn" data-tab="pricing-policies">💹 가격정책 설정</button>' : ''}
@@ -2144,6 +2155,31 @@
                     </div>` : ''}
                 </div>` : ''}
                 ${isAdmin ? `
+                <div class="tab-panel" id="tab-push">
+                    <div class="push-admin">
+                        <div class="pa-stats" id="pa-stats">구독 현황을 불러오는 중...</div>
+                        <div class="pa-form">
+                            <div class="pa-target">
+                                <label><input type="radio" name="pa-target" value="all" checked> 📢 전체 발송 <small>(알림을 허용한 모든 기기)</small></label>
+                                <label><input type="radio" name="pa-target" value="user"> 👤 개별 발송 <small>(회원 1명 — 앱 알림함에도 저장)</small></label>
+                            </div>
+                            <input type="email" id="pa-email" placeholder="받는 회원 이메일" style="display:none;">
+                            <input type="text" id="pa-title" maxlength="80" placeholder="제목 (예: 오늘만! 라이브 특가 오픈)">
+                            <textarea id="pa-message" maxlength="300" rows="3" placeholder="내용 (최대 300자)"></textarea>
+                            <input type="text" id="pa-link" placeholder="누르면 이동할 주소 (예: /category/diet, 비우면 홈)">
+                            <div class="pa-actions">
+                                <button type="button" class="btn btn-primary" id="pa-send">보내기</button>
+                                <span class="pa-msg" id="pa-msg"></span>
+                            </div>
+                        </div>
+                        <div class="pa-review">
+                            <b>⭐ 자동 리뷰 요청</b>
+                            <p>배송완료 후 3일이 지났는데 리뷰가 없는 구매 상품에 대해, 매일 저녁 8시 자동으로 "리뷰를 남겨주세요" 알림(알림함 + 푸시)을 1회 보냅니다.</p>
+                            <button type="button" class="btn btn-secondary" id="pa-review-run">지금 바로 실행</button>
+                            <span class="pa-msg" id="pa-review-msg"></span>
+                        </div>
+                    </div>
+                </div>
                 <div class="tab-panel" id="tab-marketing">
                     <div class="settings-card" style="max-width:760px;">
                         <h3>🎯 세그먼트 캠페인</h3>
@@ -6118,6 +6154,52 @@
                     }
                 })();
 
+                // ===== 📣 푸시 알림 (전체/개별 발송 + 자동 리뷰 요청) =====
+                (function initPushAdmin() {
+                    const statsEl = document.getElementById('pa-stats');
+                    async function loadStats() {
+                        const { ok, json } = await authedFetch('/api/admin/push/stats');
+                        statsEl.innerHTML = ok && json.success
+                            ? `알림을 허용한 기기 <b>${json.data.total.toLocaleString('ko-KR')}</b>대 · 그중 로그인 회원 기기 <b>${json.data.members.toLocaleString('ko-KR')}</b>대`
+                            : '구독 현황을 불러오지 못했습니다';
+                    }
+                    document.querySelector('[data-tab="push"]').addEventListener('click', loadStats);
+                    document.querySelectorAll('input[name="pa-target"]').forEach(r => r.addEventListener('change', () => {
+                        document.getElementById('pa-email').style.display = r.value === 'user' && r.checked ? '' : 'none';
+                    }));
+                    document.getElementById('pa-send').addEventListener('click', async (e) => {
+                        const btn = e.currentTarget, msg = document.getElementById('pa-msg');
+                        const target = document.querySelector('input[name="pa-target"]:checked').value;
+                        const body = {
+                            target,
+                            email: document.getElementById('pa-email').value.trim(),
+                            title: document.getElementById('pa-title').value.trim(),
+                            message: document.getElementById('pa-message').value.trim(),
+                            link: document.getElementById('pa-link').value.trim() || '/'
+                        };
+                        if (!body.title || !body.message) { msg.textContent = '제목과 내용을 입력해주세요'; return; }
+                        if (target === 'all' && !confirm('알림을 허용한 모든 기기에 푸시를 보낼까요?')) return;
+                        btn.disabled = true; msg.textContent = '보내는 중...';
+                        try {
+                            const { ok, json } = await authedFetch('/api/admin/push/send', { method: 'POST', body: JSON.stringify(body) });
+                            if (!ok || !json.success) throw new Error(json.message || '발송 실패');
+                            const d = json.data;
+                            msg.textContent = `✅ ${d.devices}대 중 ${d.sent}대 발송 완료${d.failed ? ` (실패 ${d.failed})` : ''}${d.saved_to_inbox ? ' · 회원 알림함에도 저장' : ''}`;
+                            loadStats();
+                        } catch (err) { msg.textContent = '❌ ' + err.message; }
+                        finally { btn.disabled = false; }
+                    });
+                    document.getElementById('pa-review-run').addEventListener('click', async (e) => {
+                        const btn = e.currentTarget, msg = document.getElementById('pa-review-msg');
+                        btn.disabled = true; msg.textContent = '실행 중...';
+                        try {
+                            const { ok, json } = await authedFetch('/api/admin/review-requests/run-now', { method: 'POST' });
+                            if (!ok || !json.success) throw new Error(json.message || '실행 실패');
+                            msg.textContent = `✅ 확인 ${json.data.checked}건 · 리뷰 요청 ${json.data.requested}건 발송`;
+                        } catch (err) { msg.textContent = '❌ ' + err.message; }
+                        finally { btn.disabled = false; }
+                    });
+                })();
                 // 대시보드 통계 카드에서 이 탭으로 드릴다운할 때 호출되는 브릿지 (since=null이면 전체, ISO 문자열이면 그 시점 이후만)
                 window.__wpOrdersDrill = function (since) {
                     currentStatusFilter = '';

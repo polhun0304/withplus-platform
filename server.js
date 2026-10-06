@@ -237,7 +237,31 @@ const optionalAuth = async (req, res, next) => {
 // 로그인 여부와 무관하게 호출되므로 optionalAuth를 사용하고, 비로그인 방문자는 user_id 없이(익명으로) 저장한다.
 // 프론트엔드의 트래킹 호출(특히 sendBeacon으로 보내는 view_end)이 실패해도 사용자 경험에 영향이 없어야 하므로
 // 유효성 검증만 엄격히 하고 DB 오류는 관대하게(로그만 남기고 200) 처리한다.
-const VALID_INTERACTION_EVENTS = ['view', 'view_end', 'cart_add', 'cart_remove'];
+const VALID_INTERACTION_EVENTS = ['view', 'view_end', 'cart_add', 'cart_remove', 'impression'];
+// 목록에서 상품이 화면에 실제로 보인 시간(impression) 등을 페이지를 떠날 때 한 번에 묶어 보낸다(최대 60건)
+app.post('/api/interactions/batch', optionalAuth, async (req, res) => {
+  try {
+    const events = Array.isArray(req.body && req.body.events) ? req.body.events.slice(0, 60) : [];
+    const rows = events
+      .filter(e => e && typeof e.product_id === 'string' && /^[0-9a-f-]{36}$/i.test(e.product_id) && VALID_INTERACTION_EVENTS.includes(e.event_type))
+      .map(e => ({
+        user_id: req.user ? req.user.id : null,
+        product_id: e.product_id,
+        category: e.category ? String(e.category).slice(0, 100) : null,
+        event_type: e.event_type,
+        dwell_ms: Number.isFinite(Number(e.dwell_ms)) && Number(e.dwell_ms) >= 0 ? Math.min(Math.round(Number(e.dwell_ms)), 600000) : null,
+        session_id: e.session_id ? String(e.session_id).slice(0, 200) : null
+      }));
+    if (rows.length) {
+      const { error } = await supabase.from('product_interactions_with').insert(rows);
+      if (error) console.error('행동 이벤트 묶음 기록 실패:', error.message);
+    }
+    res.status(204).end();
+  } catch (err) {
+    res.status(204).end();
+  }
+});
+
 app.post('/api/interactions', optionalAuth, async (req, res) => {
   try {
     const { product_id, event_type, dwell_ms, session_id, category } = req.body || {};
@@ -2851,10 +2875,14 @@ async function getPgConfig(providerKey) {
 app.get('/api/payments/toss/config', async (req, res) => {
   try {
     const config = await getPgConfig('toss');
-    if (!config || !config.enabled || !config.client_key) {
+    if (!config || !config.enabled) {
       return res.json({ success: true, data: { enabled: false }, timestamp: new Date().toISOString() });
     }
-    res.json({ success: true, data: { enabled: true, clientKey: config.client_key, mode: config.mode }, timestamp: new Date().toISOString() });
+    // 켜져 있지만 아직 키를 등록하지 않았으면 결제수단은 보여주되 '준비 중'으로 표시(관리자 > 설정 > 결제(PG) 연동에서 키 입력 시 자동 활성화)
+    if (!config.client_key || !config.secret_key) {
+      return res.json({ success: true, data: { enabled: true, ready: false, mode: config.mode }, timestamp: new Date().toISOString() });
+    }
+    res.json({ success: true, data: { enabled: true, ready: true, clientKey: config.client_key, mode: config.mode }, timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error fetching toss config:', err);
     res.status(500).json({ error: 'Failed to fetch payment config', message: err.message, timestamp: new Date().toISOString() });
@@ -3394,6 +3422,26 @@ app.put('/api/admin/oauth-config/naver', authenticate, requireRole(['admin', 'su
 });
 
 // 네이버 로그인 시작: 로그인 화면의 "네이버로 로그인" 버튼이 location.href로 이 URL에 직접 진입한다
+// 소셜 로그인 준비 상태 — 화면 버튼이 '준비중'인지 바로 쓸 수 있는지 판단하는 데 쓴다(키 값은 내려주지 않음)
+// 카카오·구글: Supabase 인증 설정(external providers), 네이버: oauth_configs(관리자 > 설정에서 등록)
+let socialStatusCache = { at: 0, data: null };
+app.get('/api/auth/social-status', async (req, res) => {
+  try {
+    if (!socialStatusCache.data || Date.now() - socialStatusCache.at > 5 * 60 * 1000) {
+      let external = {};
+      try {
+        const r = await fetch(`${supabaseUrl}/auth/v1/settings`, { headers: { apikey: supabaseAnonKey } });
+        if (r.ok) external = (await r.json()).external || {};
+      } catch (e) { /* 조회 실패 시 꺼진 것으로 취급 */ }
+      const naver = await getOauthConfig('naver').catch(() => null);
+      socialStatusCache = { at: Date.now(), data: { kakao: !!external.kakao, google: !!external.google, naver: !!(naver && naver.enabled && naver.client_id) } };
+    }
+    res.json({ success: true, data: socialStatusCache.data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.json({ success: true, data: { kakao: false, google: false, naver: false }, timestamp: new Date().toISOString() });
+  }
+});
+
 app.get('/api/auth/naver/login', async (req, res) => {
   try {
     const config = await getOauthConfig('naver');
@@ -14048,6 +14096,314 @@ app.get('/api/me/restock-notifications', authenticate, async (req, res) => {
 });
 
 // 내 알림함 (재입고 알림 등 - 앞으로 다른 유형의 알림도 이 테이블/API를 함께 사용할 수 있도록 범용으로 설계)
+// ============================================
+// 📣 웹 푸시 알림 (전체 발송 / 개별 발송)
+// - 브라우저(안드로이드 크롬·PC 크롬/엣지, 홈화면에 설치한 iOS 16.4+ 앱)에 실제 푸시를 보낸다.
+// - VAPID 키는 처음 필요할 때 자동 생성해 platform_settings('web_push_vapid')에 보관(환경변수 설정 불필요).
+// - 구독 정보는 push_subscriptions_with(platform으로 WITH+/LIVE+ 구분)에 저장, 만료된 구독(404/410)은 자동 삭제.
+// - 개별 발송은 앱 알림함(notifications_with)에도 함께 남겨 푸시를 못 받은 기기에서도 확인할 수 있게 한다.
+// ============================================
+const webpush = require('web-push');
+const PUSH_PLATFORM = process.env.PUSH_PLATFORM || 'withplus';
+let vapidKeysCache = null;
+async function getVapidKeys() {
+  if (vapidKeysCache) return vapidKeysCache;
+  const { data } = await supabase.from('platform_settings').select('value').eq('key', 'web_push_vapid').maybeSingle();
+  let keys = data && data.value && data.value.publicKey ? data.value : null;
+  if (!keys) {
+    const generated = webpush.generateVAPIDKeys();
+    keys = { publicKey: generated.publicKey, privateKey: generated.privateKey, subject: 'mailto:' + (process.env.PUSH_CONTACT_EMAIL || 'admin@example.com') };
+    // 동시에 두 서버가 만들 수 있으므로, 먼저 저장된 값이 있으면 그 값을 쓴다
+    await supabase.from('platform_settings').upsert({ key: 'web_push_vapid', value: keys }, { onConflict: 'key', ignoreDuplicates: true });
+    const { data: again } = await supabase.from('platform_settings').select('value').eq('key', 'web_push_vapid').maybeSingle();
+    if (again && again.value && again.value.publicKey) keys = again.value;
+  }
+  webpush.setVapidDetails(keys.subject || 'mailto:admin@example.com', keys.publicKey, keys.privateKey);
+  vapidKeysCache = keys;
+  return keys;
+}
+
+app.get('/api/push/public-key', async (req, res) => {
+  try {
+    const keys = await getVapidKeys();
+    res.json({ success: true, publicKey: keys.publicKey, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error loading VAPID key:', err);
+    res.status(500).json({ error: 'Failed to load push key', message: '푸시 설정을 불러오지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+// 구독 등록 — 로그인 상태면 회원과 연결(개별 발송 대상), 비로그인도 전체 발송은 받을 수 있다
+app.post('/api/push/subscribe', optionalAuth, async (req, res) => {
+  try {
+    const sub = req.body && req.body.subscription;
+    if (!sub || typeof sub.endpoint !== 'string' || !/^https:\/\//.test(sub.endpoint) || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) {
+      return res.status(400).json({ error: 'Bad Request', message: '구독 정보가 올바르지 않습니다', timestamp: new Date().toISOString() });
+    }
+    const row = {
+      endpoint: sub.endpoint.slice(0, 1000),
+      p256dh: String(sub.keys.p256dh).slice(0, 200),
+      auth: String(sub.keys.auth).slice(0, 100),
+      platform: PUSH_PLATFORM,
+      user_agent: String(req.headers['user-agent'] || '').slice(0, 300),
+      last_seen_at: new Date().toISOString()
+    };
+    if (req.user && req.user.id) row.user_id = req.user.id;
+    const { error } = await supabase.from('push_subscriptions_with').upsert(row, { onConflict: 'endpoint' });
+    if (error) throw error;
+    res.json({ success: true, message: '푸시 알림을 받도록 설정했어요', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error saving push subscription:', err);
+    res.status(500).json({ error: 'Failed to subscribe', message: '푸시 알림 설정에 실패했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/push/unsubscribe', async (req, res) => {
+  try {
+    const endpoint = req.body && req.body.endpoint;
+    if (typeof endpoint === 'string' && endpoint) await supabase.from('push_subscriptions_with').delete().eq('endpoint', endpoint);
+    res.json({ success: true, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to unsubscribe', message: '해제에 실패했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+// 실제 발송 — 20건씩 병렬, 만료된 구독은 정리
+async function sendPushToSubscriptions(subs, payload) {
+  await getVapidKeys();
+  const body = JSON.stringify(payload);
+  let sent = 0, failed = 0;
+  const expired = [];
+  for (let i = 0; i < subs.length; i += 20) {
+    await Promise.all(subs.slice(i, i + 20).map(async s => {
+      try {
+        await webpush.sendNotification({ endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } }, body, { TTL: 60 * 60 * 24 });
+        sent++;
+      } catch (e) {
+        failed++;
+        if (e && (e.statusCode === 404 || e.statusCode === 410)) expired.push(s.endpoint);
+      }
+    }));
+  }
+  if (expired.length) {
+    for (let i = 0; i < expired.length; i += 100) {
+      await supabase.from('push_subscriptions_with').delete().in('endpoint', expired.slice(i, i + 100));
+    }
+  }
+  return { sent, failed, expired: expired.length };
+}
+
+// 관리자: 구독 현황
+app.get('/api/admin/push/stats', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { count: total } = await supabase.from('push_subscriptions_with').select('id', { count: 'exact', head: true }).eq('platform', PUSH_PLATFORM);
+    const { count: members } = await supabase.from('push_subscriptions_with').select('id', { count: 'exact', head: true }).eq('platform', PUSH_PLATFORM).not('user_id', 'is', null);
+    res.json({ success: true, data: { total: total || 0, members: members || 0 }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load push stats', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 전체 발송(target='all') / 개별 발송(target='user', email)
+app.post('/api/admin/push/send', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { target, email, title, message, link } = req.body || {};
+    const t = String(title || '').trim().slice(0, 80);
+    const m = String(message || '').trim().slice(0, 300);
+    const url = (typeof link === 'string' && /^\/[^/]/.test(link.trim())) ? link.trim().slice(0, 300) : '/';
+    if (!t || !m) return res.status(400).json({ error: 'Bad Request', message: '제목과 내용을 입력해주세요', timestamp: new Date().toISOString() });
+
+    let subs = [];
+    let userId = null;
+    if (target === 'user') {
+      const e = String(email || '').trim().toLowerCase();
+      if (!e) return res.status(400).json({ error: 'Bad Request', message: '받는 회원의 이메일을 입력해주세요', timestamp: new Date().toISOString() });
+      const { data: profile } = await supabase.from('profiles').select('id, email').ilike('email', e).maybeSingle();
+      if (!profile) return res.status(404).json({ error: 'Not Found', message: '해당 이메일의 회원이 없습니다', timestamp: new Date().toISOString() });
+      userId = profile.id;
+      const { data } = await supabase.from('push_subscriptions_with').select('endpoint, p256dh, auth').eq('platform', PUSH_PLATFORM).eq('user_id', userId);
+      subs = data || [];
+      // 앱 알림함에도 남긴다(푸시를 허용하지 않은 회원도 마이페이지에서 확인)
+      await supabase.from('notifications_with').insert([{ user_id: userId, type: 'admin_push', title: t, message: m, link: url, is_read: false }]);
+    } else if (target === 'all') {
+      for (let from = 0; ; from += 1000) {
+        const { data, error } = await supabase.from('push_subscriptions_with').select('endpoint, p256dh, auth').eq('platform', PUSH_PLATFORM).range(from, from + 999);
+        if (error) throw error;
+        subs.push(...(data || []));
+        if (!data || data.length < 1000) break;
+      }
+    } else {
+      return res.status(400).json({ error: 'Bad Request', message: "target은 'all' 또는 'user'여야 합니다", timestamp: new Date().toISOString() });
+    }
+
+    const result = await sendPushToSubscriptions(subs, { title: t, body: m, url, tag: 'admin-' + Date.now() });
+    res.json({ success: true, data: { target, devices: subs.length, ...result, saved_to_inbox: !!userId }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error sending push:', err);
+    res.status(500).json({ error: 'Failed to send push', message: (process.env.NODE_ENV === 'production' ? '푸시 발송에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 📈 자동 랭킹 점수 — 실시간 인기 / 구매순 / 오래 본(체류시간) / 노출시간
+// 실제 행동 데이터(product_interactions_with)와 주문(orders_with)으로 3분마다 다시 계산한다.
+// - popular  : 최근 24시간 조회 + 장바구니(×3) + 구매수량(×8) + 최근 7일 조회(×0.1)
+// - sales    : 최근 30일 구매 수량(취소·환불·미결제 제외)
+// - dwell    : 최근 7일 상세페이지 평균 체류시간(초)
+// - exposure : 최근 7일 목록에서 화면에 실제로 보인 시간 합계(초)
+// ============================================
+const RANKING_TTL_MS = 3 * 60 * 1000;
+let rankingCache = { at: 0, data: null, pending: null };
+async function fetchAllRows(build, max) {
+  const rows = [];
+  for (let from = 0; from < max; from += 1000) {
+    const { data, error } = await build().range(from, from + 999);
+    if (error) throw error;
+    rows.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return rows;
+}
+async function computeRankingScores() {
+  const now = Date.now();
+  const since24h = now - 24 * 3600 * 1000;
+  const since7d = new Date(now - 7 * 24 * 3600 * 1000).toISOString();
+  const since30d = new Date(now - 30 * 24 * 3600 * 1000).toISOString();
+  const s = {};
+  const get = (id) => (s[id] = s[id] || { views24h: 0, views7d: 0, cart24h: 0, sales24h: 0, sales30d: 0, dwellSum: 0, dwellN: 0, exposureMs: 0 });
+
+  const events = await fetchAllRows(() => supabase.from('product_interactions_with')
+    .select('product_id, event_type, dwell_ms, created_at')
+    .gte('created_at', since7d)
+    .in('event_type', ['view', 'view_end', 'cart_add', 'impression'])
+    .order('created_at', { ascending: false }), 30000);
+  events.forEach(e => {
+    if (!e.product_id) return;
+    const x = get(e.product_id);
+    const t = new Date(e.created_at).getTime();
+    if (e.event_type === 'view') { x.views7d++; if (t >= since24h) x.views24h++; }
+    else if (e.event_type === 'cart_add') { if (t >= since24h) x.cart24h++; }
+    else if (e.event_type === 'view_end') { const d = Number(e.dwell_ms) || 0; if (d > 0 && d < 30 * 60 * 1000) { x.dwellSum += d; x.dwellN++; } }
+    else if (e.event_type === 'impression') { const d = Number(e.dwell_ms) || 0; if (d > 0 && d < 10 * 60 * 1000) x.exposureMs += d; }
+  });
+
+  const orders = await fetchAllRows(() => supabase.from('orders_with')
+    .select('items, status, created_at')
+    .gte('created_at', since30d)
+    .not('status', 'in', '(cancelled,refunded,pending)')
+    .order('created_at', { ascending: false }), 20000);
+  orders.forEach(o => {
+    const t = new Date(o.created_at).getTime();
+    (Array.isArray(o.items) ? o.items : []).forEach(it => {
+      if (!it || !it.product_id) return;
+      const q = Number(it.quantity) || 1;
+      const x = get(it.product_id);
+      x.sales30d += q;
+      if (t >= since24h) x.sales24h += q;
+    });
+  });
+
+  const scores = {};
+  Object.entries(s).forEach(([id, x]) => {
+    scores[id] = {
+      popular: Math.round((x.views24h + x.cart24h * 3 + x.sales24h * 8 + x.views7d * 0.1) * 10) / 10,
+      sales: x.sales30d,
+      dwell: x.dwellN ? Math.round(x.dwellSum / x.dwellN / 100) / 10 : 0,
+      exposure: Math.round(x.exposureMs / 100) / 10,
+      views24h: x.views24h
+    };
+  });
+  return { updated_at: new Date().toISOString(), scores };
+}
+async function getRankingScores() {
+  if (rankingCache.data && Date.now() - rankingCache.at < RANKING_TTL_MS) return rankingCache.data;
+  if (!rankingCache.pending) {
+    rankingCache.pending = computeRankingScores()
+      .then(d => { rankingCache = { at: Date.now(), data: d, pending: null }; return d; })
+      .catch(e => { rankingCache.pending = null; throw e; });
+  }
+  return rankingCache.pending;
+}
+app.get('/api/ranking/scores', async (req, res) => {
+  try {
+    const data = await getRankingScores();
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error('Error computing ranking scores:', err);
+    res.status(500).json({ error: 'Failed to compute ranking', message: '랭킹을 불러오지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// ⭐ 자동 리뷰 요청 — 배송완료 후 3일이 지났는데 아직 리뷰가 없는 상품에 대해 한 번만
+// "리뷰를 남겨주세요" 알림(앱 알림함 + 푸시)을 자동으로 보낸다. 리뷰 자체를 지어내지 않는다(실제 구매자에게 요청만).
+// 매일 20:00(KST) 실행, 관리자 화면에서 즉시 실행도 가능.
+// ============================================
+async function runReviewRequestScan() {
+  const now = Date.now();
+  const from = new Date(now - 30 * 24 * 3600 * 1000).toISOString();
+  const to = new Date(now - 3 * 24 * 3600 * 1000).toISOString();
+  const { data: orders, error } = await supabase.from('orders_with')
+    .select('id, user_id, items, created_at')
+    .eq('status', 'delivered')
+    .gte('created_at', from)
+    .lte('created_at', to)
+    .limit(1000);
+  if (error) throw error;
+  const pairs = [];
+  (orders || []).forEach(o => {
+    if (!o.user_id) return;
+    (Array.isArray(o.items) ? o.items : []).forEach(it => {
+      if (it && it.product_id) pairs.push({ user_id: o.user_id, product_id: it.product_id, name: it.name || '구매하신 상품' });
+    });
+  });
+  if (pairs.length === 0) return { checked: 0, requested: 0 };
+
+  const userIds = [...new Set(pairs.map(p => p.user_id))];
+  const reviewed = new Set();
+  const asked = new Set();
+  for (let i = 0; i < userIds.length; i += 100) {
+    const chunk = userIds.slice(i, i + 100);
+    const { data: reviews } = await supabase.from('product_reviews').select('user_id, product_id').in('user_id', chunk);
+    (reviews || []).forEach(r => reviewed.add(r.user_id + ':' + r.product_id));
+    const { data: notes } = await supabase.from('notifications_with').select('user_id, link').eq('type', 'review_request').in('user_id', chunk);
+    (notes || []).forEach(n => asked.add(n.user_id + ':' + n.link));
+  }
+
+  const seen = new Set();
+  const toSend = pairs.filter(p => {
+    const link = `/product/${p.product_id}#reviews`;
+    const key = p.user_id + ':' + p.product_id;
+    if (seen.has(key) || reviewed.has(key) || asked.has(p.user_id + ':' + link)) return false;
+    seen.add(key);
+    return true;
+  });
+  for (const p of toSend) {
+    const link = `/product/${p.product_id}#reviews`;
+    const title = '구매하신 상품은 어떠셨나요? ⭐';
+    const message = `${String(p.name).slice(0, 40)} — 솔직한 리뷰를 남겨주시면 다른 회원님들께 큰 도움이 돼요.`;
+    await supabase.from('notifications_with').insert([{ user_id: p.user_id, type: 'review_request', title, message, link, is_read: false }]);
+    try {
+      const { data: subs } = await supabase.from('push_subscriptions_with').select('endpoint, p256dh, auth').eq('platform', PUSH_PLATFORM).eq('user_id', p.user_id);
+      if (subs && subs.length) await sendPushToSubscriptions(subs, { title, body: message, url: link, tag: 'review-' + p.product_id });
+    } catch (e) { /* 푸시 실패는 알림함 기록에 영향 없음 */ }
+  }
+  return { checked: pairs.length, requested: toSend.length };
+}
+cron.schedule('0 11 * * *', () => {
+  runReviewRequestScan().then(r => console.log('리뷰 요청 알림:', r)).catch(e => console.error('리뷰 요청 스캔 실패:', e));
+});
+app.post('/api/admin/review-requests/run-now', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const result = await runReviewRequestScan();
+    res.json({ success: true, data: result, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error running review request scan:', err);
+    res.status(500).json({ error: 'Failed to run', message: '리뷰 요청 실행에 실패했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
 app.get('/api/me/notifications', authenticate, async (req, res) => {
   try {
     const { data, error } = await supabase

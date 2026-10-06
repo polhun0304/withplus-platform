@@ -139,12 +139,8 @@
                 document.getElementById('other-login-link').setAttribute('href', '/login?community=' + encodeURIComponent(communitySlug));
             }
 
-            // 카카오/네이버 로그인: 실제 앱 등록(API 키) 전이므로, 준비중임을 명확히 안내하고 실제 인증을 흉내내지 않는다
-            function showSoon() {
-                document.getElementById('social-note').classList.add('show');
-            }
-            document.getElementById('kakao-btn').addEventListener('click', showSoon);
-            document.getElementById('naver-btn').addEventListener('click', showSoon);
+            // 카카오/네이버 로그인: 관리자가 키를 등록해 '준비 완료'된 방식은 바로 로그인, 아니면 준비중 안내
+            WithPlus.bindSocialButtons({ kakao: document.getElementById('kakao-btn'), naver: document.getElementById('naver-btn') }, document.getElementById('social-note'));
 
             // 이미 로그인되어 있으면 바로 이동
             const session = await WithPlus.getSession();
