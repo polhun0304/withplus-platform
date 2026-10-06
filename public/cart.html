@@ -131,6 +131,7 @@
         .pay-method-btn { display: flex; align-items: center; gap: 10px; width: 100%; padding: 15px 16px; border: 1.5px solid var(--border-color); border-radius: 14px; background: #fff; color: var(--text-dark); font-size: 1em; font-weight: 600; cursor: pointer; font-family: inherit; text-align: left; transition: border-color .15s, box-shadow .15s; }
         .pay-method-btn .pm-icon { font-size: 1.2em; }
         .pay-method-btn .pm-label { flex: 1; }
+        .pay-method-btn .pm-soon { font-size: 0.75em; color: var(--text-gray); background: rgba(0,0,0,0.06); border-radius: 999px; padding: 3px 8px; }
         .pay-method-btn .pm-last { font-size: 0.75em; color: var(--primary-color); background: rgba(232,18,92,0.08); border-radius: 999px; padding: 3px 8px; }
         .pay-method-btn.selected { border-color: var(--text-dark); box-shadow: 0 0 0 3px rgba(28,29,34,0.08); }
         .pay-method-btn.selected::after { content: '✓'; font-weight: 800; color: var(--text-dark); }
@@ -280,12 +281,13 @@
                 const methods = [];
                 if (pgConfigs.kakaopay && pgConfigs.kakaopay.enabled) methods.push({ key: 'kakaopay', label: '카카오페이', icon: '🟡', color: '#FEE500', text: '#191600' });
                 if (pgConfigs.naverpay && pgConfigs.naverpay.enabled) methods.push({ key: 'naverpay', label: '네이버페이', icon: '🟢', color: '#03C75A', text: '#fff' });
-                // 토스는 키가 실제로 등록돼 있을 때만 보여준다(켜져만 있고 키가 없으면 결제창이 열리지 않음)
-                if (pgConfigs.toss && pgConfigs.toss.enabled && pgConfigs.toss.clientKey) methods.push({ key: 'toss', label: '신용·체크카드 등', icon: '💳', color: '#3182F6', text: '#fff' });
+                // 토스(카드결제)는 켜져 있으면 항상 보여주고, 키가 아직 없으면 '준비 중'으로 표시한다(키 등록 시 자동 활성화)
+                if (pgConfigs.toss && pgConfigs.toss.enabled) methods.push({ key: 'toss', label: '신용·체크카드 등', icon: '💳', color: '#3182F6', text: '#fff', soon: !pgConfigs.toss.clientKey });
 
                 let selected = null;
                 try { selected = localStorage.getItem('wp_last_pay_method'); } catch (e) {}
-                if (!methods.some(m => m.key === selected)) selected = methods.length ? methods[0].key : null;
+                const usable = methods.filter(m => !m.soon);
+                if (!usable.some(m => m.key === selected)) selected = usable.length ? usable[0].key : null;
 
                 area.innerHTML = `
                     <div class="order-complete">
@@ -295,7 +297,7 @@
                         <div id="pay-method-select" class="pay-methods" role="radiogroup" aria-label="결제수단">
                             ${methods.map(m => `
                                 <button type="button" class="pay-method-btn${m.key === selected ? ' selected' : ''}" role="radio" aria-checked="${m.key === selected}" data-method="${m.key}">
-                                    <span class="pm-icon">${m.icon}</span><span class="pm-label">${m.label}</span>${m.key === selected ? '<span class="pm-last">최근 사용</span>' : ''}
+                                    <span class="pm-icon">${m.icon}</span><span class="pm-label">${m.label}</span>${m.soon ? '<span class="pm-soon">준비 중</span>' : (m.key === selected ? '<span class="pm-last">최근 사용</span>' : '')}
                                 </button>`).join('')}
                         </div>
                         <div id="toss-payment-method" style="text-align:left; max-width:480px; margin:16px auto 0; display:none;"></div>
@@ -377,7 +379,7 @@
                         }
                     }
                 });
-                if (!methods.length) {
+                if (!usable.length) {
                     slider.setDisabled(true);
                     msg.textContent = '사용 가능한 결제수단이 없습니다. 고객센터로 문의해주세요.';
                     msg.className = 'msg error';
@@ -385,6 +387,11 @@
 
                 document.querySelectorAll('.pay-method-btn').forEach(btn => {
                     btn.addEventListener('click', async () => {
+                        if (methodOf(btn.dataset.method).soon) {
+                            msg.textContent = '카드 결제는 준비 중입니다. 카카오페이·네이버페이를 이용해주세요.';
+                            msg.className = 'msg error';
+                            return;
+                        }
                         selected = btn.dataset.method;
                         document.querySelectorAll('.pay-method-btn').forEach(b => {
                             const on = b === btn;

@@ -2875,10 +2875,14 @@ async function getPgConfig(providerKey) {
 app.get('/api/payments/toss/config', async (req, res) => {
   try {
     const config = await getPgConfig('toss');
-    if (!config || !config.enabled || !config.client_key) {
+    if (!config || !config.enabled) {
       return res.json({ success: true, data: { enabled: false }, timestamp: new Date().toISOString() });
     }
-    res.json({ success: true, data: { enabled: true, clientKey: config.client_key, mode: config.mode }, timestamp: new Date().toISOString() });
+    // 켜져 있지만 아직 키를 등록하지 않았으면 결제수단은 보여주되 '준비 중'으로 표시(관리자 > 설정 > 결제(PG) 연동에서 키 입력 시 자동 활성화)
+    if (!config.client_key || !config.secret_key) {
+      return res.json({ success: true, data: { enabled: true, ready: false, mode: config.mode }, timestamp: new Date().toISOString() });
+    }
+    res.json({ success: true, data: { enabled: true, ready: true, clientKey: config.client_key, mode: config.mode }, timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error fetching toss config:', err);
     res.status(500).json({ error: 'Failed to fetch payment config', message: err.message, timestamp: new Date().toISOString() });
