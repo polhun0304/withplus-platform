@@ -3,7 +3,7 @@
 // 정적 리소스(이미지/CSS/JS/아이콘)는 캐시 우선으로 빠르게, HTML 페이지는 네트워크 우선(항상 최신 시도) +
 // 실패 시 캐시 → 그마저 없으면 오프라인 안내 페이지로 대체한다.
 
-const CACHE_VERSION = 'v5'; // 스크립트/스타일 네트워크 우선으로 변경
+const CACHE_VERSION = 'v6'; // 푸시 알림·워터마크·랭킹·밀어서결제 추가
 const CACHE_NAME = `withplus-${CACHE_VERSION}`;
 const OFFLINE_URL = '/offline.html';
 
@@ -96,4 +96,31 @@ self.addEventListener('fetch', (event) => {
       })
     );
   }
+});
+
+// 📣 푸시 알림 수신 — 서버가 보낸 제목/내용을 알림으로 띄우고, 누르면 해당 화면을 연다
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (e) { data = { title: 'WITH+', body: event.data ? event.data.text() : '' }; }
+  const title = data.title || 'WITH+';
+  event.waitUntil(self.registration.showNotification(title, {
+    body: data.body || '',
+    icon: '/images/icons/icon-192.png',
+    badge: '/images/icons/icon-192.png',
+    tag: data.tag || undefined,
+    data: { url: data.url || '/' }
+  }));
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      for (const c of list) {
+        if (c.url && new URL(c.url).origin === self.location.origin && 'focus' in c) { c.navigate(target); return c.focus(); }
+      }
+      return self.clients.openWindow(target);
+    })
+  );
 });

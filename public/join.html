@@ -29,6 +29,15 @@
         .links-row a { color: var(--primary-color); text-decoration: none; font-weight: 600; }
         .back-home { text-align: center; margin-top: 16px; }
         .back-home a { color: var(--text-gray); text-decoration: none; font-size: 0.85em; }
+        .quick-join { margin: 6px 0 18px; display: grid; gap: 8px; }
+        .qj-btn { width: 100%; padding: 13px; border: none; border-radius: 10px; font-weight: 700; font-size: 0.98em; cursor: pointer; font-family: inherit; display: flex; align-items: center; justify-content: center; gap: 8px; }
+        .qj-btn.kakao { background: #FEE500; color: #191919; }
+        .qj-btn.naver { background: #03C75A; color: #fff; }
+        .qj-btn.is-soon { opacity: .55; }
+        .qj-btn .soon-badge { font-size: 0.72em; background: rgba(0,0,0,.12); border-radius: 999px; padding: 2px 8px; }
+        .qj-msg { display: none; font-size: 0.85em; color: #C62828; text-align: center; }
+        .qj-or { display: flex; align-items: center; gap: 10px; color: var(--text-gray); font-size: 0.82em; margin-top: 6px; }
+        .qj-or::before, .qj-or::after { content: ''; flex: 1; height: 1px; background: var(--border-color); }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -39,6 +48,12 @@
         <div class="auth-box">
             <h1>회원가입</h1>
             <div class="sub">WITH+ 회원이 되고 마일리지 혜택을 받아보세요</div>
+            <div class="quick-join">
+                <button type="button" class="qj-btn kakao" id="join-kakao-btn">💬 카카오로 3초 가입<span class="soon-badge">준비중</span></button>
+                <button type="button" class="qj-btn naver" id="join-naver-btn">N 네이버로 3초 가입<span class="soon-badge">준비중</span></button>
+                <div class="qj-msg" id="join-social-msg"></div>
+                <div class="qj-or"><span>또는 이메일로 가입</span></div>
+            </div>
             <form id="join-form">
                 <div class="field">
                     <label for="email">이메일</label>
@@ -173,6 +188,7 @@
                 }
             });
         })();
+        WithPlus.bindSocialButtons({ kakao: document.getElementById('join-kakao-btn'), naver: document.getElementById('join-naver-btn') }, document.getElementById('join-social-msg'));
     </script>
 </body>
 </html>

@@ -52,3 +52,7 @@ strong, b { font-weight: 700; }
     html { font-size: 16.5px; }
     body { line-height: 1.6; }
 }
+
+/* 다크모드 브라우저에서 배경이 검게 보이며 글자가 묻히던 문제 방지 — 이 사이트는 밝은 화면 기준으로 디자인됨 */
+:root { color-scheme: light; }
+html { background-color: #ffffff; }

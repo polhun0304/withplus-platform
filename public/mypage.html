@@ -189,6 +189,11 @@
         .mypage-tabs { display: flex; gap: 6px; border-bottom: 2px solid var(--border-color); margin-bottom: 20px; }
         .mypage-tab-btn { background: none; border: none; padding: 12px 18px; font-size: 0.98em; font-weight: 600; color: var(--text-gray); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; }
         .mypage-tab-btn.active { color: var(--primary-color); border-bottom-color: var(--primary-color); }
+        .push-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid var(--border-color); border-radius: 14px; padding: 14px 16px; margin: -12px 0 28px; background: #fff; }
+        .push-card p { margin: 2px 0 0; font-size: 0.85em; color: var(--text-gray); }
+        .push-toggle { flex-shrink: 0; border: 1.5px solid var(--text-dark); background: #fff; color: var(--text-dark); border-radius: 999px; padding: 8px 18px; font-weight: 700; cursor: pointer; font-family: inherit; }
+        .push-toggle.on { background: var(--text-dark); color: #fff; }
+        .push-toggle:disabled { opacity: .5; cursor: default; }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -645,6 +650,10 @@
                             <a href="/support"><span class="ico">🎧</span>고객센터</a>
                             <a href="#withdraw"><span class="ico">🚪</span>회원탈퇴</a>
                         </nav>
+                        <div class="push-card" id="push-card">
+                            <div><b>🔔 앱 푸시 알림</b><p id="push-desc">주문·배송, 특가, 리뷰 요청 소식을 휴대폰 알림으로 받아보세요.</p></div>
+                            <button type="button" class="push-toggle" id="push-toggle" aria-pressed="false">받기</button>
+                        </div>
                         ${gradeHtml}
                         <div class="mileage-summary">
                             <div class="mileage-card highlight"><div class="label">💰 사용 가능한 마일리지</div><div class="value">${mileageBalance.toLocaleString('ko-KR')}원</div></div>
@@ -707,6 +716,28 @@
                         if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
                     }
                     applyMypageHash();
+
+                    // 🔔 푸시 알림 받기/끄기
+                    (async function initPushCard() {
+                        const btn = document.getElementById('push-toggle');
+                        const desc = document.getElementById('push-desc');
+                        if (!btn) return;
+                        const paint = (state) => {
+                            btn.dataset.state = state;
+                            btn.setAttribute('aria-pressed', String(state === 'on'));
+                            btn.textContent = state === 'on' ? '받는 중 ✓' : '받기';
+                            btn.classList.toggle('on', state === 'on');
+                            if (state === 'unsupported') { btn.disabled = true; btn.textContent = '미지원'; desc.textContent = '이 브라우저는 푸시 알림을 지원하지 않아요. (아이폰은 사파리에서 "홈 화면에 추가" 후 앱으로 열면 받을 수 있어요)'; }
+                            if (state === 'denied') { desc.textContent = '알림이 차단되어 있어요. 브라우저/휴대폰 설정에서 이 사이트 알림을 허용해주세요.'; }
+                        };
+                        paint(await WithPlus.push.getState());
+                        btn.addEventListener('click', async () => {
+                            btn.disabled = true;
+                            try { paint(btn.dataset.state === 'on' ? await WithPlus.push.disable() : await WithPlus.push.enable()); }
+                            catch (err) { desc.textContent = err.message; }
+                            finally { if (btn.dataset.state !== 'unsupported') btn.disabled = false; }
+                        });
+                    })();
                     window.addEventListener('hashchange', applyMypageHash);
 
                     document.getElementById('logout-btn').addEventListener('click', async () => {

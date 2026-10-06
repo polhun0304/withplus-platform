@@ -1343,6 +1343,318 @@
     refreshNotificationBadge();
   }
 
+  // ============================================
+  // 🛡️ 상품 사진 워터마크 + 복사 방지 (상세보기·확대보기)
+  // 사진 위에 브랜드 워터마크를 겹쳐 보여주고, 우클릭 저장·끌어서 가져가기·길게 눌러 저장을 막는다.
+  // (화면 캡처까지 막을 수는 없지만, 캡처해도 워터마크가 함께 찍혀 다른 업체가 그대로 쓰기 어렵다)
+  // ============================================
+  const BRAND_WM_TEXT = 'WITH+';
+  let wmStyleInjected = false;
+  function ensureWatermarkStyle() {
+    if (wmStyleInjected) return;
+    wmStyleInjected = true;
+    const tile = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="140"><g transform="rotate(-24 110 70)">` +
+      `<text x="110" y="78" text-anchor="middle" font-family="Pretendard Variable,Arial,sans-serif" font-size="26" font-weight="800" ` +
+      `fill="#ffffff" fill-opacity="0.32" stroke="#000000" stroke-opacity="0.10" stroke-width="1">${BRAND_WM_TEXT}</text></g></svg>`);
+    const style = document.createElement('style');
+    style.id = 'wp-wm-style';
+    style.textContent = `
+      .wp-wm-host { position: relative; }
+      .wp-wm { position: absolute; inset: 0; pointer-events: none; z-index: 3; border-radius: inherit; overflow: hidden;
+               background-image: url("${tile}"); background-repeat: repeat; background-size: 220px 140px; }
+      .wp-wm::after { content: ''; position: absolute; right: 12px; bottom: 10px; width: 92px; height: 30px; opacity: .55;
+                      background: url("${BRAND_LOGO_SRC}") right bottom / contain no-repeat; filter: drop-shadow(0 1px 2px rgba(0,0,0,.35)); }
+      .wp-protect, .wp-protect img { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-user-drag: none; }
+      .lightbox-overlay .wp-wm-frame { position: relative; display: inline-block; max-width: 92vw; max-height: 88vh; }
+      .lightbox-overlay .wp-wm-frame img { display: block; max-width: 92vw; max-height: 88vh; }
+    `;
+    document.head.appendChild(style);
+  }
+  function applyWatermark(el) {
+    if (!el || el.querySelector(':scope > .wp-wm')) return;
+    ensureWatermarkStyle();
+    el.classList.add('wp-wm-host', 'wp-protect');
+    const wm = document.createElement('div');
+    wm.className = 'wp-wm';
+    wm.setAttribute('aria-hidden', 'true');
+    el.appendChild(wm);
+  }
+  // <img>는 겹칠 수 없으므로 감싸는 틀을 만들어 그 위에 워터마크를 얹는다
+  function watermarkImage(img) {
+    if (!img || img.dataset.wpWm) return;
+    img.dataset.wpWm = '1';
+    ensureWatermarkStyle();
+    const frame = document.createElement('span');
+    frame.className = 'wp-wm-frame wp-wm-host wp-protect';
+    frame.style.display = getComputedStyle(img).display === 'block' ? 'block' : 'inline-block';
+    img.parentNode.insertBefore(frame, img);
+    frame.appendChild(img);
+    const wm = document.createElement('div');
+    wm.className = 'wp-wm';
+    wm.setAttribute('aria-hidden', 'true');
+    frame.appendChild(wm);
+  }
+  function protectImages(root) {
+    const scope = root || document;
+    const block = (e) => {
+      const t = e.target;
+      if (t && t.closest && t.closest('.wp-protect')) e.preventDefault();
+    };
+    if (!scope.__wpProtect) {
+      scope.__wpProtect = true;
+      scope.addEventListener('contextmenu', block);
+      scope.addEventListener('dragstart', block);
+    }
+  }
+
+  // ============================================
+  // 👀 노출시간 추적 — 목록에서 상품 카드가 화면에 절반 이상 보인 시간을 모아 페이지를 떠날 때 한 번에 보낸다
+  // (랭킹 '많이 노출된 상품'과 추천에 쓰임. 개인정보는 보내지 않는다)
+  // ============================================
+  const impressionState = { started: false, visibleSince: new Map(), totals: new Map(), observer: null };
+  function getTrackingSessionId() {
+    try {
+      let id = sessionStorage.getItem('wp_track_sid');
+      if (!id) { id = Math.random().toString(36).slice(2) + Date.now().toString(36); sessionStorage.setItem('wp_track_sid', id); }
+      return id;
+    } catch (e) { return null; }
+  }
+  function flushImpressions() {
+    const now = Date.now();
+    impressionState.visibleSince.forEach((since, id) => {
+      impressionState.totals.set(id, (impressionState.totals.get(id) || 0) + (now - since));
+      impressionState.visibleSince.set(id, now);
+    });
+    const events = [];
+    impressionState.totals.forEach((ms, id) => { if (ms >= 800) events.push({ product_id: id, event_type: 'impression', dwell_ms: Math.round(ms), session_id: getTrackingSessionId() }); });
+    impressionState.totals.clear();
+    if (!events.length) return;
+    for (let i = 0; i < events.length; i += 60) {
+      const body = JSON.stringify({ events: events.slice(i, i + 60) });
+      try {
+        if (navigator.sendBeacon) navigator.sendBeacon(API_BASE + '/api/interactions/batch', new Blob([body], { type: 'application/json' }));
+        else fetch(API_BASE + '/api/interactions/batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body, keepalive: true });
+      } catch (e) { /* 추적 실패는 무시 */ }
+    }
+  }
+  function observeCards(root) {
+    if (!impressionState.observer) return;
+    (root || document).querySelectorAll('.product-card[data-product-id]:not([data-wp-imp])').forEach(card => {
+      card.dataset.wpImp = '1';
+      impressionState.observer.observe(card);
+    });
+  }
+  function startImpressionTracking() {
+    if (impressionState.started || !('IntersectionObserver' in window)) return;
+    if (/^\/(admin|login|join)/.test(location.pathname)) return;
+    impressionState.started = true;
+    impressionState.observer = new IntersectionObserver(entries => {
+      const now = Date.now();
+      entries.forEach(en => {
+        const id = en.target.dataset.productId;
+        if (!id) return;
+        if (en.isIntersecting && en.intersectionRatio >= 0.5) {
+          if (!impressionState.visibleSince.has(id)) impressionState.visibleSince.set(id, now);
+        } else if (impressionState.visibleSince.has(id)) {
+          impressionState.totals.set(id, (impressionState.totals.get(id) || 0) + (now - impressionState.visibleSince.get(id)));
+          impressionState.visibleSince.delete(id);
+        }
+      });
+    }, { threshold: [0, 0.5] });
+    observeCards(document);
+    new MutationObserver(() => observeCards(document)).observe(document.body, { childList: true, subtree: true });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') { flushImpressions(); impressionState.visibleSince.clear(); }
+    });
+    window.addEventListener('pagehide', flushImpressions);
+  }
+
+  // ============================================
+  // 📈 자동 랭킹 — 서버가 3분마다 계산한 점수로 상품을 정렬한다
+  // ============================================
+  let rankingScoresPromise = null;
+  function getRankingScores() {
+    if (!rankingScoresPromise) {
+      rankingScoresPromise = fetch(API_BASE + '/api/ranking/scores')
+        .then(r => r.json()).then(j => (j && j.success ? j.scores : {}) || {})
+        .catch(() => ({}));
+    }
+    return rankingScoresPromise;
+  }
+  const RANKING_SORTS = {
+    popular: { label: '실시간 인기', emoji: '🔥' },
+    sales: { label: '구매 많은 순', emoji: '🛒' },
+    dwell: { label: '오래 본 순', emoji: '⏱️' },
+    exposure: { label: '많이 노출된 순', emoji: '👀' }
+  };
+  // 점수가 같으면(데이터가 아직 적으면) 평점·리뷰수·최신순으로 이어서 정렬해 목록이 비지 않게 한다
+  function sortProductsBy(products, key, scores) {
+    const list = (products || []).slice();
+    const price = p => Number(p.discount_price && Number(p.discount_price) < Number(p.price) ? p.discount_price : p.price) || 0;
+    const fallback = (a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0) || (Number(b.review_count) || 0) - (Number(a.review_count) || 0) || new Date(b.created_at) - new Date(a.created_at);
+    const sc = (p) => ((scores || {})[p.id] || {})[key] || 0;
+    if (RANKING_SORTS[key]) return list.sort((a, b) => sc(b) - sc(a) || fallback(a, b));
+    if (key === 'new') return list.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    if (key === 'price_asc') return list.sort((a, b) => price(a) - price(b));
+    if (key === 'price_desc') return list.sort((a, b) => price(b) - price(a));
+    if (key === 'reviews') return list.sort((a, b) => (Number(b.review_count) || 0) - (Number(a.review_count) || 0) || fallback(a, b));
+    if (key === 'rating') return list.sort(fallback);
+    return list;
+  }
+
+  // ============================================
+  // 📣 푸시 알림 받기 (브라우저 웹 푸시) — 허용하면 관리자가 보내는 전체/개별 알림을 휴대폰·PC로 받는다
+  // ============================================
+  function urlBase64ToUint8Array(base64) {
+    const padding = '='.repeat((4 - base64.length % 4) % 4);
+    const raw = atob((base64 + padding).replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+  }
+  const push = {
+    isSupported() { return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; },
+    async getState() {
+      if (!push.isSupported()) return 'unsupported';
+      if (Notification.permission === 'denied') return 'denied';
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = reg && await reg.pushManager.getSubscription();
+      return sub ? 'on' : 'off';
+    },
+    async enable() {
+      if (!push.isSupported()) throw new Error('이 브라우저는 푸시 알림을 지원하지 않습니다 (아이폰은 홈 화면에 추가한 앱에서 가능)');
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') throw new Error('알림 권한이 허용되지 않았습니다. 브라우저 설정에서 알림을 허용해주세요');
+      const reg = await navigator.serviceWorker.register('/sw.js');
+      await navigator.serviceWorker.ready;
+      const { json } = await fetchJSON('/api/push/public-key');
+      if (!json || !json.publicKey) throw new Error('푸시 설정을 불러오지 못했습니다');
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(json.publicKey) });
+      const token = await getAccessToken();
+      const headers = { 'Content-Type': 'application/json' };
+      if (token) headers.Authorization = 'Bearer ' + token;
+      const res = await fetch(API_BASE + '/api/push/subscribe', { method: 'POST', headers, body: JSON.stringify({ subscription: sub.toJSON() }) });
+      if (!res.ok) throw new Error('푸시 알림 등록에 실패했습니다');
+      return 'on';
+    },
+    async disable() {
+      const reg = await navigator.serviceWorker.getRegistration();
+      const sub = reg && await reg.pushManager.getSubscription();
+      if (sub) {
+        await fetch(API_BASE + '/api/push/unsubscribe', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ endpoint: sub.endpoint }) }).catch(() => {});
+        await sub.unsubscribe();
+      }
+      return 'off';
+    },
+    // 로그인한 회원이 이미 허용해 둔 기기라면, 그 기기를 회원 계정과 다시 연결(개별 푸시 대상)
+    async relink() {
+      try {
+        if (!push.isSupported() || Notification.permission !== 'granted') return;
+        const token = await getAccessToken();
+        if (!token) return;
+        const reg = await navigator.serviceWorker.getRegistration();
+        const sub = reg && await reg.pushManager.getSubscription();
+        if (!sub) return;
+        await fetch(API_BASE + '/api/push/subscribe', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ subscription: sub.toJSON() }) });
+      } catch (e) { /* 무시 */ }
+    }
+  };
+
+  // ============================================
+  // 👉 밀어서 결제하기 (간편결제 슬라이더) — 손가락/마우스로 끝까지 밀면 onComplete 실행
+  // ============================================
+  let slideStyleInjected = false;
+  function mountSlideToPay(el, opts) {
+    opts = opts || {};
+    if (!slideStyleInjected) {
+      slideStyleInjected = true;
+      const st = document.createElement('style');
+      st.textContent = `
+        .wp-slide { position: relative; height: 62px; border-radius: 999px; background: #1C1D22; overflow: hidden; user-select: none; -webkit-user-select: none; touch-action: none; box-shadow: 0 8px 22px rgba(0,0,0,.18); }
+        .wp-slide.is-disabled { opacity: .45; pointer-events: none; }
+        .wp-slide-fill { position: absolute; left: 0; top: 0; bottom: 0; width: 62px; border-radius: 999px; background: var(--slide-color, var(--primary-color, #E8125C)); transition: width .25s; }
+        .wp-slide-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 700; font-size: 1.02em; padding-left: 50px; letter-spacing: -0.01em; pointer-events: none; }
+        .wp-slide-label .shine { background: linear-gradient(90deg, rgba(255,255,255,.55) 0%, #fff 50%, rgba(255,255,255,.55) 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; animation: wpShine 2.2s linear infinite; }
+        @keyframes wpShine { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+        .wp-slide-knob { position: absolute; left: 4px; top: 4px; width: 54px; height: 54px; border-radius: 50%; background: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.4em; color: #1C1D22; cursor: grab; transition: transform .25s; box-shadow: 0 2px 8px rgba(0,0,0,.25); }
+        .wp-slide.dragging .wp-slide-knob, .wp-slide.dragging .wp-slide-fill { transition: none; }
+        .wp-slide.done .wp-slide-label { padding-left: 0; }
+      `;
+      document.head.appendChild(st);
+    }
+    el.innerHTML = `<div class="wp-slide" role="slider" aria-label="${escapeHtml(opts.label || '밀어서 결제하기')}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" tabindex="0">
+        <div class="wp-slide-fill"></div>
+        <div class="wp-slide-label"><span class="shine">${escapeHtml(opts.label || '밀어서 결제하기')}</span></div>
+        <div class="wp-slide-knob" aria-hidden="true">➜</div>
+      </div>`;
+    const track = el.querySelector('.wp-slide');
+    const knob = el.querySelector('.wp-slide-knob');
+    const fill = el.querySelector('.wp-slide-fill');
+    const labelEl = el.querySelector('.wp-slide-label');
+    if (opts.color) track.style.setProperty('--slide-color', opts.color);
+    let startX = 0, dx = 0, dragging = false, done = false;
+    const max = () => track.clientWidth - 58;
+    const setPos = (x) => { knob.style.transform = `translateX(${x}px)`; fill.style.width = (x + 58) + 'px'; track.setAttribute('aria-valuenow', String(Math.round(x / Math.max(1, max()) * 100))); };
+    const reset = () => { done = false; track.classList.remove('done'); setPos(0); labelEl.innerHTML = `<span class="shine">${escapeHtml(opts.label || '밀어서 결제하기')}</span>`; };
+    const complete = async () => {
+      done = true; track.classList.add('done'); setPos(max());
+      labelEl.textContent = opts.doneLabel || '결제창으로 이동 중...';
+      try { await opts.onComplete(); } catch (e) { reset(); throw e; }
+    };
+    const down = (e) => { if (done) return; dragging = true; track.classList.add('dragging'); startX = (e.touches ? e.touches[0].clientX : e.clientX) - dx; };
+    const move = (e) => {
+      if (!dragging) return;
+      const x = (e.touches ? e.touches[0].clientX : e.clientX) - startX;
+      dx = Math.max(0, Math.min(max(), x)); setPos(dx);
+      if (e.cancelable) e.preventDefault();
+    };
+    const up = () => {
+      if (!dragging) return;
+      dragging = false; track.classList.remove('dragging');
+      if (dx >= max() * 0.88) { dx = 0; complete().catch(() => {}); } else { dx = 0; setPos(0); }
+    };
+    knob.addEventListener('pointerdown', down); window.addEventListener('pointermove', move, { passive: false }); window.addEventListener('pointerup', up);
+    knob.addEventListener('touchstart', down, { passive: true }); window.addEventListener('touchmove', move, { passive: false }); window.addEventListener('touchend', up);
+    // 키보드 접근성: 포커스 후 Enter/→ 로도 결제 진행
+    track.addEventListener('keydown', (e) => { if (!done && (e.key === 'Enter' || e.key === 'ArrowRight')) { e.preventDefault(); complete().catch(() => {}); } });
+    return { reset, setDisabled(v) { track.classList.toggle('is-disabled', !!v); } };
+  }
+
+  // ============================================
+  // 🔑 카카오·네이버 간편 로그인 — 준비된(키 등록된) 방식만 바로 동작하고, 아니면 '준비중' 안내
+  // ============================================
+  let socialStatusPromise = null;
+  function getSocialStatus() {
+    if (!socialStatusPromise) {
+      socialStatusPromise = fetch(API_BASE + '/api/auth/social-status').then(r => r.json()).then(j => (j && j.data) || {}).catch(() => ({}));
+    }
+    return socialStatusPromise;
+  }
+  async function socialLogin(provider) {
+    const status = await getSocialStatus();
+    const name = { kakao: '카카오', naver: '네이버', google: '구글' }[provider] || provider;
+    if (!status[provider]) throw new Error(`${name} 로그인은 아직 준비 중입니다. 이메일로 계속해주세요.`);
+    if (provider === 'naver') { location.href = API_BASE + '/api/auth/naver/login'; return; }
+    const client = await getClient();
+    const { error } = await client.auth.signInWithOAuth({ provider, options: { redirectTo: location.origin + '/' } });
+    if (error) throw new Error(`${name} 로그인을 시작하지 못했습니다: ${error.message}`);
+  }
+  // 버튼에 준비 상태를 표시하고 클릭을 연결한다. buttons: { kakao: el, naver: el }, msgEl: 안내 문구 영역
+  async function bindSocialButtons(buttons, msgEl) {
+    const status = await getSocialStatus();
+    Object.entries(buttons).forEach(([provider, btn]) => {
+      if (!btn) return;
+      btn.classList.toggle('is-soon', !status[provider]);
+      btn.querySelectorAll('.soon-badge').forEach(b => { b.style.display = status[provider] ? 'none' : ''; });
+      btn.classList.remove('disabled');
+      btn.addEventListener('click', async (e) => {
+        e.preventDefault();
+        try { await socialLogin(provider); }
+        catch (err) { if (msgEl) { msgEl.textContent = err.message; msgEl.classList.add('show'); msgEl.style.display = 'block'; } }
+      });
+    });
+  }
+
   global.WithPlus = {
     API_BASE,
     CATEGORY_MAP,
@@ -1396,6 +1708,17 @@
     shellIcon,
     getCategoryLineIcon,
     renderStars,
+    applyWatermark,
+    watermarkImage,
+    protectImages,
+    getRankingScores,
+    sortProductsBy,
+    RANKING_SORTS,
+    push,
+    mountSlideToPay,
+    getSocialStatus,
+    socialLogin,
+    bindSocialButtons,
     renderRatingSummary,
     renderReviewItem,
     formatSatisfied,
@@ -1458,6 +1781,12 @@
     document.addEventListener('DOMContentLoaded', mountAppShell);
   } else {
     mountAppShell();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => { startImpressionTracking(); push.relink(); });
+  } else {
+    startImpressionTracking(); push.relink();
   }
 
   registerPwa();
