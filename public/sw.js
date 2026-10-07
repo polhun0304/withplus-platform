@@ -1,9 +1,9 @@
 // WITH+ 서비스워커 — PWA(홈 화면 설치, 오프라인 기본 지원)를 위한 최소 구현.
 // 원칙: 가격/재고/주문처럼 정확성이 중요한 API(/api/*)는 절대 캐시하지 않고 항상 네트워크로만 처리한다.
-// 정적 리소스(이미지/CSS/JS/아이콘)는 캐시 우선으로 빠르게, HTML 페이지는 네트워크 우선(항상 최신 시도) +
-// 실패 시 캐시 → 그마저 없으면 오프라인 안내 페이지로 대체한다.
+// 정적 리소스(이미지/CSS/JS/아이콘)는 캐시 우선으로 빠르게, HTML 페이지는 네트워크 우선(캐시하지 않음),
+// 실패 시 오프라인 안내 페이지로 대체한다.
 
-const CACHE_VERSION = 'v6'; // 푸시 알림·워터마크·랭킹·밀어서결제 추가
+const CACHE_VERSION = 'v7'; // 설치형 앱(PWA) 표준 v1: 페이지(HTML) 캐시 중단·/auth 제외 — 옛 페이지 캐시 정리
 const CACHE_NAME = `withplus-${CACHE_VERSION}`;
 const OFFLINE_URL = '/offline.html';
 
@@ -11,7 +11,8 @@ const PRECACHE_URLS = [
   OFFLINE_URL,
   '/manifest.json',
   '/images/icons/icon-192.png',
-  '/images/icons/icon-512.png'
+  '/images/icons/icon-512.png',
+  '/pwa-install.js'
 ];
 
 self.addEventListener('install', (event) => {
@@ -32,8 +33,9 @@ self.addEventListener('activate', (event) => {
   );
 });
 
+// 설치형 앱(PWA) 표준 v1: 데이터·인증 경로는 절대 가로채지 않는다(/api·/auth)
 function isApiRequest(url) {
-  return url.pathname.startsWith('/api/');
+  return /^\/(api|auth)(\/|$)/.test(url.pathname);
 }
 
 function isStaticAsset(request, url) {
@@ -54,17 +56,10 @@ self.addEventListener('fetch', (event) => {
   // API는 항상 네트워크로만 — 캐시된 가격/재고/주문 데이터를 보여주는 것은 절대 안 됨
   if (isApiRequest(url)) return;
 
-  // HTML 네비게이션 요청: 네트워크 우선, 실패 시 캐시 → 그마저 없으면 오프라인 페이지
+  // HTML 네비게이션 요청: 항상 네트워크 우선, 끊기면 오프라인 안내 페이지.
+  // (설치형 앱(PWA) 표준 v1) 페이지는 캐시하지 않는다 — 로그인 사용자 화면이 기기에 남거나 옛 화면이 보이는 일을 막는다.
   if (request.mode === 'navigate') {
-    event.respondWith(
-      fetch(request)
-        .then((response) => {
-          const copy = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
-          return response;
-        })
-        .catch(() => caches.match(request).then((cached) => cached || caches.match(OFFLINE_URL)))
-    );
+    event.respondWith(fetch(request).catch(() => caches.match(OFFLINE_URL)));
     return;
   }
 

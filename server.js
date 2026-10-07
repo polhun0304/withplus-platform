@@ -106,6 +106,32 @@ const couponLimiter = rateLimit({
 app.use('/api/serial-coupons/redeem', couponLimiter);
 app.use('/api/coupons/validate', couponLimiter);
 
+// ============================================
+// 설치형 앱(PWA) 표준 v1 — 매니페스트·아이콘·서비스워커·오프라인 화면은 로그인 없이 열린다(인증 미들웨어보다 앞).
+// sw.js 는 no-cache 로 내려 배포 즉시 새 워커가 반영되게 한다. (PWA_APP_STANDARD.md)
+// ============================================
+const PWA_PUBLIC_DIR = path.join(__dirname, 'public');
+const PWA_ICON_FILES = { '192': 'icon-192.png', '512': 'icon-512.png', maskable: 'icon-512-maskable.png', apple: 'apple-touch-icon.png' };
+app.get(['/manifest.webmanifest', '/manifest.json'], (req, res) => {
+  res.type('application/manifest+json');
+  res.sendFile(path.join(PWA_PUBLIC_DIR, 'manifest.json'), { cacheControl: false, headers: { 'Cache-Control': 'public, max-age=3600' } });
+});
+app.get('/sw.js', (req, res) => {
+  res.type('application/javascript');
+  res.sendFile(path.join(PWA_PUBLIC_DIR, 'sw.js'), {
+    cacheControl: false,
+    headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Service-Worker-Allowed': '/' }
+  });
+});
+app.get('/offline.html', (req, res) => {
+  res.sendFile(path.join(PWA_PUBLIC_DIR, 'offline.html'), { cacheControl: false, headers: { 'Cache-Control': 'no-cache' } });
+});
+app.get('/pwa/icon/:size', (req, res, next) => {
+  const file = PWA_ICON_FILES[req.params.size];
+  if (!file) return next();
+  res.sendFile(path.join(PWA_PUBLIC_DIR, 'images', 'icons', file), { maxAge: '7d' });
+});
+
 // 정적 파일 서빙 (홈페이지: public/index.html)
 app.use(express.static(path.join(__dirname, 'public')));
 

@@ -777,15 +777,12 @@
   }
 
   // ===== PWA (Progressive Web App) =====
-  const PWA_INSTALL_DISMISS_KEY = 'wp_pwa_install_dismissed_at';
-  const PWA_INSTALL_DISMISS_DAYS = 14;
-  let _pwaDeferredPrompt = null;
 
   function injectPwaHeadTags() {
     if (!document.querySelector('link[rel="manifest"]')) {
       const link = document.createElement('link');
       link.rel = 'manifest';
-      link.href = '/manifest.json';
+      link.href = '/manifest.webmanifest';
       document.head.appendChild(link);
     }
     if (!document.querySelector('meta[name="theme-color"]')) {
@@ -797,7 +794,7 @@
     if (!document.querySelector('link[rel="apple-touch-icon"]')) {
       const appleLink = document.createElement('link');
       appleLink.rel = 'apple-touch-icon';
-      appleLink.href = '/images/icons/apple-touch-icon.png';
+      appleLink.href = '/pwa/icon/apple';
       document.head.appendChild(appleLink);
     }
   }
@@ -812,58 +809,20 @@
     });
   }
 
-  function shouldShowInstallBanner() {
-    try {
-      const dismissedAt = localStorage.getItem(PWA_INSTALL_DISMISS_KEY);
-      if (!dismissedAt) return true;
-      const elapsedDays = (Date.now() - Number(dismissedAt)) / (1000 * 60 * 60 * 24);
-      return elapsedDays >= PWA_INSTALL_DISMISS_DAYS;
-    } catch (e) {
-      return true;
-    }
-  }
-
-  function renderInstallBanner() {
-    if (document.getElementById('wp-pwa-install-banner')) return;
-    const banner = document.createElement('div');
-    banner.id = 'wp-pwa-install-banner';
-    banner.style.cssText = 'position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#222;color:#fff;padding:14px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;box-shadow:0 -2px 8px rgba(0,0,0,0.2);font-size:0.92em;';
-    banner.innerHTML = `
-      <span>📱 WITH+를 홈 화면에 추가하고 더 빠르게 이용해보세요.</span>
-      <span style="display:flex; gap:8px; flex-shrink:0;">
-        <button type="button" id="wp-pwa-install-btn" style="background:#D32F5B; color:#fff; border:none; border-radius:20px; padding:8px 18px; font-weight:600; cursor:pointer;">설치</button>
-        <button type="button" id="wp-pwa-dismiss-btn" style="background:transparent; color:#ccc; border:1px solid #555; border-radius:20px; padding:8px 14px; cursor:pointer;">닫기</button>
-      </span>`;
-    document.body.appendChild(banner);
-
-    document.getElementById('wp-pwa-install-btn').addEventListener('click', async () => {
-      if (!_pwaDeferredPrompt) { banner.remove(); return; }
-      _pwaDeferredPrompt.prompt();
-      await _pwaDeferredPrompt.userChoice;
-      _pwaDeferredPrompt = null;
-      banner.remove();
-    });
-    document.getElementById('wp-pwa-dismiss-btn').addEventListener('click', () => {
-      try { localStorage.setItem(PWA_INSTALL_DISMISS_KEY, String(Date.now())); } catch (e) {}
-      banner.remove();
-    });
+  // 설치 안내(Android 설치 창·iOS 안내·앱 안 브라우저 안내)는 표준 v1 공용 파일 /pwa-install.js 가 맡는다.
+  // 페이지 head 에 정적 태그가 없는 화면(서버 템플릿 등)에서도 동작하도록 없으면 불러온다.
+  function loadInstallGuide() {
+    if (window.__pwaInstallV1 || document.querySelector('script[src^="/pwa-install.js"]')) return;
+    const s = document.createElement('script');
+    s.src = '/pwa-install.js';
+    s.defer = true;
+    document.head.appendChild(s);
   }
 
   function registerPwa() {
     injectPwaHeadTags();
     registerServiceWorker();
-
-    window.addEventListener('beforeinstallprompt', (e) => {
-      e.preventDefault();
-      _pwaDeferredPrompt = e;
-      if (shouldShowInstallBanner()) renderInstallBanner();
-    });
-
-    window.addEventListener('appinstalled', () => {
-      _pwaDeferredPrompt = null;
-      const banner = document.getElementById('wp-pwa-install-banner');
-      if (banner) banner.remove();
-    });
+    loadInstallGuide();
   }
 
   // ============================================
