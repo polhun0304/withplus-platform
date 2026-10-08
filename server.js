@@ -5589,6 +5589,57 @@ app.get('/api/products/:id', async (req, res) => {
   }
 });
 
+// ============================================
+// 🖼️ 상품 사진 업로드 (관리자 > 상품 등록/수정 — 파일 추가·끌어다 놓기)
+// - 사진은 Supabase Storage 'product-images' 버킷의 플랫폼별 폴더에 저장: withplus/<상품ID 또는 임시키>/<시간>-<랜덤>.<확장자>
+//   (WITH+에서 올린 사진은 withplus/, LIVE+에서 올린 사진은 liveplus/ 아래에만 저장된다)
+// - 화면에서 미리 줄인(최대 1600px) 이미지를 그대로 받아 저장하고, 공개 주소(URL)를 돌려준다.
+// - 파일 앞부분(매직 바이트)으로 실제 이미지인지 확인한다(확장자만 바꾼 파일 차단).
+// ============================================
+const PRODUCT_IMAGE_BUCKET = 'product-images';
+const UPLOAD_PLATFORM = process.env.UPLOAD_PLATFORM || 'withplus';
+function detectImageType(buf) {
+  if (!buf || buf.length < 12) return null;
+  if (buf[0] === 0xFF && buf[1] === 0xD8 && buf[2] === 0xFF) return { ext: 'jpg', mime: 'image/jpeg' };
+  if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4E && buf[3] === 0x47) return { ext: 'png', mime: 'image/png' };
+  if (buf.slice(0, 4).toString('ascii') === 'RIFF' && buf.slice(8, 12).toString('ascii') === 'WEBP') return { ext: 'webp', mime: 'image/webp' };
+  if (buf.slice(0, 3).toString('ascii') === 'GIF') return { ext: 'gif', mime: 'image/gif' };
+  return null;
+}
+app.post('/api/admin/uploads/product-image',
+  authenticate,
+  requireRole(['provider', 'admin', 'super_admin']),
+  express.raw({ type: ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'application/octet-stream'], limit: '10mb' }),
+  async (req, res) => {
+    try {
+      const buf = req.body;
+      if (!Buffer.isBuffer(buf) || buf.length === 0) {
+        return res.status(400).json({ error: 'Bad Request', message: '사진 파일이 비어 있습니다', timestamp: new Date().toISOString() });
+      }
+      const type = detectImageType(buf);
+      if (!type) {
+        return res.status(400).json({ error: 'Bad Request', message: 'JPG·PNG·WEBP·GIF 사진만 올릴 수 있습니다', timestamp: new Date().toISOString() });
+      }
+      // 상품별 폴더: 수정 중이면 상품ID, 새 상품이면 화면이 만든 임시키 — 영문 소문자/숫자/하이픈만 허용
+      const rawKey = String(req.headers['x-product-key'] || 'misc').toLowerCase();
+      const productKey = /^[a-z0-9-]{1,64}$/.test(rawKey) ? rawKey : 'misc';
+      const kind = req.headers['x-image-kind'] === 'detail' ? 'detail' : 'main';
+      const fileName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${type.ext}`;
+      const objectPath = `${UPLOAD_PLATFORM}/${productKey}/${kind}/${fileName}`;
+      const { error } = await supabase.storage.from(PRODUCT_IMAGE_BUCKET).upload(objectPath, buf, {
+        contentType: type.mime,
+        cacheControl: '31536000',
+        upsert: false
+      });
+      if (error) throw error;
+      const { data } = supabase.storage.from(PRODUCT_IMAGE_BUCKET).getPublicUrl(objectPath);
+      res.status(201).json({ success: true, data: { url: data.publicUrl, path: objectPath, bytes: buf.length }, timestamp: new Date().toISOString() });
+    } catch (err) {
+      console.error('Error uploading product image:', err);
+      res.status(500).json({ error: 'Failed to upload image', message: (process.env.NODE_ENV === 'production' ? '사진 업로드에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
+    }
+  });
+
 // 상품 생성 (공급자 전용)
 // 공급가액/부가세 - 입력값이 없으면 판매가(price)를 부가세 포함가로 보고 표준 10% 세율로 자동 역산한다
 // (유통기한/규격/공급가액/부가세 항목이 상품DB에 없던 것을 보완하면서 함께 추가한 헬퍼)
