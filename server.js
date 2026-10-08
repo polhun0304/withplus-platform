@@ -4434,6 +4434,8 @@ detail_sections는 2~4개 정도로 만들어주세요.`;
   } catch (err) {
     console.error('Error generating AI product description:', err);
     res.status(500).json({ error: 'Failed to generate AI product description', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
 
 // 📷 공급자/관리자: 올린 상품 사진을 AI가 직접 보고 상세페이지 문구(간단설명/상세설명/블록별 설명)를 써준다.
 // - 판매자가 설명을 비워 둔 채 사진만 올렸을 때 화면이 자동으로 호출한다(이미 쓴 글은 화면에서 덮어쓰지 않음).
@@ -4557,8 +4559,6 @@ ${notes ? `판매자 메모: "${notes}"\n` : ''}
   }
 });
 
-  }
-});
 
 // 관리자: AI가 제안한 후보 중 선택한 것들을 한 번에 카테고리로 추가 (이미 존재하는 슬러그는 조용히 건너뜀)
 app.post('/api/admin/categories/bulk-create', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
