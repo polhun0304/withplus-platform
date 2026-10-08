@@ -4434,6 +4434,129 @@ detail_sections는 2~4개 정도로 만들어주세요.`;
   } catch (err) {
     console.error('Error generating AI product description:', err);
     res.status(500).json({ error: 'Failed to generate AI product description', message: err.message, timestamp: new Date().toISOString() });
+
+// 📷 공급자/관리자: 올린 상품 사진을 AI가 직접 보고 상세페이지 문구(간단설명/상세설명/블록별 설명)를 써준다.
+// - 판매자가 설명을 비워 둔 채 사진만 올렸을 때 화면이 자동으로 호출한다(이미 쓴 글은 화면에서 덮어쓰지 않음).
+// - 사진 주소(https)를 그대로 AI에 넘긴다 — 우리 저장소(product-images)에 올린 사진은 공개 주소라 바로 읽힌다.
+// - 저장은 하지 않고 초안만 돌려준다. 사진만 보고 확인할 수 없는 효능·성분·인증은 쓰지 않게 지시한다.
+app.post('/api/admin/ai-product-description-from-images', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const isHttpsUrl = (u) => typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u.trim()) && u.length <= 2000;
+    const mainImages = (Array.isArray(req.body.image_urls) ? req.body.image_urls : []).filter(isHttpsUrl).map(u => u.trim()).slice(0, 5);
+    // 블록 사진은 순서(블록 번호)를 지켜야 하므로 빈 칸도 그대로 두고 받는다
+    const sectionImages = (Array.isArray(req.body.section_image_urls) ? req.body.section_image_urls : []).slice(0, 10).map(u => isHttpsUrl(u) ? u.trim() : '');
+    const name = String(req.body.name || '').trim().slice(0, 200);
+    const category = String(req.body.category || '').trim().slice(0, 100);
+    const notes = String(req.body.notes || '').trim().slice(0, 1000);
+    if (!mainImages.length && !sectionImages.some(Boolean)) {
+      return res.status(400).json({ error: 'Bad Request', message: '설명을 만들 상품 사진을 먼저 올려주세요', timestamp: new Date().toISOString() });
+    }
+    const config = await getAiConfig('anthropic');
+    if (!config || !config.enabled || !config.api_key) {
+      return res.status(400).json({ error: 'Bad Request', message: '사진으로 설명 만들기를 사용하려면 관리자가 먼저 "⚙️ 설정"에서 Anthropic API 키를 등록하고 활성화해야 합니다', timestamp: new Date().toISOString() });
+    }
+
+    // 사진마다 "어떤 사진인지" 이름표를 붙여 AI가 블록 번호와 사진을 헷갈리지 않게 한다
+    const content = [];
+    mainImages.forEach((url, i) => {
+      content.push({ type: 'text', text: `[대표/추가 사진 ${i + 1}]` });
+      content.push({ type: 'image', source: { type: 'url', url } });
+    });
+    const sectionCount = sectionImages.length;
+    sectionImages.forEach((url, i) => {
+      if (!url) return;
+      content.push({ type: 'text', text: `[상세 블록 ${i + 1} 사진]` });
+      content.push({ type: 'image', source: { type: 'url', url } });
+    });
+    content.push({ type: 'text', text: `당신은 한국 이커머스 쇼핑몰의 상품 상세페이지 카피라이터입니다. 위 사진들을 직접 보고, 사진에 실제로 보이는 내용(제품 종류, 형태, 색상, 구성품, 포장, 라벨에 적힌 글자, 사용 장면 등)을 바탕으로 상세페이지 문구를 써주세요.
+상품명: "${name || '(미입력 — 사진으로 판단)'}"
+카테고리: "${category || '미지정'}"
+${notes ? `판매자 메모: "${notes}"\n` : ''}
+지켜야 할 것:
+- 사진이나 라벨에서 확인되지 않는 효능·성분·원산지·인증·수치는 지어내지 마세요. 질병 치료·의학적 효과 같은 표현은 절대 쓰지 마세요.
+- 손님이 읽기 쉬운 자연스러운 존댓말로, 과장 없이 매력적으로 써주세요.
+- description: 상품 목록에 보일 1~2문장 요약.
+- long_description: 상세페이지 상단 본문 3~5문단(문단 사이는 빈 줄).
+- section_texts: 상세 블록이 ${sectionCount}개 있습니다. 정확히 ${sectionCount}개의 문구를 블록 순서대로 넣으세요. 각 문구는 해당 블록 사진을 설명하는 1~3문장이며, 사진이 없는 블록은 전체 흐름에 맞는 짧은 문구로 채우세요.
+- suggested_name: 상품명이 비어 있을 때만 사진을 보고 어울리는 상품명을 제안하고, 상품명이 있으면 빈 문자열.
+- photo_tips: 사진 품질 문제(흐림, 어두움, 기울어짐, 잘림, 배경 어수선함 등)가 보이면 고칠 점을 짧게 최대 3개, 문제가 없으면 빈 배열.` });
+
+    const schema = {
+      type: 'object',
+      properties: {
+        description: { type: 'string' },
+        long_description: { type: 'string' },
+        section_texts: { type: 'array', items: { type: 'string' } },
+        suggested_name: { type: 'string' },
+        photo_tips: { type: 'array', items: { type: 'string' } }
+      },
+      required: ['description', 'long_description', 'section_texts', 'suggested_name', 'photo_tips'],
+      additionalProperties: false
+    };
+
+    let aiResp;
+    try {
+      aiResp = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': config.api_key,
+          'anthropic-version': '2023-06-01',
+          // 안전 분류기가 드물게 요청을 거절하면 서버 쪽에서 권장 모델로 자동 재시도
+          'anthropic-beta': 'server-side-fallback-2026-07-01'
+        },
+        body: JSON.stringify({
+          model: 'claude-opus-5-5',
+          max_tokens: 16000,
+          fallbacks: 'default',
+          output_config: { effort: 'low', format: { type: 'json_schema', schema } },
+          messages: [{ role: 'user', content }]
+        }),
+        signal: AbortSignal.timeout(120000)
+      });
+    } catch (callErr) {
+      return res.status(502).json({ error: 'AI Request Failed', message: 'AI 서버 호출에 실패했습니다: ' + callErr.message, timestamp: new Date().toISOString() });
+    }
+    const aiJson = await aiResp.json().catch(() => null);
+    if (!aiResp.ok || !aiJson) {
+      const rawMsg = aiJson?.error?.message || '';
+      // 사진 주소를 AI가 못 읽은 경우는 따로 안내 (외부 사이트 사진·비공개 주소 등)
+      if (aiResp.status === 400 && /image|url/i.test(rawMsg)) {
+        return res.status(502).json({ error: 'AI Request Failed', message: `AI가 사진을 불러오지 못했습니다. 외부 URL 사진이라면 "📁 파일 추가"로 직접 올린 뒤 다시 시도해주세요. [Anthropic 응답] ${rawMsg}`, timestamp: new Date().toISOString() });
+      }
+      return res.status(502).json({ error: 'AI Request Failed', message: aiJson ? describeAnthropicError(aiResp.status, aiJson) : `AI 응답을 받아오지 못했습니다(HTTP ${aiResp.status})`, timestamp: new Date().toISOString() });
+    }
+    if (aiJson.stop_reason === 'refusal') {
+      return res.status(422).json({ error: 'AI Refused', message: 'AI가 이 사진으로는 설명을 만들 수 없다고 응답했습니다. 다른 사진으로 시도하거나 직접 작성해주세요', timestamp: new Date().toISOString() });
+    }
+    if (aiJson.stop_reason === 'max_tokens') {
+      return res.status(502).json({ error: 'AI Response Truncated', message: 'AI 응답이 너무 길어 끊겼습니다. 다시 시도해주세요', timestamp: new Date().toISOString() });
+    }
+
+    const rawText = (aiJson.content || []).filter(b => b.type === 'text').map(b => b.text || '').join('').trim();
+    let draft;
+    try { draft = JSON.parse(rawText); } catch (parseErr) {
+      return res.status(502).json({ error: 'AI Response Parse Failed', message: 'AI 응답을 해석하지 못했습니다. 다시 시도해주세요', timestamp: new Date().toISOString() });
+    }
+    const str = (v, max) => (v == null ? '' : String(v)).trim().slice(0, max);
+    const texts = Array.isArray(draft.section_texts) ? draft.section_texts.map(t => str(t, 1000)) : [];
+    res.json({
+      success: true,
+      data: {
+        description: str(draft.description, 300),
+        long_description: str(draft.long_description, 3000),
+        section_texts: Array.from({ length: sectionCount }, (_, i) => texts[i] || ''),
+        suggested_name: name ? '' : str(draft.suggested_name, 100),
+        photo_tips: Array.isArray(draft.photo_tips) ? draft.photo_tips.map(t => str(t, 200)).filter(Boolean).slice(0, 3) : []
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error generating AI description from images:', err);
+    res.status(500).json({ error: 'Failed to generate AI description', message: (process.env.NODE_ENV === 'production' ? 'AI 설명 생성에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
+  }
+});
+
   }
 });
 
