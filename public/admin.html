@@ -274,6 +274,28 @@
         .pa-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
         .pa-msg { font-size: 0.88em; color: var(--text-gray); }
         .pa-review p { margin: 0; font-size: 0.86em; color: var(--text-gray); }
+        /* 🖼️ 상품 사진 관리 (파일 추가 · 끌어다 놓기 · URL) */
+        .img-mgr { display: grid; gap: 10px; }
+        .img-thumbs { display: flex; flex-wrap: wrap; gap: 10px; }
+        .img-thumbs:empty { display: none; }
+        .img-thumb { position: relative; width: 96px; height: 96px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border-color); background: #F4F4F6; cursor: grab; }
+        .img-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
+        .img-thumb.over { outline: 3px solid var(--primary-color); }
+        .img-thumb.broken::after { content: '불러올 수 없는 사진'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 11px; color: #C62828; background: #FFF4F4; padding: 6px; }
+        .img-main { position: absolute; left: 6px; top: 6px; background: var(--primary-color); color: #fff; font-size: 11px; font-weight: 700; border-radius: 6px; padding: 2px 6px; }
+        .img-del { position: absolute; right: 4px; top: 4px; width: 24px; height: 24px; border-radius: 50%; border: none; background: rgba(0,0,0,.6); color: #fff; cursor: pointer; font-size: 12px; line-height: 24px; padding: 0; }
+        .img-thumb.loading { display: flex; align-items: center; justify-content: center; cursor: default; }
+        .img-spin { width: 26px; height: 26px; border: 3px solid #ddd; border-top-color: var(--primary-color); border-radius: 50%; animation: imgspin .8s linear infinite; }
+        @keyframes imgspin { to { transform: rotate(360deg); } }
+        .img-drop { border: 2px dashed var(--border-color); border-radius: 12px; padding: 18px 14px; text-align: center; color: var(--text-gray); font-size: 0.9em; display: flex; align-items: center; justify-content: center; gap: 8px; flex-wrap: wrap; transition: background .15s, border-color .15s; }
+        .img-drop.drag { background: rgba(232,18,92,0.06); border-color: var(--primary-color); color: var(--text-dark); }
+        .img-drop-icon { font-size: 1.4em; }
+        .img-drop .btn { padding: 6px 12px; font-size: 0.92em; }
+        .img-url-row { display: flex; gap: 8px; }
+        .img-url-row input { flex: 1; min-width: 0; }
+        .img-status { font-size: 0.85em; color: var(--text-gray); min-height: 1em; }
+        .img-status.error { color: #C62828; }
+        .detail-section-row .section-img-mgr { margin: 8px 0; }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -359,7 +381,7 @@
                 <div class="field"><label>규격 (선택, 예: 500ml / 30정 / 1box)</label><input type="text" id="pf-spec" placeholder="예: 500ml"></div>
                 <div class="field"><label>공급가액 (원, 선택 — 비워두면 판매가 기준 자동계산)</label><input type="number" id="pf-supply-amount" min="0"></div>
                 <div class="field"><label>부가세 (원, 선택 — 비워두면 판매가 기준 자동계산)</label><input type="number" id="pf-vat-amount" min="0"></div>
-                <div class="field"><label>상품 이미지 URL (여러 장은 줄바꿈으로 구분, 첫 줄이 대표 이미지)</label><textarea id="pf-images" placeholder="https://.../image1.jpg&#10;https://.../image2.jpg"></textarea></div>
+                <div class="field"><label>상품 사진 <small style="font-weight:400; color:var(--text-gray);">(첫 번째 사진이 대표 사진 · 사진을 끌어서 순서 변경)</small></label><div id="pf-image-manager"></div><textarea id="pf-images" hidden></textarea></div>
                 <div class="field"><label>상세 설명 (상세페이지 상단, 선택)</label><textarea id="pf-long-description" placeholder="상품에 대한 자세한 설명을 입력해주세요"></textarea></div>
                 <div class="field">
                     <label>상세페이지 이미지+설명 블록 (사진/설명이 여러 장인 경우 아래에 필요한 만큼 추가하세요)</label>
@@ -2905,6 +2927,182 @@
             const pfMsg = document.getElementById('pf-msg');
             const sectionsArea = document.getElementById('pf-detail-sections');
 
+            // ============================================
+            // 🖼️ 상품 사진 관리 — ① 파일 추가 ② 끌어다 놓기 ③ URL 추가 (+ Ctrl+V 붙여넣기)
+            // 올린 사진은 이 플랫폼 전용 폴더에 저장되고, 만들어진 주소가 자동으로 상품에 들어간다.
+            // 미리보기를 끌어서 순서를 바꿀 수 있고, 맨 앞 사진이 대표 사진이 된다.
+            // ============================================
+            let pfDraftKey = null; // 새 상품(아직 ID 없음)의 사진을 모아둘 임시 폴더 키
+            function currentProductImageKey() {
+                const id = document.getElementById('pf-id').value;
+                if (id) return id;
+                if (!pfDraftKey) pfDraftKey = 'draft-' + (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+                return pfDraftKey;
+            }
+
+            // 큰 사진은 화면용으로 줄여서(긴 변 1600px, WEBP) 올린다 — GIF(움짤)는 원본 그대로
+            async function shrinkImage(file) {
+                if (file.type === 'image/gif') return file;
+                if (file.size < 350 * 1024 && /image\/(jpeg|webp)/.test(file.type)) return file;
+                const bitmap = await createImageBitmap(file).catch(() => null);
+                if (!bitmap) return file;
+                const MAX = 1600;
+                const scale = Math.min(1, MAX / Math.max(bitmap.width, bitmap.height));
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.round(bitmap.width * scale);
+                canvas.height = Math.round(bitmap.height * scale);
+                canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+                const blob = await new Promise(r => canvas.toBlob(r, 'image/webp', 0.86));
+                return (blob && blob.size < file.size) ? blob : file;
+            }
+
+            async function uploadProductImage(file, kind) {
+                if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type)) throw new Error(`${file.name || '파일'}: JPG·PNG·WEBP·GIF만 올릴 수 있어요`);
+                if (file.size > 25 * 1024 * 1024) throw new Error(`${file.name || '파일'}: 25MB 이하 사진만 올릴 수 있어요`);
+                const body = await shrinkImage(file);
+                if (body.size > 10 * 1024 * 1024) throw new Error(`${file.name || '파일'}: 줄여도 10MB가 넘어요. 더 작은 사진을 사용해주세요`);
+                const token = await WithPlus.getAccessToken();
+                const res = await fetch('/api/admin/uploads/product-image', {
+                    method: 'POST',
+                    headers: { 'Content-Type': body.type || 'application/octet-stream', 'X-Product-Key': currentProductImageKey(), 'X-Image-Kind': kind || 'main', Authorization: 'Bearer ' + token },
+                    body
+                });
+                const json = await res.json().catch(() => ({}));
+                if (!res.ok || !json.success) throw new Error(json.message || '사진 업로드에 실패했습니다');
+                return json.data.url;
+            }
+
+            // container 안에 사진 관리 UI를 그린다. multiple=false면 사진 1장(블록용)
+            function createImageManager(container, opts) {
+                opts = opts || {};
+                const multiple = opts.multiple !== false;
+                let urls = [];
+                container.classList.add('img-mgr');
+                container.innerHTML = `
+                    <div class="img-thumbs"></div>
+                    <div class="img-drop" tabindex="0">
+                        <span class="img-drop-icon">🖼️</span>
+                        <span class="img-drop-text">사진을 여기로 <b>끌어다 놓거나</b> <button type="button" class="btn btn-secondary img-pick">📁 파일 추가</button> ${multiple ? '<small>(여러 장 가능 · Ctrl+V 붙여넣기)</small>' : '<small>(1장 · Ctrl+V 붙여넣기)</small>'}</span>
+                        <input type="file" class="img-file" accept="image/jpeg,image/png,image/webp,image/gif" ${multiple ? 'multiple' : ''} hidden>
+                    </div>
+                    <div class="img-url-row">
+                        <input type="url" class="img-url-input" placeholder="또는 이미지 주소(URL) 붙여넣기 — https://...">
+                        <button type="button" class="btn btn-secondary img-url-add">URL 추가</button>
+                    </div>
+                    <div class="img-status"></div>`;
+                const thumbs = container.querySelector('.img-thumbs');
+                const drop = container.querySelector('.img-drop');
+                const fileInput = container.querySelector('.img-file');
+                const status = container.querySelector('.img-status');
+                const urlInput = container.querySelector('.img-url-input');
+                let pending = 0;
+                const setStatus = (t, isErr) => { status.textContent = t || ''; status.className = 'img-status' + (isErr ? ' error' : ''); };
+                const changed = () => { if (opts.onChange) opts.onChange(urls.slice()); };
+
+                function render() {
+                    thumbs.innerHTML = urls.map((u, i) => `
+                        <div class="img-thumb" draggable="${multiple}" data-i="${i}">
+                            <img src="${WithPlus.safeUrlAttr(u)}" alt="" loading="lazy" onerror="this.parentNode.classList.add('broken')">
+                            ${multiple && i === 0 ? '<span class="img-main">대표</span>' : ''}
+                            <button type="button" class="img-del" title="삭제" aria-label="사진 삭제">✕</button>
+                        </div>`).join('') + (pending ? Array.from({ length: pending }).map(() => '<div class="img-thumb loading"><span class="img-spin"></span></div>').join('') : '');
+                    thumbs.querySelectorAll('.img-del').forEach(b => b.addEventListener('click', (e) => {
+                        const i = Number(e.currentTarget.closest('.img-thumb').dataset.i);
+                        urls.splice(i, 1); render(); changed();
+                    }));
+                    if (multiple) {
+                        let from = null;
+                        thumbs.querySelectorAll('.img-thumb[data-i]').forEach(t => {
+                            t.addEventListener('dragstart', (e) => { from = Number(t.dataset.i); e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/x-img-reorder', '1'); });
+                            t.addEventListener('dragover', (e) => { if (from !== null) { e.preventDefault(); t.classList.add('over'); } });
+                            t.addEventListener('dragleave', () => t.classList.remove('over'));
+                            t.addEventListener('drop', (e) => {
+                                if (from === null) return;
+                                e.preventDefault(); e.stopPropagation();
+                                const to = Number(t.dataset.i);
+                                const [moved] = urls.splice(from, 1);
+                                urls.splice(to, 0, moved);
+                                from = null; render(); changed();
+                            });
+                            t.addEventListener('dragend', () => { from = null; });
+                        });
+                    }
+                    drop.style.display = (!multiple && urls.length) ? 'none' : '';
+                }
+
+                async function addFiles(fileList) {
+                    const files = Array.from(fileList || []).filter(f => f && f.type && f.type.startsWith('image/'));
+                    if (!files.length) return;
+                    const list = multiple ? files : files.slice(0, 1);
+                    pending += list.length; render(); setStatus(`사진 ${list.length}장 올리는 중...`);
+                    const errors = [];
+                    // 순서를 지키기 위해 한 장씩 차례로 올린다
+                    for (const f of list) {
+                        try {
+                            const url = await uploadProductImage(f, opts.kind);
+                            if (multiple) urls.push(url); else urls = [url];
+                        } catch (err) { errors.push(err.message); }
+                        pending--; render();
+                    }
+                    changed();
+                    setStatus(errors.length ? errors.join(' / ') : `✅ ${list.length - errors.length}장 저장 완료`, errors.length > 0);
+                }
+
+                container.querySelector('.img-pick').addEventListener('click', () => fileInput.click());
+                fileInput.addEventListener('change', () => { addFiles(fileInput.files); fileInput.value = ''; });
+                ['dragenter', 'dragover'].forEach(ev => drop.addEventListener(ev, (e) => {
+                    if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); drop.classList.add('drag'); }
+                }));
+                ['dragleave', 'drop'].forEach(ev => drop.addEventListener(ev, () => drop.classList.remove('drag')));
+                drop.addEventListener('drop', (e) => { if (e.dataTransfer && e.dataTransfer.files.length) { e.preventDefault(); addFiles(e.dataTransfer.files); } });
+                // 사진 목록 위에 바로 끌어다 놓아도 추가되게
+                thumbs.addEventListener('dragover', (e) => { if (Array.from(e.dataTransfer.types || []).includes('Files')) e.preventDefault(); });
+                thumbs.addEventListener('drop', (e) => { if (e.dataTransfer.files.length) { e.preventDefault(); addFiles(e.dataTransfer.files); } });
+                container.addEventListener('paste', (e) => {
+                    const files = Array.from((e.clipboardData && e.clipboardData.files) || []);
+                    if (files.length) { e.preventDefault(); addFiles(files); }
+                });
+                const addUrl = () => {
+                    const v = urlInput.value.trim();
+                    if (!v) return;
+                    if (!/^https?:\/\/\S+$/i.test(v)) { setStatus('http:// 또는 https:// 로 시작하는 주소를 넣어주세요', true); return; }
+                    if (multiple) urls.push(v); else urls = [v];
+                    urlInput.value = ''; render(); changed(); setStatus('✅ URL 추가됨');
+                };
+                container.querySelector('.img-url-add').addEventListener('click', addUrl);
+                urlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addUrl(); } });
+
+                render();
+                return {
+                    setUrls(list) { urls = (list || []).filter(Boolean); pending = 0; setStatus(''); render(); },
+                    getUrls() { return urls.slice(); },
+                    isBusy() { return pending > 0; }
+                };
+            }
+
+            // 대표/추가 사진 — 기존 textarea(#pf-images)는 숨겨 두고 값 저장용으로만 쓴다(저장 로직 그대로 재사용)
+            const pfImagesArea = document.getElementById('pf-images');
+            const pfImageMgr = createImageManager(document.getElementById('pf-image-manager'), {
+                multiple: true,
+                kind: 'main',
+                onChange: (list) => { pfImagesArea.value = list.join('\n'); }
+            });
+            function syncImageManagerFromForm() {
+                pfImageMgr.setUrls(pfImagesArea.value.split('\n').map(s => s.trim()).filter(Boolean));
+            }
+
+            // 상세 블록 — 블록마다 사진 1장 관리기를 붙이고, 값은 숨긴 .section-image-input에 넣는다
+            function mountSectionImageManagers() {
+                sectionsArea.querySelectorAll('.detail-section-row').forEach(row => {
+                    const holder = row.querySelector('.section-img-mgr');
+                    if (!holder || holder.dataset.mounted) return;
+                    holder.dataset.mounted = '1';
+                    const hidden = row.querySelector('.section-image-input');
+                    const mgr = createImageManager(holder, { multiple: false, kind: 'detail', onChange: (list) => { hidden.value = list[0] || ''; } });
+                    mgr.setUrls(hidden.value ? [hidden.value] : []);
+                });
+            }
+
             function renderDetailSectionRow(section, index) {
                 const s = section || { image_url: '', text: '' };
                 return `
@@ -2913,13 +3111,15 @@
                             <span>블록 ${index + 1}</span>
                             <button type="button" class="remove-section-btn">✕ 삭제</button>
                         </div>
-                        <input type="text" class="section-image-input" placeholder="이미지 URL" value="${(s.image_url || '').replace(/"/g, '&quot;')}">
+                        <input type="hidden" class="section-image-input" value="${(s.image_url || '').replace(/"/g, '&quot;')}">
+                        <div class="section-img-mgr"></div>
                         <textarea class="section-text-input" placeholder="이 사진에 대한 설명">${s.text || ''}</textarea>
                     </div>`;
             }
 
             function renderAllSections(sections) {
                 sectionsArea.innerHTML = (sections || []).map((s, i) => renderDetailSectionRow(s, i)).join('');
+                mountSectionImageManagers();
                 sectionsArea.querySelectorAll('.remove-section-btn').forEach(btn => {
                     btn.addEventListener('click', () => {
                         btn.closest('.detail-section-row').remove();
@@ -2934,6 +3134,7 @@
             document.getElementById('pf-add-section').addEventListener('click', () => {
                 const current = sectionsArea.querySelectorAll('.detail-section-row').length;
                 sectionsArea.insertAdjacentHTML('beforeend', renderDetailSectionRow(null, current));
+                mountSectionImageManagers();
                 const newRow = sectionsArea.querySelector(`.detail-section-row[data-index="${current}"]`);
                 newRow.querySelector('.remove-section-btn').addEventListener('click', () => {
                     newRow.remove();
@@ -3048,7 +3249,10 @@
                     document.getElementById('pf-supply-amount').value = '';
                     document.getElementById('pf-vat-amount').value = '';
                     renderAllSections([]);
+                    document.getElementById('pf-images').value = '';
                 }
+                pfDraftKey = null;
+                syncImageManagerFromForm();
                 modal.classList.add('open');
             }
             document.getElementById('btn-new-product').addEventListener('click', () => openProductModal(null));
@@ -3101,6 +3305,11 @@
             pfForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 pfMsg.className = 'msg';
+                if (pfImageMgr.isBusy() || document.querySelector('#pf-detail-sections .img-thumb.loading')) {
+                    pfMsg.textContent = '사진을 올리는 중입니다. 업로드가 끝난 뒤 저장해주세요.';
+                    pfMsg.className = 'msg error';
+                    return;
+                }
                 const id = document.getElementById('pf-id').value;
                 const payload = {
                     name: document.getElementById('pf-name').value.trim(),
