@@ -145,6 +145,12 @@
             }
             .detail-actions .btn { flex: 1; padding: 15px 0; font-size: 1.02em; border-radius: 10px; }
         }
+        .band-reviews-note { font-size: 0.82em; color: var(--text-gray); margin: -8px 0 12px; }
+        .band-src { font-size: 0.72em; background: #E8F5E9; color: #2E7D32; border-radius: 6px; padding: 1px 6px; margin-left: 4px; font-weight: 600; }
+        .band-review-text { white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; cursor: pointer; }
+        .band-review-text.open { -webkit-line-clamp: unset; display: block; }
+        .band-review-photos { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+        .band-review-photos img { width: 84px; height: 84px; object-fit: cover; border-radius: 8px; }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -361,7 +367,34 @@
                         <div id="review-write-area"></div>
                         <div id="reviews-list">${reviewsHtml}</div>
                     </div>
+
+                    <div class="reviews-section band-reviews" id="band-reviews" style="display:none;">
+                        <h2>📣 창고털이 밴드 후기 <span id="band-reviews-count" style="font-size:0.6em; color:var(--text-gray); font-weight:400;"></span></h2>
+                        <p class="band-reviews-note">창고털이 밴드 회원분들이 남긴 후기입니다. WITH+ 구매인증 리뷰·별점과는 별개이며, 작성자 이름은 가려서 보여드립니다.</p>
+                        <div id="band-reviews-list"></div>
+                    </div>
                 `;
+                loadBandReviews(p.id);
+
+                // 📣 창고털이 밴드 후기 — 관리자가 승인한 것만 서버가 내려준다
+                async function loadBandReviews(productId) {
+                    try {
+                        const res = await fetch('/api/products/' + encodeURIComponent(productId) + '/band-reviews?limit=10');
+                        const json = await res.json();
+                        const list = (json && json.success && json.data) || [];
+                        if (!list.length) return;
+                        document.getElementById('band-reviews-count').textContent = '(' + (json.total || list.length) + ')';
+                        document.getElementById('band-reviews-list').innerHTML = list.map(r => `
+                            <div class="review-item band-review-item">
+                                <div class="wp-review-author">${WithPlus.escapeHtml(r.author_masked || '밴드 회원')} <span class="band-src">밴드</span></div>
+                                <div class="review-comment band-review-text">${WithPlus.escapeHtml(r.body || '')}</div>
+                                ${(r.stored_photo_urls || []).length ? `<div class="band-review-photos">${r.stored_photo_urls.slice(0, 6).map(u => `<img src="${WithPlus.safeUrlAttr(u)}" alt="밴드 후기 사진" loading="lazy">`).join('')}</div>` : ''}
+                                <div class="review-date">${WithPlus.escapeHtml(r.posted_label || '')}</div>
+                            </div>`).join('');
+                        document.querySelectorAll('.band-review-text').forEach(el => el.addEventListener('click', () => el.classList.toggle('open')));
+                        document.getElementById('band-reviews').style.display = '';
+                    } catch (e) { /* 밴드 후기는 부가 정보 — 실패해도 상품 화면은 그대로 */ }
+                }
 
                 // 이미지 갤러리: 썸네일 클릭 시 메인 이미지 전환, 메인 이미지 클릭 시 확대(라이트박스)
                 const mainImageEl = document.getElementById('main-image');
