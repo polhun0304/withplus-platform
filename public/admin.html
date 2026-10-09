@@ -302,6 +302,33 @@
         .photo-opt small { color: var(--text-gray); font-weight: 400; }
         .photo-describe-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 8px; }
         .photo-describe-row .photo-opt { margin: 0; }
+        /* 📣 밴드 후기 */
+        .band-card { border: 1px solid var(--border-color); border-radius: 12px; padding: 14px; margin-bottom: 12px; background: #fff; }
+        .band-card.approved { border-color: #A5D6A7; }
+        .band-card.hidden { opacity: .7; }
+        .band-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 0.88em; margin-bottom: 8px; }
+        .band-head a { color: var(--primary-color); font-weight: 700; text-decoration: none; }
+        .band-date { color: var(--text-gray); }
+        .band-head .band-kind { margin-left: auto; padding: 3px 6px; font-size: 0.95em; width: auto; }
+        .band-badge { font-size: 0.82em; border-radius: 6px; padding: 2px 7px; background: #F1F1F4; }
+        .band-badge.leader { background: #E3F2FD; color: #1565C0; }
+        .band-badge.st-approved { background: #E8F5E9; color: #2E7D32; }
+        .band-badge.st-hidden { background: #EEE; color: #666; }
+        .band-badge.warn { background: #FFF3E0; color: #E65100; font-weight: 700; }
+        .band-body { white-space: pre-wrap; font-size: 0.92em; line-height: 1.6; max-height: 6.4em; overflow: hidden; cursor: pointer; position: relative; }
+        .band-body.open { max-height: none; }
+        .band-photos { display: flex; gap: 6px; margin: 10px 0; flex-wrap: wrap; align-items: center; }
+        .band-photos img { width: 72px; height: 72px; object-fit: cover; border-radius: 8px; background: #F4F4F6; }
+        .band-more { font-size: 0.85em; color: var(--text-gray); }
+        .band-link { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+        .band-link label { font-size: 0.85em; font-weight: 700; margin: 0; }
+        .band-link .band-product { flex: 1; min-width: 220px; }
+        .band-cands { display: flex; gap: 6px; flex-wrap: wrap; font-size: 0.82em; color: var(--text-gray); align-items: center; }
+        .band-cand { border: 1px dashed var(--primary-color); background: #FFF5F8; color: var(--primary-color); border-radius: 6px; padding: 3px 8px; cursor: pointer; font-size: 1em; }
+        .band-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+        .band-msg { font-size: 0.85em; color: var(--text-gray); }
+        .band-msg.error { color: #C62828; } .band-msg.ok { color: #2E7D32; }
+        .band-pager { display: flex; gap: 12px; align-items: center; justify-content: center; margin: 16px 0; font-size: 0.9em; }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -1691,6 +1718,7 @@
                     ${isAdmin ? '<button class="tab-btn" data-tab="boards">📝 게시판 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="returns">↩️ 취소/반품/교환 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="reviews">⭐ 리뷰 관리</button>' : ''}
+                    ${isAdmin ? '<button class="tab-btn" data-tab="band">📣 밴드 후기</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="import">📥 상품 가져오기</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="modules">🧩 기능 모듈</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="settings">⚙️ 설정</button>' : ''}
@@ -2044,6 +2072,19 @@
                         </div>
                     </div>
                     <div id="reviews-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                </div>
+                <div class="tab-panel" id="tab-band">
+                    <p style="color:var(--text-gray); font-size:0.88em; margin-bottom:10px;">창고털이 밴드에서 옮겨온 글입니다. 후기마다 <b>연결할 상품</b>을 확인하고 <b>✅ 승인</b>한 것만 상품 화면의 "창고털이 밴드 후기"에 보입니다(작성자 이름은 가려서 표시, WITH+ 구매 후기·별점과는 따로 표시). <b>⚠ 효능 표현</b>이 있는 후기는 건강식품 광고 규정에 걸릴 수 있으니 내용을 꼭 확인해주세요. 글을 누르면 전체 내용이 펼쳐집니다.</p>
+                    <div id="band-counts" style="font-size:0.85em; margin-bottom:10px;"></div>
+                    <div class="panel-toolbar" id="band-filters" style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                        <select data-f="status"><option value="pending" selected>승인 대기</option><option value="approved">승인됨</option><option value="hidden">숨김</option><option value="">전체 상태</option></select>
+                        <select data-f="kind"><option value="review" selected>후기</option><option value="notice">공지</option><option value="general">일반</option><option value="">전체 종류</option></select>
+                        <select data-f="linked"><option value="">연결 전체</option><option value="yes">상품 연결됨</option><option value="no">연결 안 됨</option></select>
+                        <select data-f="health"><option value="">효능 표현 전체</option><option value="yes">⚠ 효능 표현만</option></select>
+                        <input type="search" id="band-search" placeholder="내용 검색 후 Enter" style="min-width:180px;">
+                    </div>
+                    <datalist id="band-product-list"></datalist>
+                    <div id="band-list-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                 </div>
                 <div class="tab-panel" id="tab-import">
                     <div id="import-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
@@ -9055,6 +9096,105 @@
                         document.getElementById('reviews-table-area').dataset.loaded = '1';
                         loadReviewsAdmin();
                     }
+                });
+
+                // ===== 📣 밴드 후기 (창고털이 밴드에서 옮겨온 글 → 상품 연결 → 승인한 것만 상품 화면에 공개) =====
+                const bandState = { status: 'pending', kind: 'review', linked: '', health: '', q: '', page: 1, products: null };
+                const bandKindLabel = { review: '후기', notice: '공지', general: '일반' };
+                async function loadBandProducts() {
+                    if (bandState.products) return bandState.products;
+                    const { ok, json } = await authedFetch('/api/admin/products');
+                    bandState.products = ok && json.success ? (json.data || []).map(p => ({ id: p.id, name: p.name })) : [];
+                    const dl = document.getElementById('band-product-list');
+                    dl.innerHTML = bandState.products.map(p => `<option value="${WithPlus.escapeHtml(p.name)}"></option>`).join('');
+                    return bandState.products;
+                }
+                function bandProductIdByName(name) {
+                    const p = (bandState.products || []).find(x => x.name === name.trim());
+                    return p ? p.id : null;
+                }
+                async function loadBandPosts() {
+                    const area = document.getElementById('band-list-area');
+                    area.innerHTML = `<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>`;
+                    try {
+                        await loadBandProducts();
+                        const qs = new URLSearchParams({ page: bandState.page, size: 30 });
+                        ['status', 'kind', 'linked', 'health', 'q'].forEach(k => { if (bandState[k]) qs.set(k, bandState[k]); });
+                        const { ok, json } = await authedFetch('/api/admin/band-posts?' + qs.toString());
+                        if (!ok || !json.success) throw new Error(json.message || '밴드 글을 불러오지 못했습니다');
+                        const c = json.counts;
+                        document.getElementById('band-counts').textContent = c
+                            ? `전체 ${c.total}개 · 후기 ${c.review} · 공지 ${c.notice} · 일반 ${c.general} | 승인 대기 ${c.pending} · 승인 ${c.approved} · 숨김 ${c.hidden} | 상품 연결 ${c.linked} · ⚠ 효능 표현 ${c.health}`
+                            : '';
+                        const rows = json.data || [];
+                        if (!rows.length) { area.innerHTML = `<div class="state-box"><div class="emoji">📣</div><h3>해당 조건의 밴드 글이 없습니다</h3></div>`; return; }
+                        const pages = Math.max(1, Math.ceil(json.total / json.size));
+                        area.innerHTML = rows.map(r => {
+                            const photos = (r.stored_photo_urls && r.stored_photo_urls.length ? r.stored_photo_urls : r.photo_urls || []).slice(0, 6);
+                            const cands = Array.isArray(r.match_candidates) ? r.match_candidates : [];
+                            const curName = r.products_with ? r.products_with.name : '';
+                            return `
+                            <div class="band-card ${r.status}" data-no="${r.post_no}">
+                                <div class="band-head">
+                                    <a href="https://band.us/band/91659398/post/${r.post_no}" target="_blank" rel="noopener">#${r.post_no}</a>
+                                    <b>${WithPlus.escapeHtml(r.author_masked || '-')}</b>${r.is_leader ? ' <span class="band-badge leader">운영자</span>' : ''}
+                                    <span class="band-date">${WithPlus.escapeHtml(r.posted_label || '')}</span>
+                                    <span class="band-badge st-${r.status}">${{ pending: '승인 대기', approved: '승인됨', hidden: '숨김' }[r.status]}</span>
+                                    ${r.has_health_claim ? '<span class="band-badge warn" title="질병·효능 표현이 있어 건강식품 광고 규정에 걸릴 수 있습니다. 내용을 확인하고 승인해주세요.">⚠ 효능 표현</span>' : ''}
+                                    <select class="band-kind">${Object.entries(bandKindLabel).map(([k, v]) => `<option value="${k}" ${r.kind === k ? 'selected' : ''}>${v}</option>`).join('')}</select>
+                                </div>
+                                <div class="band-body">${WithPlus.escapeHtml(r.body || '')}</div>
+                                ${photos.length ? `<div class="band-photos">${photos.map(u => `<img src="${WithPlus.safeUrlAttr(u)}" referrerpolicy="no-referrer" loading="lazy" alt="">`).join('')}${r.media_count > photos.length ? `<span class="band-more">+${r.media_count - photos.length}</span>` : ''}</div>` : ''}
+                                <div class="band-link">
+                                    <label>연결 상품</label>
+                                    <input class="band-product" list="band-product-list" placeholder="상품명을 입력해 고르세요" value="${WithPlus.escapeHtml(curName)}">
+                                    ${cands.length ? `<span class="band-cands">추천: ${cands.slice(0, 3).map(cd => `<button type="button" class="band-cand" data-name="${WithPlus.escapeHtml(cd.name)}">${WithPlus.escapeHtml(cd.name)}</button>`).join('')}</span>` : ''}
+                                </div>
+                                <div class="band-actions">
+                                    <button type="button" class="btn btn-primary btn-sm band-act" data-status="approved">✅ 승인(공개)</button>
+                                    <button type="button" class="btn btn-secondary btn-sm band-act" data-status="hidden">🙈 숨김</button>
+                                    ${r.status !== 'pending' ? '<button type="button" class="btn btn-secondary btn-sm band-act" data-status="pending">↩ 대기로</button>' : ''}
+                                    <button type="button" class="btn btn-secondary btn-sm band-act" data-status="">💾 연결만 저장</button>
+                                    <span class="band-msg"></span>
+                                </div>
+                            </div>`;
+                        }).join('') + `
+                            <div class="band-pager">
+                                <button type="button" class="btn btn-secondary btn-sm" id="band-prev" ${bandState.page <= 1 ? 'disabled' : ''}>◀ 이전</button>
+                                <span>${bandState.page} / ${pages} 쪽 (${json.total}개)</span>
+                                <button type="button" class="btn btn-secondary btn-sm" id="band-next" ${bandState.page >= pages ? 'disabled' : ''}>다음 ▶</button>
+                            </div>`;
+                        const prev = document.getElementById('band-prev'), next = document.getElementById('band-next');
+                        if (prev) prev.addEventListener('click', () => { bandState.page--; loadBandPosts(); });
+                        if (next) next.addEventListener('click', () => { bandState.page++; loadBandPosts(); });
+                        area.querySelectorAll('.band-cand').forEach(b => b.addEventListener('click', () => { b.closest('.band-card').querySelector('.band-product').value = b.dataset.name; }));
+                        area.querySelectorAll('.band-body').forEach(b => b.addEventListener('click', () => b.classList.toggle('open')));
+                        area.querySelectorAll('.band-act').forEach(btn => btn.addEventListener('click', async () => {
+                            const card = btn.closest('.band-card');
+                            const msg = card.querySelector('.band-msg');
+                            const name = card.querySelector('.band-product').value.trim();
+                            const productId = name ? bandProductIdByName(name) : null;
+                            if (name && !productId) { msg.textContent = '목록에 있는 상품명을 골라주세요'; msg.className = 'band-msg error'; return; }
+                            const body = { product_id: productId, kind: card.querySelector('.band-kind').value };
+                            if (btn.dataset.status) body.status = btn.dataset.status;
+                            if (body.status === 'approved' && card.querySelector('.band-badge.warn') && !confirm('⚠ 이 후기에는 질병·효능 표현이 있습니다. 건강식품 상품이라면 광고 규정 위반이 될 수 있어요. 내용을 확인하셨고 공개해도 될까요?')) return;
+                            card.querySelectorAll('.band-act').forEach(b => b.disabled = true);
+                            msg.textContent = body.status === 'approved' ? '사진 복사·승인 중...' : '저장 중...'; msg.className = 'band-msg';
+                            const { ok, json } = await authedFetch('/api/admin/band-posts/' + card.dataset.no, { method: 'PATCH', body: JSON.stringify(body) });
+                            card.querySelectorAll('.band-act').forEach(b => b.disabled = false);
+                            if (!ok) { msg.textContent = json.message || '저장에 실패했습니다'; msg.className = 'band-msg error'; return; }
+                            msg.textContent = '✓ 저장됨'; msg.className = 'band-msg ok';
+                            if (body.status && body.status !== bandState.status && bandState.status) card.style.opacity = '.45';
+                        }));
+                    } catch (err) {
+                        area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>목록을 불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                    }
+                }
+                document.querySelectorAll('#band-filters [data-f]').forEach(el => el.addEventListener('change', () => { bandState[el.dataset.f] = el.value; bandState.page = 1; loadBandPosts(); }));
+                document.getElementById('band-search').addEventListener('keydown', (e) => { if (e.key === 'Enter') { bandState.q = e.target.value.trim(); bandState.page = 1; loadBandPosts(); } });
+                document.querySelector('[data-tab="band"]').addEventListener('click', () => {
+                    const a = document.getElementById('band-list-area');
+                    if (!a.dataset.loaded) { a.dataset.loaded = '1'; loadBandPosts(); }
                 });
 
                 // ===== 설정: 마일리지 적립율 (관리자가 언제든 동적으로 변경) =====

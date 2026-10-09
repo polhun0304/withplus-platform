@@ -10417,6 +10417,122 @@ async function attachReviewerNames(reviews) {
 }
 
 // ============================================
+// 📣 창고털이 밴드 후기 연동
+// - 밴드에서 옮겨온 글은 band_posts_with에 '승인 대기'로 들어온다(작성자 이름은 가린 채로만 저장).
+// - 관리자가 후기마다 연결할 상품을 확인하고 승인해야만 상품 화면 "창고털이 밴드 후기"에 보인다.
+// - WITH+ 구매 후기·별점과는 섞지 않는다(구매인증이 아닌 외부 후기이므로 따로 표시).
+// - 승인할 때 밴드 사진을 우리 저장소(product-images/withplus/band/…)로 복사해, 밴드 링크가 끊겨도 사진이 남게 한다.
+// ============================================
+const BAND_PHOTO_HOST = /^https:\/\/[a-z0-9.-]+\.pstatic\.net\//i;
+
+async function copyBandPhotosToStorage(postNo, urls) {
+  const stored = [];
+  for (const [i, url] of (urls || []).slice(0, 10).entries()) {
+    if (!BAND_PHOTO_HOST.test(url)) continue; // 밴드(네이버) 사진 주소만 복사
+    try {
+      const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      if (!resp.ok) continue;
+      const buf = Buffer.from(await resp.arrayBuffer());
+      if (buf.length > 10 * 1024 * 1024) continue;
+      const type = detectImageType(buf);
+      if (!type) continue;
+      const objectPath = `${UPLOAD_PLATFORM}/band/${postNo}/${i + 1}.${type.ext}`;
+      const { error } = await supabase.storage.from(PRODUCT_IMAGE_BUCKET).upload(objectPath, buf, { contentType: type.mime, cacheControl: '31536000', upsert: true });
+      if (error) { console.error('band photo upload failed', postNo, error.message); continue; }
+      stored.push(supabase.storage.from(PRODUCT_IMAGE_BUCKET).getPublicUrl(objectPath).data.publicUrl);
+    } catch (e) {
+      console.error('band photo copy failed', postNo, e.message);
+    }
+  }
+  return stored;
+}
+
+// 관리자: 밴드 글 목록 (상태·종류·검색어·연결 여부로 거르기)
+app.get('/api/admin/band-posts', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const size = Math.min(100, Math.max(10, parseInt(req.query.size, 10) || 30));
+    let q = supabase.from('band_posts_with')
+      .select('post_no, author_masked, is_leader, kind, posted_label, posted_at, body, tags, photo_urls, stored_photo_urls, media_count, has_health_claim, product_id, match_score, match_candidates, status, approved_at, products_with(name)', { count: 'exact' })
+      .order('post_no', { ascending: false })
+      .range((page - 1) * size, page * size - 1);
+    if (['pending', 'approved', 'hidden'].includes(req.query.status)) q = q.eq('status', req.query.status);
+    if (['review', 'notice', 'general'].includes(req.query.kind)) q = q.eq('kind', req.query.kind);
+    if (req.query.linked === 'yes') q = q.not('product_id', 'is', null);
+    if (req.query.linked === 'no') q = q.is('product_id', null);
+    if (req.query.health === 'yes') q = q.eq('has_health_claim', true);
+    const term = String(req.query.q || '').trim().slice(0, 50).replace(/[%,()]/g, ' ');
+    if (term) q = q.ilike('body', `%${term}%`);
+    const { data, error, count } = await q;
+    if (error) throw error;
+    const { data: counts } = await supabase.rpc('band_posts_with_counts').then(r => r, () => ({ data: null }));
+    res.json({ success: true, data, total: count || 0, page, size, counts: counts || null, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error listing band posts:', err);
+    res.status(500).json({ error: 'Failed to list band posts', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 밴드 글 연결 상품 변경 / 승인 / 숨김 / 대기로 되돌리기
+app.patch('/api/admin/band-posts/:no', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const postNo = parseInt(req.params.no, 10);
+    if (!Number.isInteger(postNo) || postNo <= 0) return res.status(400).json({ error: 'Bad Request', message: '잘못된 글 번호입니다', timestamp: new Date().toISOString() });
+    const { data: post, error: getErr } = await supabase.from('band_posts_with').select('post_no, kind, photo_urls, stored_photo_urls, product_id').eq('post_no', postNo).maybeSingle();
+    if (getErr) throw getErr;
+    if (!post) return res.status(404).json({ error: 'Not Found', message: '밴드 글을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const patch = { updated_at: new Date().toISOString() };
+    if ('product_id' in req.body) {
+      const pid = req.body.product_id || null;
+      if (pid && !/^[0-9a-f-]{36}$/i.test(pid)) return res.status(400).json({ error: 'Bad Request', message: '잘못된 상품입니다', timestamp: new Date().toISOString() });
+      patch.product_id = pid;
+    }
+    if ('kind' in req.body && ['review', 'notice', 'general'].includes(req.body.kind)) patch.kind = req.body.kind;
+    if ('status' in req.body) {
+      const status = req.body.status;
+      if (!['pending', 'approved', 'hidden'].includes(status)) return res.status(400).json({ error: 'Bad Request', message: '잘못된 상태입니다', timestamp: new Date().toISOString() });
+      patch.status = status;
+      if (status === 'approved') {
+        const productId = 'product_id' in patch ? patch.product_id : post.product_id;
+        const kind = patch.kind || post.kind;
+        if (kind === 'review' && !productId) return res.status(400).json({ error: 'Bad Request', message: '후기를 승인하려면 먼저 연결할 상품을 골라주세요', timestamp: new Date().toISOString() });
+        patch.approved_at = new Date().toISOString();
+        if (!(post.stored_photo_urls || []).length && (post.photo_urls || []).length) {
+          patch.stored_photo_urls = await copyBandPhotosToStorage(postNo, post.photo_urls);
+        }
+      }
+    }
+    const { data, error } = await supabase.from('band_posts_with').update(patch).eq('post_no', postNo).select('post_no, status, product_id, kind, stored_photo_urls, products_with(name)').single();
+    if (error) throw error;
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating band post:', err);
+    res.status(500).json({ error: 'Failed to update band post', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공개: 상품 화면용 — 관리자가 승인한 밴드 후기만, 가린 이름으로
+app.get('/api/products/:id/band-reviews', async (req, res) => {
+  try {
+    const id = String(req.params.id || '');
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return res.json({ success: true, data: [], timestamp: new Date().toISOString() });
+    const limit = Math.min(30, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    const { data, error, count } = await supabase.from('band_posts_with')
+      .select('post_no, author_masked, posted_label, posted_at, body, stored_photo_urls', { count: 'exact' })
+      .eq('product_id', id).eq('status', 'approved').eq('kind', 'review')
+      .order('posted_at', { ascending: false, nullsFirst: false })
+      .limit(limit);
+    if (error) throw error;
+    res.set('Cache-Control', 'public, max-age=120');
+    res.json({ success: true, data: data || [], total: count || 0, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error loading band reviews:', err);
+    res.status(500).json({ error: 'Failed to load band reviews', message: '밴드 후기를 불러오지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
 // 리뷰 API
 // ============================================
 
