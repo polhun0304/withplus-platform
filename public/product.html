@@ -214,6 +214,48 @@
             .ss-info-table th { width: 100px; }
             .ss-actions .ss-wish { flex: 0 0 52px; }
         }
+        /* 🛍️ 계속 쇼핑하기 */
+        .ss-more { margin-top: 50px; border-top: 8px solid #F4F4F6; padding-top: 10px; }
+        .ssm-block { padding: 28px 0 6px; }
+        .ssm-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 14px; }
+        .ssm-head h2 { font-size: 1.25em; margin: 0; }
+        .ssm-link { color: #777; text-decoration: none; font-size: .9em; }
+        .ssm-link:hover { color: var(--primary-color); }
+        .ssm-row { display: flex; gap: 14px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 8px; scrollbar-width: thin; }
+        .ssm-row .product-card { flex: 0 0 180px; scroll-snap-align: start; }
+        .ssm-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 18px 14px; }
+        .ss-more .product-card { position: relative; background: #fff; border-radius: 12px; overflow: hidden; transition: transform .15s; display: flex; flex-direction: column; }
+        .ss-more .product-info { flex: 1; display: flex; flex-direction: column; }
+        .ss-more .add-to-cart-btn { margin-top: auto !important; }
+        .ss-more .product-meta { margin-bottom: 8px; }
+        .ss-more .product-card:hover { transform: translateY(-3px); }
+        .ss-more .product-image { position: relative; aspect-ratio: 1 / 1; background: #F7F7F9 center / cover no-repeat; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 2.4em; overflow: hidden; }
+        .ss-more .mileage-badge { position: absolute; left: 8px; top: 8px; display: flex; gap: 3px; font-size: 10.5px; font-weight: 700; }
+        .ss-more .mileage-badge span { background: rgba(255,255,255,.92); color: var(--primary-color); border-radius: 6px; padding: 2px 5px; }
+        .ss-more .product-actions { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 6px; }
+        .ss-more .action-btn { width: 32px; height: 32px; border-radius: 50%; border: none; background: rgba(255,255,255,.95); box-shadow: 0 2px 6px rgba(0,0,0,.12); cursor: pointer; font-size: 14px; }
+        .ss-more .wp-card-badges { position: absolute; left: 8px; bottom: 8px; display: flex; gap: 4px; flex-wrap: wrap; }
+        .ss-more .wp-card-badge { font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 6px; background: #E8125C; color: #fff; }
+        .ss-more .product-info { padding: 8px 2px 0; }
+        .ss-more .wp-card-catch { font-size: .75em; color: #999; margin: 0 0 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .ss-more .product-name { font-size: .9em; font-weight: 500; line-height: 1.4; margin: 0 0 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .ss-more .product-price { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
+        .ss-more .discount-rate { color: #F0343F; font-weight: 800; }
+        .ss-more .current-price { font-weight: 800; }
+        .ss-more .original-price { color: #aaa; text-decoration: line-through; font-size: .8em; }
+        .ss-more .product-rating-line { font-size: .8em; color: #888; margin-top: 2px; }
+        .ss-more .product-meta { font-size: .75em; color: #999; margin-top: 2px; }
+        .ss-more .add-to-cart-btn { width: 100%; margin-top: 8px; padding: 8px 0; border: 1px solid var(--border-color); background: #fff; border-radius: 8px; font-size: .82em; font-weight: 600; cursor: pointer; }
+        .ss-more .add-to-cart-btn:hover { border-color: var(--primary-color); color: var(--primary-color); }
+        .ssm-cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; }
+        .ssm-cat { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid #F0E3E8; border-radius: 12px; text-decoration: none; color: #333; font-size: .9em; font-weight: 600; background: #FFFAFC; }
+        .ssm-cat:hover { border-color: var(--primary-color); color: var(--primary-color); }
+        .ssm-cat-ico { display: inline-flex; }
+        .ssm-sentinel { height: 1px; }
+        .ssm-load { display: block; margin: 22px auto 0; padding: 13px 36px; border: 1px solid #222; border-radius: 999px; background: #fff; font-weight: 700; cursor: pointer; }
+        .ssm-top { position: fixed; right: 18px; bottom: 96px; z-index: 900; width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--border-color); background: #fff; box-shadow: 0 4px 14px rgba(0,0,0,.15); font-size: 16px; cursor: pointer; opacity: 0; pointer-events: none; transition: opacity .2s; }
+        .ssm-top.on { opacity: 1; pointer-events: auto; }
+        @media (max-width: 768px) { .ssm-row .product-card { flex-basis: 140px; } .ssm-grid { grid-template-columns: repeat(2, 1fr); gap: 14px 10px; } .ssm-top { bottom: 110px; } }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -473,7 +515,20 @@
                         <h2 id="supplier-products-title">🏭 이 공급사의 다른 상품</h2>
                         <div class="fbt-scroll" id="supplier-products-scroll"></div>
                     </div>
+
+                    <!-- 🛍️ 계속 쇼핑하기 — 상세 아래에서 끝나지 않고 다음 상품으로 이어지게 -->
+                    <div class="ss-more" id="ss-more">
+                        <section class="ssm-block" id="ssm-store" hidden><div class="ssm-head"><h2>🏪 WITH+ 인기 상품</h2><a href="/" class="ssm-link">스토어 홈 ›</a></div><div class="ssm-row" id="ssm-store-row"></div></section>
+                        <section class="ssm-block" id="ssm-cat" hidden><div class="ssm-head"><h2 id="ssm-cat-title">🔍 같은 카테고리 상품</h2><a href="#" class="ssm-link" id="ssm-cat-link">전체보기 ›</a></div><div class="ssm-row" id="ssm-cat-row"></div></section>
+                        <section class="ssm-block" id="ssm-recent" hidden><div class="ssm-head"><h2>👀 최근 본 상품</h2></div><div class="ssm-row" id="ssm-recent-row"></div></section>
+                        <section class="ssm-block" id="ssm-cats" hidden><div class="ssm-head"><h2>🧭 다른 카테고리도 둘러보세요</h2></div><div class="ssm-cats" id="ssm-cats-row"></div></section>
+                        <section class="ssm-block" id="ssm-feed" hidden><div class="ssm-head"><h2>✨ 이런 상품은 어때요?</h2></div><div class="ssm-grid" id="ssm-feed-grid"></div>
+                            <div class="ssm-sentinel" id="ssm-sentinel"></div>
+                            <button type="button" class="ssm-load" id="ssm-load">상품 더 보기 ⌄</button>
+                        </section>
+                    </div>
                 `;
+                initContinueShopping(p);
                 initSmartstoreLayout(p, images, Number(currentPrice), sections);
                 loadBandReviews(p.id);
 
@@ -660,6 +715,73 @@
                         const fabs = document.querySelectorAll('.wp-le-fab');
                         if (fabs.length > 1) fabs[1].style.bottom = '134px';
                     })();
+                }
+
+                // ============================================
+                // 🛍️ 계속 쇼핑하기 — 인기·같은 카테고리·최근 본 상품 + 스크롤하면 계속 이어지는 추천 상품
+                // ============================================
+                async function initContinueShopping(cur) {
+                    let all = [];
+                    try {
+                        const { ok, json } = await WithPlus.fetchJSON(WithPlus.withCommunityParam ? WithPlus.withCommunityParam('/api/products') : '/api/products');
+                        if (ok && json.success) all = (json.data || []).filter(x => x.id !== cur.id);
+                    } catch (e) { return; }
+                    if (!all.length) return;
+                    const inStock = all.filter(x => Number(x.stock) > 0);
+                    // 사진이 있는 상품을 먼저 보여준다(사진 없는 상품은 뒤로)
+                    const hasImg = (x) => Array.isArray(x.images_urls) && x.images_urls.length > 0 ? 0 : 1;
+                    const pool = (inStock.length ? inStock : all).slice().sort((a, b) => hasImg(a) - hasImg(b));
+                    const card = (x) => WithPlus.renderProductCard(x);
+                    const fill = (secId, rowId, list) => { if (!list.length) return; document.getElementById(rowId).innerHTML = list.map(card).join(''); document.getElementById(secId).hidden = false; };
+                    let scores = {};
+                    try { scores = await WithPlus.getRankingScores(); } catch (e) { /* 순위 정보 없이도 동작 */ }
+                    const popular = (WithPlus.sortProductsBy ? WithPlus.sortProductsBy(pool.slice(), 'popular', scores) : pool.slice()).sort((a, b) => hasImg(a) - hasImg(b));
+                    fill('ssm-store', 'ssm-store-row', popular.slice(0, 12));
+                    const sameCat = popular.filter(x => x.category === cur.category);
+                    if (sameCat.length) {
+                        const catInfo = (WithPlus.getCategoriesRawCached ? WithPlus.getCategoriesRawCached() : []).find(c => c.db_category === cur.category || c.slug === cur.category);
+                        if (catInfo) { document.getElementById('ssm-cat-title').textContent = `🔍 ${catInfo.label} 카테고리 상품`; document.getElementById('ssm-cat-link').href = '/category/' + catInfo.slug; }
+                        else document.getElementById('ssm-cat-link').hidden = true;
+                        fill('ssm-cat', 'ssm-cat-row', sameCat.slice(0, 12));
+                    }
+                    const byId = {}; all.forEach(x => { byId[x.id] = x; });
+                    fill('ssm-recent', 'ssm-recent-row', (WithPlus.getRecentlyViewed() || []).map(id => byId[id]).filter(Boolean).slice(0, 12));
+                    const cats = (WithPlus.getCategoriesRawCached ? WithPlus.getCategoriesRawCached() : []).filter(c => !c.parent_id);
+                    if (cats.length) {
+                        document.getElementById('ssm-cats-row').innerHTML = cats.map(c => `<a class="ssm-cat" href="/category/${encodeURIComponent(c.slug)}"><span class="ssm-cat-ico">${WithPlus.getCategory3DIcon ? WithPlus.getCategory3DIcon(c, 34) : WithPlus.escapeHtml(c.emoji || '🛍️')}</span><span>${WithPlus.escapeHtml(c.label)}</span></a>`).join('');
+                        document.getElementById('ssm-cats').hidden = false;
+                    }
+                    // 끝없이 이어지는 추천: 이 상품과 같은 카테고리·인기 상품을 앞쪽에, 나머지는 섞어서 12개씩
+                    const seed = String(cur.id).split('').reduce((a, ch) => (a * 31 + ch.charCodeAt(0)) >>> 0, 7);
+                    let r = seed; const rand = () => (r = (r * 1103515245 + 12345) >>> 0) / 4294967296;
+                    const shuffled = pool.slice().map(x => ({ x, k: rand() + hasImg(x) * 2 - (x.category === cur.category ? 0.35 : 0) - Math.min(0.3, ((scores[x.id] && scores[x.id].popular) || 0) / 1000) })).sort((a, b) => a.k - b.k).map(o => o.x);
+                    const grid = document.getElementById('ssm-feed-grid');
+                    const loadBtn = document.getElementById('ssm-load');
+                    let shown = 0;
+                    const more = () => {
+                        const next = shuffled.slice(shown, shown + 12);
+                        if (!next.length) { loadBtn.hidden = true; return; }
+                        grid.insertAdjacentHTML('beforeend', next.map(card).join(''));
+                        shown += next.length;
+                        if (shown >= shuffled.length) { loadBtn.hidden = true; observer && observer.disconnect(); }
+                        if (WithPlus.syncWishlistHearts) WithPlus.syncWishlistHearts();
+                    };
+                    let observer = null;
+                    if ('IntersectionObserver' in window) {
+                        observer = new IntersectionObserver((ents) => { if (ents.some(e => e.isIntersecting)) more(); }, { rootMargin: '600px 0px' });
+                        observer.observe(document.getElementById('ssm-sentinel'));
+                    }
+                    loadBtn.addEventListener('click', more);
+                    document.getElementById('ssm-feed').hidden = false;
+                    more();
+                    if (WithPlus.attachProductCardInteractions) WithPlus.attachProductCardInteractions();
+                    if (WithPlus.syncWishlistHearts) WithPlus.syncWishlistHearts();
+                    // 맨 위로 버튼
+                    const top = document.createElement('button');
+                    top.type = 'button'; top.className = 'ssm-top'; top.setAttribute('aria-label', '맨 위로'); top.textContent = '▲';
+                    top.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+                    document.body.appendChild(top);
+                    window.addEventListener('scroll', () => { top.classList.toggle('on', window.scrollY > 900); }, { passive: true });
                 }
 
                 // 📣 창고털이 밴드 후기 — 관리자가 승인한 것만 서버가 내려준다
