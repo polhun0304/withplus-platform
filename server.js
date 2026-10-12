@@ -10464,14 +10464,16 @@ app.put('/api/admin/layout', authenticate, requireRole(['admin', 'super_admin'])
 // - WITH+ 구매 후기·별점과는 섞지 않는다(구매인증이 아닌 외부 후기이므로 따로 표시).
 // - 승인할 때 밴드 사진을 우리 저장소(product-images/withplus/band/…)로 복사해, 밴드 링크가 끊겨도 사진이 남게 한다.
 // ============================================
-const BAND_PHOTO_HOST = /^https:\/\/[a-z0-9.-]+\.pstatic\.net\//i;
+const BAND_PHOTO_HOST = /^https:\/\/[a-z0-9.-]+\.(pstatic\.net|phinf\.naver\.net)\//i;
 
 async function copyBandPhotosToStorage(postNo, urls) {
   const stored = [];
-  for (const [i, url] of (urls || []).slice(0, 10).entries()) {
+  for (const [i, rawUrl] of (urls || []).slice(0, 4).entries()) {
+    const url = String(rawUrl || '').replace(/^http:\/\//, 'https://');
     if (!BAND_PHOTO_HOST.test(url)) continue; // 밴드(네이버) 사진 주소만 복사
     try {
-      const resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
+      let resp = await fetch(url + (url.includes('?') ? '' : '?type=w640'), { signal: AbortSignal.timeout(15000) }); // 640px 축소본 우선
+      if (!resp.ok) resp = await fetch(url, { signal: AbortSignal.timeout(15000) });
       if (!resp.ok) continue;
       const buf = Buffer.from(await resp.arrayBuffer());
       if (buf.length > 10 * 1024 * 1024) continue;
@@ -10487,6 +10489,247 @@ async function copyBandPhotosToStorage(postNo, urls) {
   }
   return stored;
 }
+
+// ============================================
+// 🔄 창고털이 밴드 자동 동기화 (밴드 공식 Open API) — WITH+ 전용
+// - 10분마다 최신 글을 확인해 새 글은 넣고, 고친 글은 고치고, 지운 글은 숨긴다. 매일 새벽 4시 30분 전체 점검.
+// - 새 후기는 바로 공개(관리자 설정 "새 후기 자동 공개"), 공지·일반 글은 승인 대기로 들어온다.
+// - 접근 토큰은 서버(platform_settings)에만 저장하고 화면에는 가린 값만 보여준다.
+// ============================================
+const BAND_SYNC_KEY = 'band_sync_config';
+const BAND_API = 'https://openapi.band.us';
+let bandSyncRunning = false;
+
+async function getBandSyncConfig() {
+  const { data } = await supabase.from('platform_settings').select('value').eq('key', BAND_SYNC_KEY).maybeSingle();
+  return Object.assign({ enabled: false, auto_approve: true, access_token: '', band_key: '', band_name: '' }, (data && data.value) || {});
+}
+async function saveBandSyncConfig(cfg) {
+  const { error } = await supabase.from('platform_settings').upsert({ key: BAND_SYNC_KEY, value: cfg }, { onConflict: 'key' });
+  if (error) throw error;
+}
+async function bandApi(path, params) {
+  const qs = new URLSearchParams(Object.assign({ locale: 'ko_KR' }, params));
+  const resp = await fetch(`${BAND_API}${path}?${qs}`, { signal: AbortSignal.timeout(20000) });
+  const json = await resp.json().catch(() => null);
+  if (!resp.ok || !json || json.result_code !== 1) {
+    const msg = (json && json.result_data && (json.result_data.message || json.result_data.error)) || `HTTP ${resp.status}`;
+    throw new Error('밴드 API 오류: ' + msg);
+  }
+  return json.result_data;
+}
+function bandMask(name) {
+  const chars = Array.from(String(name || '').replace(/\s+/g, ' ').trim());
+  if (!chars.length) return '밴드 회원';
+  if (chars.length <= 2) return chars[0] + '*';
+  return chars[0] + '*'.repeat(Math.min(chars.length - 2, 4)) + chars[chars.length - 1];
+}
+function bandCleanContent(html) {
+  return String(html || '')
+    .replace(/<band:refer[^>]*>[\s\S]*?<\/band:refer>/g, '@회원') // 다른 회원 이름 소환은 가린다
+    .replace(/<band:hashtag>([\s\S]*?)<\/band:hashtag>/g, '$1')
+    .replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+    .replace(/\r/g, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+const BAND_HEALTH = /(치료|완치|낫|나았|개선|호전|효과|효능|좋아졌|좋아지|감소|빠졌|빠지|붓기|부기|비염|염증|당뇨|혈압|혈당|콜레스테롤|다이어트|체지방|살이\s*빠|잇몸|치주|면역|통증|관절|변비|숙면|불면|피로\s*회복|간\s*수치|아토피|탈모|기미|주름|미백|여드름)/;
+function bandKind(isLeader, body, tags) {
+  if (isLeader) return 'notice';
+  return (tags.some(t => /후기/.test(t)) || /후기/.test(body.slice(0, 80))) ? 'review' : 'general';
+}
+function bandNorm(s) {
+  return String(s || '').toLowerCase()
+    .replace(/\d+(\.\d+)?\s*(ml|l|g|kg|mg|매|개입|개|입|포|정|캡슐|박스|box|팩|병|ea|세트|p|매입)\b/gi, ' ')
+    .replace(/[\[\]()（）{}<>【】「」★☆♥♡◆■●▶·•,.!?~"'`/\\|:;+*=_#%&^-]/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+}
+const BAND_STOP = new Set(['세트', '기획', '대용량', '특가', '증정', '무료배송', '정품', '신상', '국내산', '1+1', '2+1', '총', '구성', '선택', '옵션', '단독', '한정', '리뉴얼', '프리미엄']);
+async function buildBandMatcher() {
+  const products = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await supabase.from('products_with').select('id, name, brand, status').neq('status', 'discontinued').range(from, from + 999);
+    if (error) throw error;
+    products.push(...data);
+    if (data.length < 1000) break;
+  }
+  const ptoks = products.map(p => ({ p, toks: [...new Set((bandNorm(p.name) + ' ' + bandNorm(p.brand)).split(' ').filter(t => t.length >= 2 && !BAND_STOP.has(t) && !/^\d+$/.test(t)))] }));
+  const df = {};
+  ptoks.forEach(({ toks }) => toks.forEach(t => { df[t] = (df[t] || 0) + 1; }));
+  const N = ptoks.length;
+  return (text) => {
+    const flat = bandNorm(text).replace(/\s+/g, '');
+    if (!flat) return [];
+    const out = [];
+    for (const { p, toks } of ptoks) {
+      let hit = 0, all = 0, rare = 0;
+      for (const t of toks) { const w = Math.log((N + 1) / (df[t] + 0.5)); all += w; if (flat.includes(t)) { hit += w; if (w >= 3) rare++; } }
+      if (!hit || !rare || !all) continue;
+      const cov = hit / all;
+      if (cov >= 0.34) out.push({ id: p.id, name: p.name, score: Math.round(cov * Math.min(1, hit / 6) * 1000) / 1000 });
+    }
+    return out.sort((a, b) => b.score - a.score).slice(0, 3);
+  };
+}
+function bandHash(s) { return require('crypto').createHash('sha1').update(String(s)).digest('hex').slice(0, 16); }
+
+// full=true: 모든 페이지를 훑고 사라진 글을 숨김 / false: 최근 몇 페이지만
+async function runBandSync({ full = false, reason = 'cron' } = {}) {
+  if (bandSyncRunning) return { skipped: true, message: '이미 동기화 중입니다' };
+  const cfg = await getBandSyncConfig();
+  if (!cfg.enabled || !cfg.access_token || !cfg.band_key) return { skipped: true, message: '자동 동기화가 꺼져 있거나 토큰/밴드가 설정되지 않았습니다' };
+  bandSyncRunning = true;
+  const started = Date.now();
+  const stat = { fetched: 0, inserted: 0, updated: 0, matched: 0, hidden: 0, photos: 0 };
+  try {
+    const match = await buildBandMatcher();
+    const items = [];
+    let params = { access_token: cfg.access_token, band_key: cfg.band_key, limit: 20 };
+    const maxPages = full ? 400 : 3;
+    for (let page = 0; page < maxPages; page++) {
+      const rd = await bandApi('/v2/band/posts', params);
+      items.push(...(rd.items || []));
+      const next = rd.paging && rd.paging.next_params;
+      if (!next || !(rd.items || []).length) break;
+      params = Object.assign({}, next, { access_token: cfg.access_token });
+    }
+    stat.fetched = items.length;
+    if (!items.length) throw new Error('밴드에서 글을 받아오지 못했습니다');
+    const oldest = Math.min(...items.map(i => Number(i.created_at)));
+    const seenKeys = new Set();
+    for (const it of items) {
+      const key = String(it.post_key || '');
+      if (!key) continue;
+      seenKeys.add(key);
+      const body = bandCleanContent(it.content);
+      const tags = body.match(/#[^\s#]+/g) || [];
+      const authorName = (it.author && it.author.name) || '';
+      const isLeader = (it.author && /leader/i.test(it.author.role || '')) || /^창고털이/.test(authorName);
+      const kind = bandKind(isLeader, body, tags);
+      const photos = (it.photos || []).filter(ph => !ph.is_video_thumbnail && ph.url).map(ph => String(ph.url).replace(/^http:\/\//, 'https://'));
+      const postedAt = new Date(Number(it.created_at)).toISOString();
+      const h = bandHash(body + '|' + photos.join(','));
+      let { data: row } = await supabase.from('band_posts_with').select('post_no, status, body_hash, kind, product_id, stored_photo_urls').eq('post_key', key).maybeSingle();
+      if (!row) {
+        // 예전에 화면에서 모아 둔 같은 글(작성 시각 ±2분 + 본문 앞부분 일치)이 있으면 그 글에 연결
+        const from = new Date(Number(it.created_at) - 120000).toISOString(), to = new Date(Number(it.created_at) + 120000).toISOString();
+        const { data: cands } = await supabase.from('band_posts_with').select('post_no, status, body, body_hash, kind, product_id, stored_photo_urls').is('post_key', null).gte('posted_at', from).lte('posted_at', to).limit(10);
+        const head = (s) => String(s || '').replace(/\s+/g, '').slice(0, 30);
+        let found = (cands || []).find(c => head(c.body) === head(body)) || ((cands || []).length === 1 ? cands[0] : null);
+        if (!found && head(body)) {
+          // 최근 글은 "17시간 전"처럼 대략적인 시각으로 저장돼 있어 범위를 넓혀 본문 앞부분으로 한 번 더 찾는다
+          const wf = new Date(Number(it.created_at) - 36 * 3600000).toISOString(), wt = new Date(Number(it.created_at) + 36 * 3600000).toISOString();
+          const { data: wide } = await supabase.from('band_posts_with').select('post_no, body').is('post_key', null).gte('posted_at', wf).lte('posted_at', wt).limit(200);
+          found = (wide || []).find(c => head(c.body) === head(body)) || null;
+        }
+        if (found) {
+          await supabase.from('band_posts_with').update({ post_key: key, source: 'api', body_hash: h, updated_at: new Date().toISOString() }).eq('post_no', found.post_no);
+          stat.matched++;
+          continue; // 이미 들어 있는 글 — 내용은 그대로 둔다(관리자가 손댄 연결·상태 보존)
+        }
+        const cands2 = kind === 'review' ? match(body) : [];
+        const top = cands2[0];
+        const confident = top && top.score >= 0.75 && (!cands2[1] || cands2[1].score < top.score * 0.6);
+        const approve = kind === 'review' && cfg.auto_approve !== false;
+        const { data: ins, error } = await supabase.from('band_posts_with').insert({
+          post_key: key, source: 'api', author_masked: isLeader ? '창고털이' : bandMask(authorName), is_leader: !!isLeader, kind,
+          posted_label: new Date(Number(it.created_at)).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }), posted_at: postedAt,
+          body, tags, photo_urls: photos, media_count: (it.photos || []).length, has_health_claim: kind !== 'notice' && BAND_HEALTH.test(body),
+          product_id: confident ? top.id : null, match_score: top ? top.score : null, match_candidates: cands2,
+          status: approve ? 'approved' : 'pending', approved_at: approve ? new Date().toISOString() : null, body_hash: h
+        }).select('post_no').single();
+        if (error) { console.error('band sync insert', key, error.message); continue; }
+        stat.inserted++;
+        if (approve && photos.length) {
+          const stored = await copyBandPhotosToStorage(ins.post_no, photos);
+          stat.photos += stored.length;
+          await supabase.from('band_posts_with').update({ stored_photo_urls: stored }).eq('post_no', ins.post_no);
+        }
+        continue;
+      }
+      if (row.body_hash !== h) {
+        // 밴드에서 글을 고쳤다 → 본문·사진 갱신 (상태·상품 연결은 그대로)
+        const patch = { body, tags, photo_urls: photos, media_count: (it.photos || []).length, has_health_claim: row.kind !== 'notice' && BAND_HEALTH.test(body), body_hash: h, deleted_at: null, updated_at: new Date().toISOString() };
+        if (row.status === 'approved' && photos.length) { patch.stored_photo_urls = await copyBandPhotosToStorage(row.post_no, photos); stat.photos += patch.stored_photo_urls.length; }
+        await supabase.from('band_posts_with').update(patch).eq('post_no', row.post_no);
+        stat.updated++;
+      }
+    }
+    // 밴드에서 지운 글 → 숨김 (이번에 훑은 기간 안에서 안 보이는 글만)
+    const windowFrom = full ? '1970-01-01T00:00:00Z' : new Date(oldest).toISOString();
+    const { data: inWindow } = await supabase.from('band_posts_with').select('post_no, post_key').not('post_key', 'is', null).is('deleted_at', null).gte('posted_at', windowFrom);
+    const gone = (inWindow || []).filter(r => !seenKeys.has(r.post_key)).map(r => r.post_no);
+    const { count: liveCount } = await supabase.from('band_posts_with').select('*', { count: 'exact', head: true }).is('deleted_at', null);
+    if (full && items.length >= (liveCount || 0) * 0.8) {
+      // 전체 점검 때는 끝내 연결되지 않은(밴드에 이미 없는) 옛 글도 숨긴다 — 밴드에서 대부분을 제대로 받아왔을 때만
+      const { data: orphan } = await supabase.from('band_posts_with').select('post_no').is('post_key', null).is('deleted_at', null);
+      (orphan || []).forEach(r => gone.push(r.post_no));
+    }
+    for (let i = 0; i < gone.length; i += 200) {
+      const chunk = gone.slice(i, i + 200);
+      await supabase.from('band_posts_with').update({ status: 'hidden', deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() }).in('post_no', chunk);
+    }
+    stat.hidden = gone.length;
+    const result = { ok: true, full, reason, ...stat, ms: Date.now() - started, at: new Date().toISOString() };
+    await saveBandSyncConfig(Object.assign(await getBandSyncConfig(), { last_sync: result }));
+    return result;
+  } catch (err) {
+    const result = { ok: false, full, reason, message: err.message, at: new Date().toISOString(), ...stat };
+    try { await saveBandSyncConfig(Object.assign(await getBandSyncConfig(), { last_sync: result })); } catch (e) { /* 무시 */ }
+    console.error('Band sync failed:', err.message);
+    return result;
+  } finally {
+    bandSyncRunning = false;
+  }
+}
+cron.schedule('*/10 * * * *', () => { runBandSync({ full: false, reason: 'cron' }).catch(e => console.error('band sync cron', e)); });
+cron.schedule('30 4 * * *', () => { runBandSync({ full: true, reason: 'daily-full' }).catch(e => console.error('band sync full cron', e)); }, { timezone: 'Asia/Seoul' });
+
+function maskToken(t) { const s = String(t || ''); return s ? s.slice(0, 4) + '••••••' + s.slice(-4) : ''; }
+// 관리자: 동기화 설정·상태 보기 (토큰은 가려서)
+app.get('/api/admin/band-sync', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const cfg = await getBandSyncConfig();
+    res.json({ success: true, data: { enabled: !!cfg.enabled, auto_approve: cfg.auto_approve !== false, band_key: cfg.band_key, band_name: cfg.band_name, token_set: !!cfg.access_token, token_masked: maskToken(cfg.access_token), last_sync: cfg.last_sync || null, running: bandSyncRunning }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+// 관리자: 토큰·밴드·켜기/끄기 저장. 토큰을 새로 넣으면 그 토큰으로 볼 수 있는 밴드 목록을 함께 돌려준다.
+app.put('/api/admin/band-sync', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const cfg = await getBandSyncConfig();
+    const b = req.body || {};
+    if (typeof b.access_token === 'string' && b.access_token.trim()) cfg.access_token = b.access_token.trim().slice(0, 500);
+    if (typeof b.band_key === 'string') cfg.band_key = b.band_key.trim().slice(0, 100);
+    if (typeof b.band_name === 'string') cfg.band_name = b.band_name.trim().slice(0, 100);
+    if (typeof b.enabled === 'boolean') cfg.enabled = b.enabled;
+    if (typeof b.auto_approve === 'boolean') cfg.auto_approve = b.auto_approve;
+    let bands = null;
+    if (cfg.access_token) {
+      try { bands = ((await bandApi('/v2.1/bands', { access_token: cfg.access_token })).bands || []).map(x => ({ band_key: x.band_key, name: x.name, member_count: x.member_count })); }
+      catch (e) { return res.status(400).json({ error: 'Bad Request', message: '토큰으로 밴드 목록을 불러오지 못했습니다. 토큰을 다시 확인해주세요. (' + e.message + ')', timestamp: new Date().toISOString() }); }
+    }
+    if (cfg.enabled && (!cfg.access_token || !cfg.band_key)) return res.status(400).json({ error: 'Bad Request', message: '자동 동기화를 켜려면 토큰과 밴드를 먼저 정해주세요', timestamp: new Date().toISOString() });
+    await saveBandSyncConfig(cfg);
+    res.json({ success: true, data: { enabled: cfg.enabled, auto_approve: cfg.auto_approve !== false, band_key: cfg.band_key, band_name: cfg.band_name, token_masked: maskToken(cfg.access_token), bands }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+// 관리자: 지금 바로 동기화 (full=1 이면 전체 점검)
+app.post('/api/admin/band-sync/run', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const cfg = await getBandSyncConfig();
+    if (!cfg.access_token || !cfg.band_key) return res.status(400).json({ error: 'Bad Request', message: '먼저 토큰과 밴드를 설정해주세요', timestamp: new Date().toISOString() });
+    const wasEnabled = cfg.enabled;
+    if (!wasEnabled) { cfg.enabled = true; await saveBandSyncConfig(cfg); }
+    const result = await runBandSync({ full: !!(req.body && req.body.full), reason: 'manual' });
+    if (!wasEnabled) { const c2 = await getBandSyncConfig(); c2.enabled = false; await saveBandSyncConfig(c2); }
+    res.json({ success: !!result.ok, data: result, message: result.ok ? undefined : (result.message || '동기화 실패'), timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
 
 // 관리자: 밴드 글 목록 (상태·종류·검색어·연결 여부로 거르기)
 app.get('/api/admin/band-posts', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
