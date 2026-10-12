@@ -330,6 +330,8 @@
         .band-msg { font-size: 0.85em; color: var(--text-gray); }
         .band-msg.error { color: #C62828; } .band-msg.ok { color: #2E7D32; }
         .band-pager { display: flex; gap: 12px; align-items: center; justify-content: center; margin: 16px 0; font-size: 0.9em; }
+        .section-bulk-drop { margin-top: 8px; background: #FFFAFC; }
+        .section-bulk-drop small { color: var(--text-gray); }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -388,6 +390,12 @@
                 <div class="field">
                     <label>상세페이지 이미지+설명 블록 (사진/설명이 여러 장인 경우 아래에 필요한 만큼 추가하세요)</label>
                     <div id="pf-detail-sections"></div>
+                    <div class="img-drop section-bulk-drop" id="pf-section-bulk" tabindex="0">
+                        <span class="img-drop-icon">📚</span>
+                        <span>상세 사진 <b>여러 장(최대 30장)을 한꺼번에 끌어다 놓거나</b> <button type="button" class="btn btn-secondary" id="pf-section-bulk-pick">📁 여러 장 파일 추가</button><br><small>사진 1장마다 블록이 1개씩 순서대로 만들어집니다 (파일 이름 순 · Ctrl+V 붙여넣기 가능)</small></span>
+                        <input type="file" id="pf-section-bulk-file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden>
+                    </div>
+                    <div class="img-status" id="pf-section-bulk-status"></div>
                     <button type="button" class="btn btn-secondary" id="pf-add-section" style="margin-top:6px;">+ 블록 추가</button>
                 </div>
                 <div class="field" style="background:#FAFAFA; border:1px dashed var(--border-color); border-radius:8px; padding:12px;">
@@ -3177,6 +3185,8 @@
                 async function addFiles(fileList) {
                     const files = Array.from(fileList || []).filter(f => f && f.type && f.type.startsWith('image/'));
                     if (!files.length) return;
+                    // 사진 1장짜리(블록) 칸에 여러 장을 놓으면 → 여러 장 한꺼번에 올리기로 넘겨 블록을 자동으로 만든다
+                    if (!multiple && files.length > 1 && opts.onMany) { opts.onMany(files); return; }
                     const list = multiple ? files : files.slice(0, 1);
                     pending += list.length; render(); setStatus(`사진 ${list.length}장 올리는 중...`);
                     const errors = [];
@@ -3220,7 +3230,8 @@
                 return {
                     setUrls(list) { urls = (list || []).filter(Boolean); pending = 0; setStatus(''); render(); },
                     getUrls() { return urls.slice(); },
-                    isBusy() { return pending > 0; }
+                    isBusy() { return pending > 0; },
+                    addFiles(files) { return addFiles(files); }
                 };
             }
 
@@ -3242,8 +3253,9 @@
                     if (!holder || holder.dataset.mounted) return;
                     holder.dataset.mounted = '1';
                     const hidden = row.querySelector('.section-image-input');
-                    const mgr = createImageManager(holder, { multiple: false, kind: 'detail', onChange: (list) => { hidden.value = list[0] || ''; if (list.length) scheduleAutoDescribe(); } });
+                    const mgr = createImageManager(holder, { multiple: false, kind: 'detail', onMany: (files) => addSectionPhotosBulk(files), onChange: (list) => { hidden.value = list[0] || ''; if (list.length) scheduleAutoDescribe(); } });
                     mgr.setUrls(hidden.value ? [hidden.value] : []);
+                    holder.__mgr = mgr;
                 });
             }
 
@@ -3288,6 +3300,58 @@
                     });
                 });
             });
+
+            // 📚 상세 사진 여러 장 한꺼번에 → 사진마다 블록 자동 생성(빈 블록이 있으면 먼저 채움), 한 장씩 차례로 업로드
+            let sectionBulkBusy = false;
+            async function addSectionPhotosBulk(fileList) {
+                const status = document.getElementById('pf-section-bulk-status');
+                const MAX = 30;
+                let files = Array.from(fileList || []).filter(f => f && f.type && f.type.startsWith('image/'));
+                if (!files.length) return;
+                if (sectionBulkBusy) { status.textContent = '앞의 사진을 올리는 중입니다. 끝난 뒤 다시 놓아주세요.'; status.className = 'img-status error'; return; }
+                files.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko', { numeric: true }));
+                const skipped = Math.max(0, files.length - MAX);
+                files = files.slice(0, MAX);
+                sectionBulkBusy = true;
+                // 사진이 없는 빈 블록부터 쓰고, 모자라면 새 블록을 만든다
+                const emptyRows = Array.from(sectionsArea.querySelectorAll('.detail-section-row')).filter(r => !r.querySelector('.section-image-input').value && !r.querySelector('.section-text-input').value.trim() && !r.querySelector('.img-thumb.loading'));
+                const targets = [];
+                for (let i = 0; i < files.length; i++) {
+                    let row = emptyRows[i];
+                    if (!row) {
+                        document.getElementById('pf-add-section').click();
+                        const rows = sectionsArea.querySelectorAll('.detail-section-row');
+                        row = rows[rows.length - 1];
+                    }
+                    targets.push(row);
+                }
+                let done = 0;
+                for (let i = 0; i < files.length; i++) {
+                    status.textContent = `📚 상세 사진 ${i + 1}/${files.length}장 올리는 중...`; status.className = 'img-status';
+                    const holder = targets[i].querySelector('.section-img-mgr');
+                    if (holder && holder.__mgr) { await holder.__mgr.addFiles([files[i]]); if (targets[i].querySelector('.section-image-input').value) done++; }
+                }
+                sectionBulkBusy = false;
+                const failed = files.length - done;
+                status.textContent = `✅ 상세 사진 ${done}장으로 블록을 만들었습니다` + (failed ? ` · 실패 ${failed}장(해당 블록에 이유 표시)` : '') + (skipped ? ` · 한 번에 ${MAX}장까지라 ${skipped}장은 빠졌어요` : '');
+                status.className = 'img-status' + (failed ? ' error' : '');
+            }
+            (function initSectionBulk() {
+                const zone = document.getElementById('pf-section-bulk');
+                const input = document.getElementById('pf-section-bulk-file');
+                document.getElementById('pf-section-bulk-pick').addEventListener('click', () => input.click());
+                input.addEventListener('change', () => { const f = Array.from(input.files || []); input.value = ''; addSectionPhotosBulk(f); });
+                ['dragenter', 'dragover'].forEach(ev => zone.addEventListener(ev, (e) => { if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); zone.classList.add('drag'); } }));
+                ['dragleave', 'drop'].forEach(ev => zone.addEventListener(ev, () => zone.classList.remove('drag')));
+                zone.addEventListener('drop', (e) => { if (e.dataTransfer && e.dataTransfer.files.length) { e.preventDefault(); addSectionPhotosBulk(e.dataTransfer.files); } });
+                zone.addEventListener('paste', (e) => { const f = Array.from((e.clipboardData && e.clipboardData.files) || []); if (f.length) { e.preventDefault(); addSectionPhotosBulk(f); } });
+                // 블록 목록 위(블록 사이)에 여러 장을 놓아도 똑같이 처리 — 블록 하나의 사진칸에 놓은 건 그 블록만
+                sectionsArea.addEventListener('dragover', (e) => { if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) e.preventDefault(); });
+                sectionsArea.addEventListener('drop', (e) => {
+                    if (e.defaultPrevented || !e.dataTransfer || !e.dataTransfer.files.length) return;
+                    e.preventDefault(); addSectionPhotosBulk(e.dataTransfer.files);
+                });
+            })();
 
             function collectDetailSections() {
                 return Array.from(sectionsArea.querySelectorAll('.detail-section-row')).map(row => ({
@@ -3551,7 +3615,7 @@
             pfForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 pfMsg.className = 'msg';
-                if (pfImageMgr.isBusy() || document.querySelector('#pf-detail-sections .img-thumb.loading')) {
+                if (pfImageMgr.isBusy() || sectionBulkBusy || document.querySelector('#pf-detail-sections .img-thumb.loading')) {
                     pfMsg.textContent = '사진을 올리는 중입니다. 업로드가 끝난 뒤 저장해주세요.';
                     pfMsg.className = 'msg error';
                     return;

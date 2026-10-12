@@ -4446,7 +4446,7 @@ app.post('/api/admin/ai-product-description-from-images', authenticate, requireR
     const isHttpsUrl = (u) => typeof u === 'string' && /^https:\/\/[^\s"'<>]+$/i.test(u.trim()) && u.length <= 2000;
     const mainImages = (Array.isArray(req.body.image_urls) ? req.body.image_urls : []).filter(isHttpsUrl).map(u => u.trim()).slice(0, 5);
     // 블록 사진은 순서(블록 번호)를 지켜야 하므로 빈 칸도 그대로 두고 받는다
-    const sectionImages = (Array.isArray(req.body.section_image_urls) ? req.body.section_image_urls : []).slice(0, 10).map(u => isHttpsUrl(u) ? u.trim() : '');
+    const sectionImages = (Array.isArray(req.body.section_image_urls) ? req.body.section_image_urls : []).slice(0, 30).map(u => isHttpsUrl(u) ? u.trim() : '');
     const name = String(req.body.name || '').trim().slice(0, 200);
     const category = String(req.body.category || '').trim().slice(0, 100);
     const notes = String(req.body.notes || '').trim().slice(0, 1000);
