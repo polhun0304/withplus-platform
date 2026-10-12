@@ -1111,6 +1111,14 @@
     const zoom = Math.min(4, Math.max(1, Number(s && s.zoom) || 1));
     const x = Math.min(100, Math.max(0, s && s.x != null ? Number(s.x) : 50));
     const y = Math.min(100, Math.max(0, s && s.y != null ? Number(s.y) : 50));
+    if (img.tagName !== 'IMG') { // 배경 사진(div)
+      img.style.backgroundSize = (s && s.fit) === 'contain' ? 'contain' : 'cover';
+      img.style.backgroundRepeat = 'no-repeat';
+      img.style.backgroundPosition = `${x}% ${y}%`;
+      img.style.transformOrigin = `${x}% ${y}%`;
+      img.style.transform = zoom !== 1 ? `scale(${zoom})` : '';
+      return;
+    }
     img.style.objectFit = (s && s.fit) || 'cover';
     img.style.objectPosition = `${x}% ${y}%`;
     img.style.transformOrigin = `${x}% ${y}%`;
