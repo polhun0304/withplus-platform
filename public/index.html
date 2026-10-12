@@ -1453,6 +1453,11 @@
         .lp-feed .lp-time { color: #9A9A9A; font-size: 12px; white-space: nowrap; }
         .lp-stats { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: linear-gradient(135deg, #FFF0F4, #FFE6EE); font-size: 13px; font-weight: 700; color: #C2185B; }
         @media (max-width: 860px) { .live-pulse { grid-template-columns: 1fr; margin: 16px 12px; } .lp-rv { flex-basis: 112px; } .lp-rv-img { width: 112px; height: 112px; } }
+        /* 🛠 특가 배너 사진 칸 — 관리자가 저장한 크기·위치(--deal-*) 적용 */
+        .deal-slide { grid-template-columns: 1fr minmax(140px, var(--deal-col, 38%)) !important; }
+        .deal-img { aspect-ratio: var(--deal-ar, 1) !important; border-radius: var(--deal-radius, 18px) !important; overflow: hidden; position: relative; transform: translate(var(--deal-dx, 0px), var(--deal-dy, 0px)); }
+        .deal-img .deal-pic { width: 100%; height: 100%; display: block; object-fit: cover; }
+        @media (max-width: 768px) { .deal-slide { grid-template-columns: 1fr minmax(120px, calc(var(--deal-col, 38%) + 4%)) !important; } }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -2047,7 +2052,7 @@
                             <div class="deal-price"><span class="now">${WithPlus.formatPrice(p.discount_price)}</span><span class="was">${WithPlus.formatPrice(p.price)}</span></div>
                             <span class="deal-cta">특가 상품 보러가기 ›</span>
                         </div>
-                        <div class="deal-img" ${img ? `style="background-image:url('${WithPlus.safeUrlAttr(img)}')"` : ''}>${img ? '' : '🎁'}</div>
+                        <div class="deal-img" data-pid="${WithPlus.escapeHtml(String(p.id))}">${img ? `<img class="deal-pic" src="${WithPlus.safeUrlAttr(img)}" alt="${WithPlus.escapeHtml(p.name)}" loading="lazy">` : '🎁'}</div>
                     </a>`;
                 }).join(''));
 
@@ -2070,10 +2075,87 @@
                 ['pointerdown', 'touchstart', 'mouseenter'].forEach(ev => track.addEventListener(ev, () => { paused = true; }, { passive: true }));
                 ['pointerup', 'touchend', 'mouseleave'].forEach(ev => track.addEventListener(ev, () => { setTimeout(() => { paused = false; }, 3000); }, { passive: true }));
                 setInterval(() => {
-                    if (paused || document.hidden) return;
+                    if (paused || document.hidden || window.__wpLayoutEditing) return;
                     const next = (index + 1) % slides.length;
                     track.scrollTo({ left: next * track.clientWidth, behavior: 'smooth' });
                 }, 4000);
+                applyBannerLayout();
+            }
+
+            // ============================================
+            // 🛠 오늘의 특가 배너 — 오른쪽 사진 칸의 크기·위치와 상품별 사진 확대·위치 (관리자가 저장한 값 적용)
+            // ============================================
+            const BANNER_DEFAULTS = { col: 38, ar: 1, dx: 0, dy: 0, radius: 18, zoom: 1, x: 50, y: 50, fit: 'cover' };
+            let bannerLayout = { box: {}, items: {} };
+            function applyBannerLayout() {
+                const hero = document.getElementById('hero-slider');
+                if (!hero) return;
+                const b = Object.assign({}, BANNER_DEFAULTS, bannerLayout.box || {});
+                hero.style.setProperty('--deal-col', b.col + '%');
+                hero.style.setProperty('--deal-ar', String(1 / (Number(b.ar) || 1)));
+                hero.style.setProperty('--deal-dx', b.dx + 'px');
+                hero.style.setProperty('--deal-dy', b.dy + 'px');
+                hero.style.setProperty('--deal-radius', b.radius + 'px');
+                hero.querySelectorAll('.deal-img[data-pid]').forEach(box => {
+                    WithPlus.applyPhotoState(box.querySelector('img'), Object.assign({}, BANNER_DEFAULTS, (bannerLayout.items || {})[box.dataset.pid] || {}));
+                });
+            }
+            async function initBannerLayout() {
+                const v = await WithPlus.getLayout('home_banner');
+                bannerLayout = { box: (v && v.box) || {}, items: (v && v.items) || {} };
+                applyBannerLayout();
+                WithPlus.addLayoutEditButton('🛠 배너 사진 편집', () => {
+                    const track = document.getElementById('hero-track');
+                    const slides = Array.from(track.querySelectorAll('.hero-slide'));
+                    let idx = Math.round(track.scrollLeft / track.clientWidth);
+                    if (!slides[idx] || !slides[idx].classList.contains('deal-slide')) {
+                        idx = slides.findIndex(s => s.classList.contains('deal-slide'));
+                        if (idx < 0) { alert('편집할 특가 배너가 없습니다'); return; }
+                        track.scrollTo({ left: idx * track.clientWidth });
+                    }
+                    const slide = slides[idx];
+                    const box = slide.querySelector('.deal-img');
+                    const pid = box.dataset.pid;
+                    window.__wpLayoutEditing = true;
+                    const state = Object.assign({}, BANNER_DEFAULTS, bannerLayout.box, (bannerLayout.items || {})[pid] || {});
+                    const pick = (s) => ({ box: { col: s.col, ar: s.ar, dx: s.dx, dy: s.dy, radius: s.radius }, item: { zoom: s.zoom, x: s.x, y: s.y, fit: s.fit } });
+                    WithPlus.openLayoutEditor({
+                        title: '오늘의 특가 배너 사진',
+                        hint: '칸 크기·위치는 모든 배너 공통, 사진 확대·위치·맞춤은 이 상품만 · ◀ ▶ 로 다른 배너',
+                        state, defaults: Object.assign({}, BANNER_DEFAULTS),
+                        fields: [
+                            { key: 'col', label: '사진 칸 너비', min: 20, max: 60, step: 1, unit: '%' },
+                            { key: 'ar', label: '사진 칸 세로 비율', min: 0.5, max: 1.6, step: 0.01, unit: '배' },
+                            { key: 'dx', label: '칸 좌우 위치', min: -300, max: 300, step: 1, unit: 'px' },
+                            { key: 'dy', label: '칸 위아래 위치', min: -200, max: 200, step: 1, unit: 'px' },
+                            { key: 'radius', label: '모서리 둥글기', min: 0, max: 60, step: 1, unit: 'px' },
+                            { key: 'zoom', label: '사진 확대', min: 1, max: 4, step: 0.01, unit: '배' },
+                            { key: 'x', label: '사진 좌우', min: 0, max: 100, step: 1, unit: '%' },
+                            { key: 'y', label: '사진 위아래', min: 0, max: 100, step: 1, unit: '%' },
+                            { key: 'fit', label: '사진 맞춤', type: 'select', options: [['cover', '칸 꽉 채우기'], ['contain', '사진 전체 보이기']] }
+                        ],
+                        onChange: (s) => { const p = pick(s); bannerLayout.box = p.box; bannerLayout.items = Object.assign({}, bannerLayout.items, { [pid]: p.item }); applyBannerLayout(); },
+                        onSave: (s) => { const p = pick(s); return WithPlus.saveLayout('home_banner', { box: p.box, items: Object.assign({}, bannerLayout.items, { [pid]: p.item }) }); },
+                        extraButtons: '<button type="button" class="wp-le-prev">◀ 이전 배너</button><button type="button" class="wp-le-next">다음 배너 ▶</button>',
+                        onBar: (bar) => {
+                            const go = (step) => {
+                                const deals = slides.filter(s => s.classList.contains('deal-slide'));
+                                const cur = deals.indexOf(slide);
+                                const next = deals[(cur + step + deals.length) % deals.length];
+                                WithPlus.closeLayoutEditor();
+                                track.scrollTo({ left: slides.indexOf(next) * track.clientWidth });
+                                setTimeout(() => document.querySelector('.wp-le-fab') && document.querySelector('.wp-le-fab').click(), 450);
+                            };
+                            bar.querySelector('.wp-le-prev').addEventListener('click', () => go(-1));
+                            bar.querySelector('.wp-le-next').addEventListener('click', () => go(1));
+                        },
+                        drag: {
+                            el: box, pan: ['x', 'y'], zoomKey: 'zoom', resize: ['col', 'ar'], move: ['dx', 'dy'],
+                            toUnits: (dim, delta, rect) => dim === 'w' ? delta / slide.getBoundingClientRect().width * 100 : delta / rect.width
+                        },
+                        onClose: () => { window.__wpLayoutEditing = false; }
+                    });
+                });
             }
 
             // ============================================
@@ -2311,6 +2393,7 @@
                 loadRecentlyViewed(),
                 loadRecentReviews(),
                 loadLivePulse(),
+                initBannerLayout(),
                 loadPlatformStats(),
                 loadMemberStrip().catch(() => { /* 실패 시 기본 안내 문구 유지 */ })
             ]);

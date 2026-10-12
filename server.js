@@ -10417,6 +10417,47 @@ async function attachReviewerNames(reviews) {
 }
 
 // ============================================
+// 🧩 화면 배치(이미지 위치·크기) 설정 — 관리자가 화면에서 마우스로 조절하거나 숫자로 입력한 값을 저장
+// - 홈 오늘의 특가 배너: key=home_banner  /  상품 상세 이미지: key=product:<상품ID>
+// - platform_settings 테이블에 플랫폼별로 따로 저장(WITH+와 LIVE+가 서로의 배치를 덮어쓰지 않게)
+// ============================================
+const LAYOUT_KEY_SUFFIX = UPLOAD_PLATFORM === 'liveplus' ? '_live' : '';
+function layoutSettingsKey(raw) {
+  const k = String(raw || '');
+  if (k === 'home_banner') return 'layout_home_banner' + LAYOUT_KEY_SUFFIX;
+  const m = k.match(/^product:([0-9a-f-]{36})$/i);
+  if (m) return 'layout_product_' + m[1].toLowerCase() + LAYOUT_KEY_SUFFIX;
+  return null;
+}
+app.get('/api/layout', async (req, res) => {
+  try {
+    const key = layoutSettingsKey(req.query.key);
+    if (!key) return res.status(400).json({ error: 'Bad Request', message: '알 수 없는 배치 설정입니다', timestamp: new Date().toISOString() });
+    const { data, error } = await supabase.from('platform_settings').select('value').eq('key', key).maybeSingle();
+    if (error) throw error;
+    res.set('Cache-Control', 'no-cache');
+    res.json({ success: true, data: (data && data.value) || {}, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error reading layout:', err);
+    res.status(500).json({ error: 'Failed to read layout', message: '배치 설정을 불러오지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+app.put('/api/admin/layout', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const key = layoutSettingsKey(req.body && req.body.key);
+    const value = req.body && req.body.value;
+    if (!key || !value || typeof value !== 'object' || Array.isArray(value)) return res.status(400).json({ error: 'Bad Request', message: '저장할 배치 값이 올바르지 않습니다', timestamp: new Date().toISOString() });
+    if (JSON.stringify(value).length > 30000) return res.status(400).json({ error: 'Bad Request', message: '배치 설정이 너무 큽니다', timestamp: new Date().toISOString() });
+    const { error } = await supabase.from('platform_settings').upsert({ key, value }, { onConflict: 'key' });
+    if (error) throw error;
+    res.json({ success: true, data: value, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error saving layout:', err);
+    res.status(500).json({ error: 'Failed to save layout', message: '배치 설정을 저장하지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
 // 📣 창고털이 밴드 후기 연동
 // - 밴드에서 옮겨온 글은 band_posts_with에 '승인 대기'로 들어온다(작성자 이름은 가린 채로만 저장).
 // - 관리자가 후기마다 연결할 상품을 확인하고 승인해야만 상품 화면 "창고털이 밴드 후기"에 보인다.
