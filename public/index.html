@@ -1426,6 +1426,33 @@
         .category-icon svg.wp-cat3d { width: 48px !important; height: 48px !important; filter: drop-shadow(0 4px 3px rgba(150,20,60,.25)); transition: transform .2s; }
         .category-item:hover .category-icon svg.wp-cat3d { transform: rotate(-6deg); }
         @media (max-width: 768px) { .category-icon svg.wp-cat3d { width: 38px !important; height: 38px !important; } }
+        /* 🔴 실시간 후기 + 지금 이 순간 */
+        .live-pulse { max-width: calc(var(--wp-container, 1200px) - 40px); margin: 22px auto; display: grid; grid-template-columns: 1.15fr 1fr; gap: 16px; padding: 0; }
+        .lp-card { background: #fff; border: 1px solid #F3E3E8; border-radius: 18px; padding: 16px 18px; box-shadow: 0 6px 18px rgba(232,18,92,.05); min-width: 0; }
+        .lp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+        .lp-head h2 { font-size: 1.12em; font-weight: 800; margin: 0; }
+        .lp-head h2 b { color: var(--wp-pink, #E8125C); }
+        .lp-more { font-size: .86em; color: #777; text-decoration: none; }
+        .lp-more:hover { color: var(--wp-pink, #E8125C); }
+        .lp-dot { width: 9px; height: 9px; border-radius: 50%; background: #E8125C; box-shadow: 0 0 0 0 rgba(232,18,92,.5); animation: lpPulse 1.6s infinite; }
+        @keyframes lpPulse { 0% { box-shadow: 0 0 0 0 rgba(232,18,92,.5); } 70% { box-shadow: 0 0 0 9px rgba(232,18,92,0); } 100% { box-shadow: 0 0 0 0 rgba(232,18,92,0); } }
+        .lp-review-scroll { display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 6px; scrollbar-width: thin; }
+        .lp-rv { flex: 0 0 132px; scroll-snap-align: start; text-decoration: none; color: inherit; }
+        .lp-rv-img { width: 132px; height: 132px; border-radius: 12px; background: #F6F1F3 center/cover no-repeat; position: relative; }
+        .lp-src { position: absolute; left: 6px; top: 6px; font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 6px; background: rgba(255,255,255,.92); color: #2E7D32; }
+        .lp-src.with { color: #E8125C; }
+        .lp-stars { color: #FFB400; font-size: 12px; margin-top: 6px; letter-spacing: 1px; }
+        .lp-rv-text { font-size: 12.5px; line-height: 1.45; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .lp-rv-who { font-size: 11.5px; color: #8A8A8A; margin-top: 3px; }
+        .lp-feed { list-style: none; margin: 0; padding: 0; }
+        .lp-feed li { display: flex; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px dashed #F2E6EA; font-size: 13.5px; }
+        .lp-feed li:last-child { border-bottom: none; }
+        .lp-ava { width: 30px; height: 30px; border-radius: 50%; flex: 0 0 30px; display: flex; align-items: center; justify-content: center; font-size: 14px; background: #FFF0F4; }
+        .lp-feed .lp-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .lp-feed .lp-msg a { color: inherit; font-weight: 700; text-decoration: none; }
+        .lp-feed .lp-time { color: #9A9A9A; font-size: 12px; white-space: nowrap; }
+        .lp-stats { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: linear-gradient(135deg, #FFF0F4, #FFE6EE); font-size: 13px; font-weight: 700; color: #C2185B; }
+        @media (max-width: 860px) { .live-pulse { grid-template-columns: 1fr; margin: 16px 12px; } .lp-rv { flex-basis: 112px; } .lp-rv-img { width: 112px; height: 112px; } }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -1583,6 +1610,19 @@
     </section>
 
     <!-- 🔥 실시간 랭킹 (실시간 인기 · 구매순 · 오래 본 순 · 노출순 — 서버가 3분마다 자동 계산) -->
+    <!-- 🔴 실시간 후기 + 지금 이 순간 (밴드 후기·구매 후기·실제 주문만 — 이름은 가려서) -->
+    <section class="live-pulse" id="live-pulse" style="display:none;">
+        <div class="lp-card lp-reviews">
+            <div class="lp-head"><h2>💬 실시간 후기</h2><a href="/reviews" class="lp-more">전체보기 ›</a></div>
+            <div class="lp-review-scroll" id="lp-review-scroll"></div>
+        </div>
+        <div class="lp-card lp-now">
+            <div class="lp-head"><h2>지금 이 순간, <b>WITH+</b></h2><span class="lp-dot" aria-hidden="true"></span></div>
+            <ul class="lp-feed" id="lp-feed"></ul>
+            <div class="lp-stats" id="lp-stats"></div>
+        </div>
+    </section>
+
     <section class="products-section wp-ranking" id="ranking-section">
         <div class="section-header">
             <h2 class="section-title">🔥 실시간 랭킹</h2>
@@ -2170,6 +2210,38 @@
             }
 
             // ============================================
+            // 🔴 실시간 후기 + 지금 이 순간 — /api/home/live (실제 데이터만, 이름은 가려서)
+            // ============================================
+            async function loadLivePulse() {
+                const sec = document.getElementById('live-pulse');
+                if (!sec) return;
+                try {
+                    const { ok, json } = await WithPlus.fetchJSON('/api/home/live');
+                    if (!ok || !json.success) return;
+                    const d = json.data || {};
+                    const reviews = d.reviews || [], feed = d.feed || [];
+                    if (!reviews.length && !feed.length) return; // 보여줄 실제 데이터가 없으면 섹션을 숨긴 채로 둔다
+                    const esc = WithPlus.escapeHtml;
+                    document.getElementById('lp-review-scroll').innerHTML = reviews.length ? reviews.map(r => `
+                        <a class="lp-rv" href="${r.product ? '/product/' + encodeURIComponent(r.product.id) : '/reviews'}">
+                            <div class="lp-rv-img" style="${r.photo ? `background-image:url('${WithPlus.safeUrlAttr(r.photo)}')` : ''}"><span class="lp-src ${r.source}">${r.source === 'band' ? '밴드 후기' : '구매 후기'}</span></div>
+                            <div class="lp-stars">${r.rating ? '★'.repeat(r.rating) + '<span style="color:#E6E6E6">' + '★'.repeat(5 - r.rating) + '</span>' : '<span style="color:#2E7D32;letter-spacing:0;">📣 창고털이 밴드</span>'}</div>
+                            <div class="lp-rv-text">${esc(r.text || (r.product ? r.product.name : ''))}</div>
+                            <div class="lp-rv-who">${esc(r.author)}님</div>
+                        </a>`).join('') : '<p style="color:#999;font-size:.9em;">아직 공개된 후기가 없습니다</p>';
+                    const icon = { order: '🛍️', review: '⭐', band_review: '📣' };
+                    const verb = { order: '구매했습니다', review: '후기를 남겼습니다', band_review: '밴드에 후기를 남겼습니다' };
+                    document.getElementById('lp-feed').innerHTML = feed.map(e => {
+                        const prod = e.product_name ? (e.product_id ? `<a href="/product/${encodeURIComponent(e.product_id)}">${esc(e.product_name)}</a>` : `<b>${esc(e.product_name)}</b>`) + (e.extra ? ` 외 ${e.extra}건` : '') + (e.type === 'order' ? '을(를) ' : ' ') : '';
+                        return `<li><span class="lp-ava">${icon[e.type] || '✨'}</span><span class="lp-msg">${esc(e.author)}님이 ${prod}${verb[e.type] || ''}</span><span class="lp-time">${WithPlus.timeAgo(e.at)}</span></li>`;
+                    }).join('');
+                    const s = d.stats || {};
+                    document.getElementById('lp-stats').textContent = `🛒 누적 주문 ${(s.orders || 0).toLocaleString('ko-KR')}건 · ⭐ 구매 후기 ${(s.reviews || 0).toLocaleString('ko-KR')}건 · 📣 밴드 후기 ${(s.bandReviews || 0).toLocaleString('ko-KR')}건`;
+                    sec.style.display = '';
+                } catch (e) { /* 실패하면 섹션을 숨긴 채로 둔다 */ }
+            }
+
+            // ============================================
             // 최근 리뷰: 실제 리뷰 데이터 (작성자는 개인정보 보호로 비공개)
             // ============================================
             async function loadRecentReviews() {
@@ -2238,6 +2310,7 @@
                 loadRecommendedProducts(),
                 loadRecentlyViewed(),
                 loadRecentReviews(),
+                loadLivePulse(),
                 loadPlatformStats(),
                 loadMemberStrip().catch(() => { /* 실패 시 기본 안내 문구 유지 */ })
             ]);

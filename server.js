@@ -12361,6 +12361,106 @@ app.put('/api/community-admin/offering-labels', authenticate, async (req, res) =
 // ============================================
 // 플랫폼 통계 API (홈페이지 실시간 활동 섹션용, 인증 불필요)
 // ============================================
+// ============================================
+// 🔴 홈 "실시간 후기" + "지금 이 순간" — 전부 실제 데이터만 사용(꾸며낸 숫자·이름 없음)
+// - 후기: 관리자가 승인한 밴드 후기 + 공개된 구매 후기(작성자는 가운데를 가린 이름)
+// - 지금 이 순간: 실제 주문(취소 제외)·후기 작성 이벤트를 시간순으로, 이름은 가려서
+// ============================================
+const LIVE_ORDER_STATUSES = ['paid', 'processing', 'shipped', 'delivered'];
+function firstImage(p) { return p && Array.isArray(p.images_urls) && p.images_urls[0] ? p.images_urls[0] : null; }
+function shortText(s, n) { const t = Array.from(String(s || '').replace(/#[^\s#]+/g, ' ').replace(/\s+/g, ' ').trim()); return t.length > n ? t.slice(0, n).join('') + '…' : t.join(''); }
+
+app.get('/api/home/live', async (req, res) => {
+  try {
+    const [bandRes, revRes, ordRes, bandCnt, revCnt, ordCnt] = await Promise.all([
+      supabase.from('band_posts_with').select('post_no, author_masked, body, stored_photo_urls, posted_at, products_with(id, name, images_urls)')
+        .eq('status', 'approved').eq('kind', 'review').order('posted_at', { ascending: false, nullsFirst: false }).limit(12),
+      supabase.from('product_reviews').select('id, rating, comment, created_at, user_id, products_with(id, name, images_urls)')
+        .eq('status', 'published').order('created_at', { ascending: false }).limit(12),
+      supabase.from('orders_with').select('created_at, user_id, items').in('status', LIVE_ORDER_STATUSES).order('created_at', { ascending: false }).limit(8),
+      supabase.from('band_posts_with').select('*', { count: 'exact', head: true }).eq('status', 'approved').eq('kind', 'review'),
+      supabase.from('product_reviews').select('*', { count: 'exact', head: true }).eq('status', 'published'),
+      supabase.from('orders_with').select('*', { count: 'exact', head: true }).in('status', LIVE_ORDER_STATUSES)
+    ]);
+    const band = (bandRes.data || []).map(b => ({
+      source: 'band', author: b.author_masked || '밴드 회원', text: shortText(b.body, 70), rating: null,
+      photo: (b.stored_photo_urls || [])[0] || firstImage(b.products_with),
+      product: b.products_with ? { id: b.products_with.id, name: b.products_with.name } : null, at: b.posted_at
+    }));
+    const named = await attachReviewerNames(revRes.data || []);
+    const withRev = named.map(r => ({
+      source: 'with', author: r.author_name || '구매자', text: shortText(r.comment, 70), rating: r.rating,
+      photo: firstImage(r.products_with),
+      product: r.products_with ? { id: r.products_with.id, name: r.products_with.name } : null, at: r.created_at
+    }));
+    const reviews = [...band, ...withRev].filter(r => r.text || r.photo).sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0)).slice(0, 12);
+
+    // 테스트·판매중지 상품 주문은 빼고, 지금 판매 중인 상품의 실제 주문만 보여준다
+    const orderPids = [...new Set((ordRes.data || []).map(o => (Array.isArray(o.items) && o.items[0] && o.items[0].product_id) || null).filter(Boolean))];
+    const { data: activeRows } = orderPids.length ? await supabase.from('products_with').select('id').in('id', orderPids).eq('status', 'active') : { data: [] };
+    const activeIds = new Set((activeRows || []).map(r => r.id));
+    const orders = await attachReviewerNames((ordRes.data || []).filter(o => Array.isArray(o.items) && o.items[0] && activeIds.has(o.items[0].product_id)));
+    const feed = [
+      ...orders.map(o => {
+        const items = Array.isArray(o.items) ? o.items : [];
+        const first = items[0] || {};
+        return { type: 'order', author: o.author_name || '고객', product_name: first.name || '상품', product_id: first.product_id || null, extra: items.length > 1 ? items.length - 1 : 0, at: o.created_at };
+      }),
+      ...reviews.map(r => ({ type: r.source === 'band' ? 'band_review' : 'review', author: r.author, product_name: r.product ? r.product.name : null, product_id: r.product ? r.product.id : null, at: r.at }))
+    ].filter(e => e.at).sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, 8);
+
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json({
+      success: true,
+      data: { reviews, feed, stats: { bandReviews: bandCnt.count || 0, reviews: revCnt.count || 0, orders: ordCnt.count || 0 } },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error loading home live:', err);
+    res.status(500).json({ error: 'Failed to load live', message: '실시간 정보를 불러오지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+// 전체 후기 모아보기 (/reviews 페이지) — source: all | band | with, photo=1이면 사진 있는 후기만
+app.get('/api/reviews/all', async (req, res) => {
+  try {
+    const source = ['band', 'with'].includes(req.query.source) ? req.query.source : 'all';
+    const photoOnly = req.query.photo === '1';
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const size = Math.min(48, Math.max(6, parseInt(req.query.size, 10) || 24));
+    const need = page * size;
+    let band = [], withRev = [], total = 0;
+    if (source !== 'with') {
+      let q = supabase.from('band_posts_with').select('post_no, author_masked, body, stored_photo_urls, posted_at, posted_label, products_with(id, name, images_urls)', { count: 'exact' })
+        .eq('status', 'approved').eq('kind', 'review').order('posted_at', { ascending: false, nullsFirst: false }).range(0, need - 1);
+      if (photoOnly) q = q.neq('stored_photo_urls', '{}');
+      const { data, error, count } = await q;
+      if (error) throw error;
+      total += count || 0;
+      band = (data || []).map(b => ({ source: 'band', id: 'b' + b.post_no, author: b.author_masked || '밴드 회원', text: String(b.body || '').trim(), rating: null,
+        photos: b.stored_photo_urls || [], product: b.products_with ? { id: b.products_with.id, name: b.products_with.name, image: firstImage(b.products_with) } : null, at: b.posted_at }));
+    }
+    if (source !== 'band' && !photoOnly) {
+      const { data, error, count } = await supabase.from('product_reviews').select('id, rating, comment, created_at, user_id, products_with(id, name, images_urls)', { count: 'exact' })
+        .eq('status', 'published').order('created_at', { ascending: false }).range(0, need - 1);
+      if (error) throw error;
+      total += count || 0;
+      withRev = (await attachReviewerNames(data || [])).map(r => ({ source: 'with', id: 'r' + r.id, author: r.author_name || '구매자', text: String(r.comment || '').trim(), rating: r.rating,
+        photos: [], product: r.products_with ? { id: r.products_with.id, name: r.products_with.name, image: firstImage(r.products_with) } : null, at: r.created_at }));
+    }
+    const merged = [...band, ...withRev].sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json({ success: true, data: merged.slice((page - 1) * size, page * size), total, page, size, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error loading all reviews:', err);
+    res.status(500).json({ error: 'Failed to load reviews', message: '후기를 불러오지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/reviews', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'reviews.html'));
+});
+
 app.get('/api/stats/summary', async (req, res) => {
   try {
     const [{ count: productCount }, { count: reviewCount }, { count: orderCount }, { data: mileageRows }] = await Promise.all([
