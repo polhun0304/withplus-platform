@@ -1420,6 +1420,12 @@
         .wp-ranking .product-image[data-rank="1"]::before, .wp-ranking .product-image[data-rank="2"]::before, .wp-ranking .product-image[data-rank="3"]::before { background: var(--primary-color); }
         .wp-ranking .mileage-badge { top: 36px; }
         @media (max-width: 768px) { .wp-ranking .product-grid { grid-template-rows: auto !important; } }
+        /* 🎨 카테고리 입체 아이콘 — 원형 배경에도 빛·그림자를 줘서 도톰하게 */
+        .category-icon { background: radial-gradient(circle at 35% 28%, #FFFFFF 0, #FFF3F7 42%, #FFE0EA 100%) !important; box-shadow: 0 8px 16px rgba(232,18,92,.13), inset 0 -5px 10px rgba(232,18,92,.08), inset 0 4px 8px #fff; }
+        .category-item:hover .category-icon { transform: translateY(-4px) scale(1.04); box-shadow: 0 12px 22px rgba(232,18,92,.2), inset 0 -5px 10px rgba(232,18,92,.08), inset 0 4px 8px #fff; }
+        .category-icon svg.wp-cat3d { width: 48px !important; height: 48px !important; filter: drop-shadow(0 4px 3px rgba(150,20,60,.25)); transition: transform .2s; }
+        .category-item:hover .category-icon svg.wp-cat3d { transform: rotate(-6deg); }
+        @media (max-width: 768px) { .category-icon svg.wp-cat3d { width: 38px !important; height: 38px !important; } }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">

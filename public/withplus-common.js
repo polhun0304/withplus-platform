@@ -124,6 +124,8 @@
       .wp-nav-item:hover .wp-nav-dropdown { display: block; }
       .wp-nav-dropdown a { display: block; padding: 8px 14px; white-space: nowrap; font-weight: 400; }
       .wp-nav-dropdown a:hover { background: #FAFAFA; }
+      .wp-nav-ico { display: inline-flex; vertical-align: -6px; margin-right: 5px; }
+      .wp-nav-ico svg, .wp-cat-ico svg.wp-cat3d { filter: drop-shadow(0 2px 1.5px rgba(150,20,60,.22)); }
     `;
     document.head.appendChild(style);
   }
@@ -142,10 +144,10 @@
           const info = cachedCategoryMap[c.slug];
           const children = info ? info.children : [];
           if (children.length === 0) {
-            return `<a href="${href}"${active}>${c.emoji} ${escapeHtml(c.label)}</a>`;
+            return `<a href="${href}"${active}><span class="wp-nav-ico">${getCategory3DIcon(c, 24)}</span>${escapeHtml(c.label)}</a>`;
           }
           return `<span class="wp-nav-item">
-              <a href="${href}"${active}>${c.emoji} ${escapeHtml(c.label)}</a>
+              <a href="${href}"${active}><span class="wp-nav-ico">${getCategory3DIcon(c, 24)}</span>${escapeHtml(c.label)}</a>
               <span class="wp-nav-dropdown">${children.map(ch => `<a href="/category/${ch.slug}">${ch.emoji} ${escapeHtml(ch.label)}</a>`).join('')}</span>
             </span>`;
         }).join('');
@@ -159,7 +161,7 @@
         // 홈 카테고리 아이콘 메뉴 — WITH+ 기본틀처럼 원형 배경 위 라인 아이콘으로 보여준다
         gridEl.innerHTML = cats.map(c => `
           <a href="/category/${c.slug}" class="category-item">
-              <div class="category-icon">${getCategoryLineIcon(c)}</div>
+              <div class="category-icon">${getCategory3DIcon(c, 46)}</div>
               <div class="category-name">${escapeHtml(c.label)}</div>
           </a>`).join('');
       }
@@ -997,6 +999,68 @@
     { keys: ['fashion', 'cloth', 'apparel', '패션', '의류'], svg: '<path d="M8.5 3.5L4 6l1.8 4.2 2.2-.9V20.5h8V9.3l2.2.9L20 6l-4.5-2.5a3.5 3.5 0 0 1-7 0z"/>' },
     { keys: ['special', 'event', 'promotion', 'exhibition', '기획', '이벤트', '특가'], svg: '<path d="M3.5 12.5l8-8h7.5a1.5 1.5 0 0 1 1.5 1.5v7.5l-8 8a1.5 1.5 0 0 1-2.1 0L3.5 14.6a1.5 1.5 0 0 1 0-2.1z"/><circle cx="16" cy="8" r="1.4"/><path d="M9.5 15.5l4-4M10 11.8h.01M13.2 15h.01"/>' }
   ];
+  // 🎨 카테고리 입체 아이콘 (홈 카테고리 원형 메뉴 · 상단 메뉴 공용) — 그라데이션·하이라이트·그림자로 입체감.
+  // 같은 화면에 여러 번 그려도 그라데이션이 꼬이지 않게 그릴 때마다 고유 id 접미사를 붙인다.
+  let cat3dSeq = 0;
+  const CATEGORY_3D_ICONS = [
+    { keys: ['diet', '다이어트', '슬림'], svg: (u) => `
+      <defs><linearGradient id="d1${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFB3C7"/><stop offset="1" stop-color="#F0457A"/></linearGradient>
+      <linearGradient id="d2${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFE9A8"/><stop offset="1" stop-color="#F5B83D"/></linearGradient></defs>
+      <path d="M11 5c2.5 7 6 10.5 7.5 15.5-2.8 4.5-6 9-6 14.5V44h23V35c0-5.5-3.2-10-6-14.5C31 15.5 34.5 12 37 5z" fill="url(#d1${u})"/>
+      <path d="M14 7c2 5 4.6 8 6 12" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+      <path d="M24 36v6" stroke="#C92E61" stroke-opacity=".35" stroke-width="1.2" stroke-linecap="round"/>
+      <path d="M15.5 19.5c4 2.2 13 2.2 17 0l1.2 3.4c-4.6 2.6-14.8 2.6-19.4 0z" fill="url(#d2${u})"/>
+      <path d="M18 21.6v1.6M21 22.1v1.8M24 22.3v1.8M27 22.1v1.8M30 21.6v1.6" stroke="#B9801A" stroke-width=".9"/>
+      <path d="M33.7 22.9c2 .6 3.6 2.4 3.3 4.6" stroke="url(#d2${u})" stroke-width="2.4" fill="none" stroke-linecap="round"/>` },
+    { keys: ['beauty', 'cosmetic', '화장품', '뷰티'], svg: (u) => `
+      <defs><linearGradient id="b1${u}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#FF9DBB"/><stop offset=".5" stop-color="#FF6F9A"/><stop offset="1" stop-color="#E23F72"/></linearGradient>
+      <linearGradient id="b2${u}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#FFE3EC"/><stop offset="1" stop-color="#F7B7CB"/></linearGradient></defs>
+      <rect x="9" y="17" width="14" height="25" rx="4" fill="url(#b1${u})"/><rect x="13" y="11" width="6" height="6" rx="1.2" fill="#C92E61"/><path d="M15 11V7h6" stroke="#C92E61" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+      <rect x="11.5" y="20" width="2.2" height="17" rx="1.1" fill="#fff" fill-opacity=".5"/>
+      <rect x="26" y="22" width="13" height="20" rx="4" fill="url(#b2${u})"/><rect x="29" y="15" width="7" height="7" rx="1.5" fill="#F0457A"/><circle cx="32.5" cy="13" r="2.6" fill="#F0457A"/>
+      <rect x="28" y="25" width="2" height="13" rx="1" fill="#fff" fill-opacity=".7"/>` },
+    { keys: ['health', 'functional', 'vitamin', 'probiotic', '건강', '기능', '비타민', '유산균', '영양'], svg: (u) => `
+      <defs><linearGradient id="h1${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF8DB0"/><stop offset="1" stop-color="#E5326B"/></linearGradient>
+      <linearGradient id="h2${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F3D9E2"/></linearGradient>
+      <radialGradient id="h3${u}" cx=".35" cy=".35" r=".7"><stop offset="0" stop-color="#FFE7EF"/><stop offset="1" stop-color="#F59BB8"/></radialGradient></defs>
+      <g transform="rotate(-35 20 22)"><rect x="6" y="15" width="28" height="13" rx="6.5" fill="url(#h2${u})" stroke="#F3C2D3" stroke-width=".8"/><path d="M20 15h7.5a6.5 6.5 0 0 1 0 13H20z" fill="url(#h1${u})"/><rect x="9" y="17.5" width="8" height="2.2" rx="1.1" fill="#fff"/></g>
+      <circle cx="33" cy="33" r="8.5" fill="url(#h3${u})"/><path d="M27.5 33h11" stroke="#E5326B" stroke-opacity=".5" stroke-width="1.4" stroke-linecap="round"/><ellipse cx="30.5" cy="29.5" rx="2.6" ry="1.4" fill="#fff" fill-opacity=".8"/>` },
+    { keys: ['food', 'tea', '식품', '음료', '차', '간식'], svg: (u) => `
+      <defs><radialGradient id="f1${u}" cx=".35" cy=".3" r=".75"><stop offset="0" stop-color="#FF8A8A"/><stop offset="1" stop-color="#D91E3D"/></radialGradient>
+      <radialGradient id="f2${u}" cx=".35" cy=".3" r=".75"><stop offset="0" stop-color="#FFD27A"/><stop offset="1" stop-color="#F28A12"/></radialGradient>
+      <linearGradient id="f3${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFB089"/><stop offset="1" stop-color="#F06A3A"/></linearGradient></defs>
+      <circle cx="19" cy="20" r="7.5" fill="url(#f1${u})"/><path d="M19 12.5c0-2 1-3.5 3-4" stroke="#7A4A20" stroke-width="1.4" fill="none" stroke-linecap="round"/><path d="M21 10c3-2 6-1 7 1-3 1.5-5 1-7-1z" fill="#4CB050"/>
+      <circle cx="29.5" cy="21" r="6.5" fill="url(#f2${u})"/><ellipse cx="16.5" cy="17" rx="2" ry="1.3" fill="#fff" fill-opacity=".6"/>
+      <path d="M6 25h36a18 15 0 0 1-36 0z" fill="url(#f3${u})"/><path d="M10 28a14 11 0 0 0 9 9" stroke="#fff" stroke-opacity=".5" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      <rect x="17" y="40" width="14" height="3" rx="1.5" fill="#D9542A"/>` },
+    { keys: ['lifestyle', 'living', 'household', '생활', '리빙'], svg: (u) => `
+      <defs><linearGradient id="l1${u}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#FFB0C6"/><stop offset=".55" stop-color="#FF7AA0"/><stop offset="1" stop-color="#E64479"/></linearGradient>
+      <linearGradient id="l2${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8FE0B0"/><stop offset="1" stop-color="#2FA866"/></linearGradient></defs>
+      <path d="M15 7h12l6 3v5l-6-1H18z" fill="url(#l2${u})"/><path d="M33 10.5h4" stroke="#2FA866" stroke-width="2" stroke-linecap="round"/><circle cx="39" cy="9" r=".9" fill="#7FD3F5"/><circle cx="40.5" cy="12" r=".9" fill="#7FD3F5"/>
+      <path d="M22 15l-1 4h-2l-2 3" stroke="#2FA866" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M14 22h14c1.5 0 3 1.5 3 3.5V40a3 3 0 0 1-3 3H14a3 3 0 0 1-3-3V25.5c0-2 1.5-3.5 3-3.5z" fill="url(#l1${u})"/>
+      <rect x="14" y="26" width="2.4" height="13" rx="1.2" fill="#fff" fill-opacity=".55"/><rect x="18" y="29" width="9" height="7" rx="1.5" fill="#fff" fill-opacity=".85"/>` },
+    { keys: ['fashion', 'cloth', 'apparel', '패션', '의류'], svg: (u) => `
+      <defs><linearGradient id="s1${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFA8C3"/><stop offset="1" stop-color="#E5326B"/></linearGradient></defs>
+      <path d="M17 7l-10 5 3.5 8.5 4.5-1.8V42h18V18.7l4.5 1.8L41 12 31 7c-1 3-3.8 4.6-7 4.6S18 10 17 7z" fill="url(#s1${u})"/>
+      <path d="M17 7c1 3 3.8 4.6 7 4.6S30 10 31 7" stroke="#C21F55" stroke-width="1.4" fill="none"/>
+      <path d="M18 20v19" stroke="#fff" stroke-opacity=".45" stroke-width="2.2" stroke-linecap="round"/><path d="M10 12.5l2.2 5.5" stroke="#fff" stroke-opacity=".5" stroke-width="1.6" stroke-linecap="round"/>` },
+    { keys: ['special', 'event', 'promotion', 'exhibition', '기획', '이벤트', '특가'], svg: (u) => `
+      <defs><linearGradient id="t1${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF9CBA"/><stop offset="1" stop-color="#E02F68"/></linearGradient></defs>
+      <path d="M24 6h13a4 4 0 0 1 4 4v13L24.5 39.5a3.5 3.5 0 0 1-5 0L8.5 28.5a3.5 3.5 0 0 1 0-5z" fill="url(#t1${u})"/>
+      <circle cx="33" cy="14" r="3.2" fill="#fff"/><path d="M33 14c-4-5-9-6-12-4" stroke="#F5B83D" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      <path d="M17 29l9-9" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="18.5" cy="21.5" r="2.2" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="25" cy="28" r="2.2" fill="none" stroke="#fff" stroke-width="1.8"/>
+      <path d="M12 25l4-4" stroke="#fff" stroke-opacity=".4" stroke-width="1.6" stroke-linecap="round"/>` }
+  ];
+  function getCategory3DIcon(cat, size) {
+    const hay = ((cat.slug || '') + ' ' + (cat.label || '')).toLowerCase();
+    const hit = CATEGORY_3D_ICONS.find(i => i.keys.some(k => hay.indexOf(k) !== -1));
+    if (!hit) return `<span class="wp-cat-emoji">${escapeHtml(cat.emoji || '🎁')}</span>`;
+    const u = 'c3' + (++cat3dSeq);
+    const px = size || 46;
+    return `<svg class="wp-cat3d" viewBox="0 0 48 48" width="${px}" height="${px}" aria-hidden="true">${hit.svg(u)}</svg>`;
+  }
+
   function getCategoryLineIcon(cat) {
     const hay = ((cat.slug || '') + ' ' + (cat.label || '')).toLowerCase();
     const hit = CATEGORY_LINE_ICONS.find(i => i.keys.some(k => hay.indexOf(k) !== -1));
@@ -1157,7 +1221,7 @@
       const cats = cachedCategoriesRaw.filter(c => !c.parent_id);
       catsEl.innerHTML = (cats.length ? cats : [{ slug: '', label: '전체 상품', emoji: '🛍️' }]).map(c => `
         <a href="${c.slug ? '/category/' + encodeURIComponent(c.slug) : '/'}">
-          <span class="wp-cat-ico">${getCategoryLineIcon(c)}</span>
+          <span class="wp-cat-ico">${getCategory3DIcon(c, 30)}</span>
           <span>${escapeHtml(c.label)}</span>
         </a>`).join('');
       catsEl.dataset.loaded = '1';
@@ -1666,6 +1730,7 @@
     registerPwa,
     shellIcon,
     getCategoryLineIcon,
+    getCategory3DIcon,
     renderStars,
     applyWatermark,
     watermarkImage,
