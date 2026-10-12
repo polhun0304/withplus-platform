@@ -124,6 +124,8 @@
       .wp-nav-item:hover .wp-nav-dropdown { display: block; }
       .wp-nav-dropdown a { display: block; padding: 8px 14px; white-space: nowrap; font-weight: 400; }
       .wp-nav-dropdown a:hover { background: #FAFAFA; }
+      .wp-nav-ico { display: inline-flex; vertical-align: -6px; margin-right: 5px; }
+      .wp-nav-ico svg, .wp-cat-ico svg.wp-cat3d { filter: drop-shadow(0 2px 1.5px rgba(150,20,60,.22)); }
     `;
     document.head.appendChild(style);
   }
@@ -142,10 +144,10 @@
           const info = cachedCategoryMap[c.slug];
           const children = info ? info.children : [];
           if (children.length === 0) {
-            return `<a href="${href}"${active}>${c.emoji} ${escapeHtml(c.label)}</a>`;
+            return `<a href="${href}"${active}><span class="wp-nav-ico">${getCategory3DIcon(c, 24)}</span>${escapeHtml(c.label)}</a>`;
           }
           return `<span class="wp-nav-item">
-              <a href="${href}"${active}>${c.emoji} ${escapeHtml(c.label)}</a>
+              <a href="${href}"${active}><span class="wp-nav-ico">${getCategory3DIcon(c, 24)}</span>${escapeHtml(c.label)}</a>
               <span class="wp-nav-dropdown">${children.map(ch => `<a href="/category/${ch.slug}">${ch.emoji} ${escapeHtml(ch.label)}</a>`).join('')}</span>
             </span>`;
         }).join('');
@@ -159,7 +161,7 @@
         // 홈 카테고리 아이콘 메뉴 — WITH+ 기본틀처럼 원형 배경 위 라인 아이콘으로 보여준다
         gridEl.innerHTML = cats.map(c => `
           <a href="/category/${c.slug}" class="category-item">
-              <div class="category-icon">${getCategoryLineIcon(c)}</div>
+              <div class="category-icon">${getCategory3DIcon(c, 46)}</div>
               <div class="category-name">${escapeHtml(c.label)}</div>
           </a>`).join('');
       }
@@ -997,12 +999,258 @@
     { keys: ['fashion', 'cloth', 'apparel', '패션', '의류'], svg: '<path d="M8.5 3.5L4 6l1.8 4.2 2.2-.9V20.5h8V9.3l2.2.9L20 6l-4.5-2.5a3.5 3.5 0 0 1-7 0z"/>' },
     { keys: ['special', 'event', 'promotion', 'exhibition', '기획', '이벤트', '특가'], svg: '<path d="M3.5 12.5l8-8h7.5a1.5 1.5 0 0 1 1.5 1.5v7.5l-8 8a1.5 1.5 0 0 1-2.1 0L3.5 14.6a1.5 1.5 0 0 1 0-2.1z"/><circle cx="16" cy="8" r="1.4"/><path d="M9.5 15.5l4-4M10 11.8h.01M13.2 15h.01"/>' }
   ];
+  // 🎨 카테고리 입체 아이콘 (홈 카테고리 원형 메뉴 · 상단 메뉴 공용) — 그라데이션·하이라이트·그림자로 입체감.
+  // 같은 화면에 여러 번 그려도 그라데이션이 꼬이지 않게 그릴 때마다 고유 id 접미사를 붙인다.
+  let cat3dSeq = 0;
+  const CATEGORY_3D_ICONS = [
+    { keys: ['diet', '다이어트', '슬림'], svg: (u) => `
+      <defs><linearGradient id="d1${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFB3C7"/><stop offset="1" stop-color="#F0457A"/></linearGradient>
+      <linearGradient id="d2${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFE9A8"/><stop offset="1" stop-color="#F5B83D"/></linearGradient></defs>
+      <path d="M11 5c2.5 7 6 10.5 7.5 15.5-2.8 4.5-6 9-6 14.5V44h23V35c0-5.5-3.2-10-6-14.5C31 15.5 34.5 12 37 5z" fill="url(#d1${u})"/>
+      <path d="M14 7c2 5 4.6 8 6 12" stroke="#fff" stroke-opacity=".55" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+      <path d="M24 36v6" stroke="#C92E61" stroke-opacity=".35" stroke-width="1.2" stroke-linecap="round"/>
+      <path d="M15.5 19.5c4 2.2 13 2.2 17 0l1.2 3.4c-4.6 2.6-14.8 2.6-19.4 0z" fill="url(#d2${u})"/>
+      <path d="M18 21.6v1.6M21 22.1v1.8M24 22.3v1.8M27 22.1v1.8M30 21.6v1.6" stroke="#B9801A" stroke-width=".9"/>
+      <path d="M33.7 22.9c2 .6 3.6 2.4 3.3 4.6" stroke="url(#d2${u})" stroke-width="2.4" fill="none" stroke-linecap="round"/>` },
+    { keys: ['beauty', 'cosmetic', '화장품', '뷰티'], svg: (u) => `
+      <defs><linearGradient id="b1${u}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#FF9DBB"/><stop offset=".5" stop-color="#FF6F9A"/><stop offset="1" stop-color="#E23F72"/></linearGradient>
+      <linearGradient id="b2${u}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#FFE3EC"/><stop offset="1" stop-color="#F7B7CB"/></linearGradient></defs>
+      <rect x="9" y="17" width="14" height="25" rx="4" fill="url(#b1${u})"/><rect x="13" y="11" width="6" height="6" rx="1.2" fill="#C92E61"/><path d="M15 11V7h6" stroke="#C92E61" stroke-width="2.4" fill="none" stroke-linecap="round"/>
+      <rect x="11.5" y="20" width="2.2" height="17" rx="1.1" fill="#fff" fill-opacity=".5"/>
+      <rect x="26" y="22" width="13" height="20" rx="4" fill="url(#b2${u})"/><rect x="29" y="15" width="7" height="7" rx="1.5" fill="#F0457A"/><circle cx="32.5" cy="13" r="2.6" fill="#F0457A"/>
+      <rect x="28" y="25" width="2" height="13" rx="1" fill="#fff" fill-opacity=".7"/>` },
+    { keys: ['health', 'functional', 'vitamin', 'probiotic', '건강', '기능', '비타민', '유산균', '영양'], svg: (u) => `
+      <defs><linearGradient id="h1${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF8DB0"/><stop offset="1" stop-color="#E5326B"/></linearGradient>
+      <linearGradient id="h2${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#F3D9E2"/></linearGradient>
+      <radialGradient id="h3${u}" cx=".35" cy=".35" r=".7"><stop offset="0" stop-color="#FFE7EF"/><stop offset="1" stop-color="#F59BB8"/></radialGradient></defs>
+      <g transform="rotate(-35 20 22)"><rect x="6" y="15" width="28" height="13" rx="6.5" fill="url(#h2${u})" stroke="#F3C2D3" stroke-width=".8"/><path d="M20 15h7.5a6.5 6.5 0 0 1 0 13H20z" fill="url(#h1${u})"/><rect x="9" y="17.5" width="8" height="2.2" rx="1.1" fill="#fff"/></g>
+      <circle cx="33" cy="33" r="8.5" fill="url(#h3${u})"/><path d="M27.5 33h11" stroke="#E5326B" stroke-opacity=".5" stroke-width="1.4" stroke-linecap="round"/><ellipse cx="30.5" cy="29.5" rx="2.6" ry="1.4" fill="#fff" fill-opacity=".8"/>` },
+    { keys: ['food', 'tea', '식품', '음료', '차', '간식'], svg: (u) => `
+      <defs><radialGradient id="f1${u}" cx=".35" cy=".3" r=".75"><stop offset="0" stop-color="#FF8A8A"/><stop offset="1" stop-color="#D91E3D"/></radialGradient>
+      <radialGradient id="f2${u}" cx=".35" cy=".3" r=".75"><stop offset="0" stop-color="#FFD27A"/><stop offset="1" stop-color="#F28A12"/></radialGradient>
+      <linearGradient id="f3${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFB089"/><stop offset="1" stop-color="#F06A3A"/></linearGradient></defs>
+      <circle cx="19" cy="20" r="7.5" fill="url(#f1${u})"/><path d="M19 12.5c0-2 1-3.5 3-4" stroke="#7A4A20" stroke-width="1.4" fill="none" stroke-linecap="round"/><path d="M21 10c3-2 6-1 7 1-3 1.5-5 1-7-1z" fill="#4CB050"/>
+      <circle cx="29.5" cy="21" r="6.5" fill="url(#f2${u})"/><ellipse cx="16.5" cy="17" rx="2" ry="1.3" fill="#fff" fill-opacity=".6"/>
+      <path d="M6 25h36a18 15 0 0 1-36 0z" fill="url(#f3${u})"/><path d="M10 28a14 11 0 0 0 9 9" stroke="#fff" stroke-opacity=".5" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      <rect x="17" y="40" width="14" height="3" rx="1.5" fill="#D9542A"/>` },
+    { keys: ['lifestyle', 'living', 'household', '생활', '리빙'], svg: (u) => `
+      <defs><linearGradient id="l1${u}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#FFB0C6"/><stop offset=".55" stop-color="#FF7AA0"/><stop offset="1" stop-color="#E64479"/></linearGradient>
+      <linearGradient id="l2${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8FE0B0"/><stop offset="1" stop-color="#2FA866"/></linearGradient></defs>
+      <path d="M15 7h12l6 3v5l-6-1H18z" fill="url(#l2${u})"/><path d="M33 10.5h4" stroke="#2FA866" stroke-width="2" stroke-linecap="round"/><circle cx="39" cy="9" r=".9" fill="#7FD3F5"/><circle cx="40.5" cy="12" r=".9" fill="#7FD3F5"/>
+      <path d="M22 15l-1 4h-2l-2 3" stroke="#2FA866" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M14 22h14c1.5 0 3 1.5 3 3.5V40a3 3 0 0 1-3 3H14a3 3 0 0 1-3-3V25.5c0-2 1.5-3.5 3-3.5z" fill="url(#l1${u})"/>
+      <rect x="14" y="26" width="2.4" height="13" rx="1.2" fill="#fff" fill-opacity=".55"/><rect x="18" y="29" width="9" height="7" rx="1.5" fill="#fff" fill-opacity=".85"/>` },
+    { keys: ['fashion', 'cloth', 'apparel', '패션', '의류'], svg: (u) => `
+      <defs><linearGradient id="s1${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFA8C3"/><stop offset="1" stop-color="#E5326B"/></linearGradient></defs>
+      <path d="M17 7l-10 5 3.5 8.5 4.5-1.8V42h18V18.7l4.5 1.8L41 12 31 7c-1 3-3.8 4.6-7 4.6S18 10 17 7z" fill="url(#s1${u})"/>
+      <path d="M17 7c1 3 3.8 4.6 7 4.6S30 10 31 7" stroke="#C21F55" stroke-width="1.4" fill="none"/>
+      <path d="M18 20v19" stroke="#fff" stroke-opacity=".45" stroke-width="2.2" stroke-linecap="round"/><path d="M10 12.5l2.2 5.5" stroke="#fff" stroke-opacity=".5" stroke-width="1.6" stroke-linecap="round"/>` },
+    { keys: ['special', 'event', 'promotion', 'exhibition', '기획', '이벤트', '특가'], svg: (u) => `
+      <defs><linearGradient id="t1${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF9CBA"/><stop offset="1" stop-color="#E02F68"/></linearGradient></defs>
+      <path d="M24 6h13a4 4 0 0 1 4 4v13L24.5 39.5a3.5 3.5 0 0 1-5 0L8.5 28.5a3.5 3.5 0 0 1 0-5z" fill="url(#t1${u})"/>
+      <circle cx="33" cy="14" r="3.2" fill="#fff"/><path d="M33 14c-4-5-9-6-12-4" stroke="#F5B83D" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+      <path d="M17 29l9-9" stroke="#fff" stroke-width="2" stroke-linecap="round"/><circle cx="18.5" cy="21.5" r="2.2" fill="none" stroke="#fff" stroke-width="1.8"/><circle cx="25" cy="28" r="2.2" fill="none" stroke="#fff" stroke-width="1.8"/>
+      <path d="M12 25l4-4" stroke="#fff" stroke-opacity=".4" stroke-width="1.6" stroke-linecap="round"/>` }
+  ];
+  function getCategory3DIcon(cat, size) {
+    const hay = ((cat.slug || '') + ' ' + (cat.label || '')).toLowerCase();
+    const hit = CATEGORY_3D_ICONS.find(i => i.keys.some(k => hay.indexOf(k) !== -1));
+    if (!hit) return `<span class="wp-cat-emoji">${escapeHtml(cat.emoji || '🎁')}</span>`;
+    const u = 'c3' + (++cat3dSeq);
+    const px = size || 46;
+    return `<svg class="wp-cat3d" viewBox="0 0 48 48" width="${px}" height="${px}" aria-hidden="true">${hit.svg(u)}</svg>`;
+  }
+
   function getCategoryLineIcon(cat) {
     const hay = ((cat.slug || '') + ' ' + (cat.label || '')).toLowerCase();
     const hit = CATEGORY_LINE_ICONS.find(i => i.keys.some(k => hay.indexOf(k) !== -1));
     return hit
       ? `<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${hit.svg}</svg>`
       : `<span class="wp-cat-emoji">${escapeHtml(cat.emoji || '🎁')}</span>`;
+  }
+
+  // ============================================
+  // 🧩 화면 배치 편집기 (관리자 전용) — 이미지 칸 크기·위치, 사진 확대·이동을 마우스나 숫자로 조절해 저장
+  //  · 사진 위에서 끌기 = 사진 이동, 마우스 휠 = 확대/축소, 오른쪽 아래 ◢ 끌기 = 칸 크기, 위쪽 ✥ 끌기 = 칸 위치
+  //  · 값은 /api/admin/layout 에 저장되고, 손님 화면은 /api/layout 값을 읽어 똑같이 그린다
+  // ============================================
+  const layoutCache = {};
+  async function getLayout(key) {
+    if (layoutCache[key]) return layoutCache[key];
+    try {
+      const { ok, json } = await fetchJSON('/api/layout?key=' + encodeURIComponent(key));
+      layoutCache[key] = (ok && json.success && json.data) || {};
+    } catch (e) { layoutCache[key] = {}; }
+    return layoutCache[key];
+  }
+  async function saveLayout(key, value) {
+    const token = await getAccessToken();
+    const res = await fetch('/api/admin/layout', { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token }, body: JSON.stringify({ key, value }) });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json.success) throw new Error(json.message || '저장에 실패했습니다');
+    layoutCache[key] = value;
+    return value;
+  }
+  let adminCheck = null;
+  function isAdminViewer() {
+    if (adminCheck) return adminCheck;
+    adminCheck = (async () => {
+      try {
+        const token = await getAccessToken();
+        if (!token) return false;
+        const res = await fetch('/api/me', { headers: { Authorization: 'Bearer ' + token } });
+        const json = await res.json();
+        return !!(json && json.data && ['admin', 'super_admin'].includes(json.data.role));
+      } catch (e) { return false; }
+    })();
+    return adminCheck;
+  }
+  // 사진(img) 하나에 확대·위치 적용. 칸은 overflow:hidden 이어야 한다.
+  function applyPhotoState(img, s) {
+    if (!img) return;
+    const zoom = Math.min(4, Math.max(1, Number(s && s.zoom) || 1));
+    const x = Math.min(100, Math.max(0, s && s.x != null ? Number(s.x) : 50));
+    const y = Math.min(100, Math.max(0, s && s.y != null ? Number(s.y) : 50));
+    if (img.tagName !== 'IMG') { // 배경 사진(div)
+      img.style.backgroundSize = (s && s.fit) === 'contain' ? 'contain' : 'cover';
+      img.style.backgroundRepeat = 'no-repeat';
+      img.style.backgroundPosition = `${x}% ${y}%`;
+      img.style.transformOrigin = `${x}% ${y}%`;
+      img.style.transform = zoom !== 1 ? `scale(${zoom})` : '';
+      return;
+    }
+    img.style.objectFit = (s && s.fit) || 'cover';
+    img.style.objectPosition = `${x}% ${y}%`;
+    img.style.transformOrigin = `${x}% ${y}%`;
+    img.style.transform = zoom !== 1 ? `scale(${zoom})` : '';
+  }
+  let layoutEditorStyle = false;
+  function ensureLayoutEditorStyle() {
+    if (layoutEditorStyle) return; layoutEditorStyle = true;
+    const st = document.createElement('style');
+    st.textContent = `
+      .wp-le-fab { position: fixed; left: 16px; bottom: 86px; z-index: 1500; border: none; border-radius: 999px; padding: 10px 16px; background: #222; color: #fff; font-weight: 700; font-size: 13px; box-shadow: 0 6px 18px rgba(0,0,0,.25); cursor: pointer; }
+      .wp-le-fab:hover { background: #E8125C; }
+      .wp-le-bar { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); z-index: 1600; background: #fff; border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.22); padding: 10px 14px; width: min(760px, 94vw); font-size: 13px; }
+      .wp-le-bar h4 { margin: 0 0 6px; font-size: 14px; display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+      .wp-le-bar h4 small { font-weight: 400; color: #888; }
+      .wp-le-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px 14px; }
+      .wp-le-grid label { display: flex; flex-direction: column; gap: 2px; color: #555; }
+      .wp-le-grid label span { display: flex; justify-content: space-between; }
+      .wp-le-grid input[type=range] { width: 100%; }
+      .wp-le-grid select { padding: 3px; }
+      .wp-le-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 8px; flex-wrap: wrap; align-items: center; }
+      .wp-le-actions button { border: 1px solid #ddd; background: #fff; border-radius: 8px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+      .wp-le-actions .wp-le-save { background: #E8125C; border-color: #E8125C; color: #fff; font-weight: 700; }
+      .wp-le-msg { margin-right: auto; color: #888; }
+      .wp-le-target { outline: 3px dashed #E8125C !important; outline-offset: 3px; cursor: grab !important; position: relative; }
+      .wp-le-target:active { cursor: grabbing !important; }
+      .wp-le-handle { position: absolute; width: 22px; height: 22px; border-radius: 6px; background: #E8125C; color: #fff; font-size: 13px; line-height: 22px; text-align: center; z-index: 5; box-shadow: 0 2px 6px rgba(0,0,0,.3); user-select: none; }
+      .wp-le-resize { right: -11px; bottom: -11px; cursor: nwse-resize; }
+      .wp-le-move { left: 50%; top: -14px; margin-left: -11px; cursor: move; }
+      .wp-le-pick { outline: 2px dashed rgba(232,18,92,.55); outline-offset: 2px; cursor: pointer; }
+    `;
+    document.head.appendChild(st);
+  }
+  // fields: [{ key, label, min, max, step, unit, type:'range'|'select', options }]
+  // state: 편집할 값 객체(직접 바뀜). onChange(state) 로 화면에 즉시 반영. onSave() 저장.
+  // drag: { el: 칸, photo: 사진(img) 또는 null, pan: [xKey,yKey], zoomKey, resize: [wKey,hKey] 또는 null, move: [dxKey,dyKey] 또는 null, toUnits }
+  function openLayoutEditor(opts) {
+    ensureLayoutEditorStyle();
+    closeLayoutEditor();
+    const bar = document.createElement('div');
+    bar.className = 'wp-le-bar';
+    bar.id = 'wp-le-bar';
+    bar.innerHTML = `<h4>🛠 ${escapeHtml(opts.title || '배치 편집')} <small>${escapeHtml(opts.hint || '사진을 끌면 이동 · 휠로 확대 · ◢ 끌면 크기 · ✥ 끌면 위치')}</small></h4>
+      <div class="wp-le-grid">${opts.fields.map(f => f.type === 'select'
+        ? `<label><span>${escapeHtml(f.label)}</span><select data-k="${f.key}">${f.options.map(o => `<option value="${o[0]}">${escapeHtml(o[1])}</option>`).join('')}</select></label>`
+        : `<label><span>${escapeHtml(f.label)} <b data-v="${f.key}"></b></span><input type="range" data-k="${f.key}" min="${f.min}" max="${f.max}" step="${f.step || 1}"></label>`).join('')}</div>
+      <div class="wp-le-actions"><span class="wp-le-msg"></span>${opts.extraButtons || ''}<button type="button" class="wp-le-reset">초기화</button><button type="button" class="wp-le-close">닫기</button><button type="button" class="wp-le-save">💾 저장</button></div>`;
+    document.body.appendChild(bar);
+    const st = opts.state;
+    const msg = bar.querySelector('.wp-le-msg');
+    const sync = () => {
+      opts.fields.forEach(f => {
+        const inp = bar.querySelector(`[data-k="${f.key}"]`);
+        if (inp && document.activeElement !== inp) inp.value = st[f.key];
+        const v = bar.querySelector(`[data-v="${f.key}"]`);
+        if (v) v.textContent = (Math.round(Number(st[f.key]) * 100) / 100) + (f.unit || '');
+      });
+    };
+    const changed = () => { opts.onChange(st); sync(); msg.textContent = '저장 안 됨'; };
+    bar.querySelectorAll('[data-k]').forEach(inp => inp.addEventListener('input', () => {
+      const f = opts.fields.find(x => x.key === inp.dataset.k);
+      st[f.key] = f.type === 'select' ? inp.value : Number(inp.value);
+      changed();
+    }));
+    bar.querySelector('.wp-le-reset').addEventListener('click', () => { Object.assign(st, opts.defaults); changed(); });
+    bar.querySelector('.wp-le-close').addEventListener('click', () => closeLayoutEditor());
+    bar.querySelector('.wp-le-save').addEventListener('click', async () => {
+      msg.textContent = '저장 중...';
+      try { await opts.onSave(st); msg.textContent = '✅ 저장했습니다'; } catch (e) { msg.textContent = '⚠ ' + e.message; }
+    });
+    if (opts.onBar) opts.onBar(bar);
+    // 마우스 조작
+    const cleanups = [];
+    const d = opts.drag;
+    if (d && d.el) {
+      const el = d.el;
+      el.classList.add('wp-le-target');
+      const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+      const fieldOf = (k) => opts.fields.find(f => f.key === k) || { min: -9999, max: 9999 };
+      const setK = (k, v) => { const f = fieldOf(k); st[k] = clamp(Math.round(v * 100) / 100, f.min, f.max); };
+      const startDrag = (e, kind) => {
+        e.preventDefault(); e.stopPropagation();
+        const p0 = { x: e.clientX, y: e.clientY };
+        const s0 = Object.assign({}, st);
+        const rect = el.getBoundingClientRect();
+        const move = (ev) => {
+          const dx = ev.clientX - p0.x, dy = ev.clientY - p0.y;
+          if (kind === 'pan' && d.pan) {
+            const z = Number(st[d.zoomKey]) || 1;
+            setK(d.pan[0], s0[d.pan[0]] - dx / rect.width * 100 / z);
+            setK(d.pan[1], s0[d.pan[1]] - dy / rect.height * 100 / z);
+          } else if (kind === 'resize' && d.resize) {
+            const [wk, hk] = d.resize;
+            if (wk) setK(wk, s0[wk] + d.toUnits('w', dx, rect));
+            if (hk) setK(hk, s0[hk] + d.toUnits('h', dy, rect));
+          } else if (kind === 'move' && d.move) {
+            setK(d.move[0], s0[d.move[0]] + dx);
+            setK(d.move[1], s0[d.move[1]] + dy);
+          }
+          changed();
+        };
+        const up = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', up); };
+        window.addEventListener('pointermove', move); window.addEventListener('pointerup', up);
+      };
+      const onDown = (e) => { if (e.target.classList.contains('wp-le-handle')) return; startDrag(e, 'pan'); };
+      const onWheel = (e) => { if (!d.zoomKey) return; e.preventDefault(); setK(d.zoomKey, (Number(st[d.zoomKey]) || 1) * (e.deltaY < 0 ? 1.06 : 1 / 1.06)); changed(); };
+      const onClick = (e) => { e.preventDefault(); e.stopPropagation(); };
+      if (d.pan) el.addEventListener('pointerdown', onDown);
+      el.addEventListener('wheel', onWheel, { passive: false });
+      el.addEventListener('click', onClick, true);
+      const handles = [];
+      if (d.resize) { const h = document.createElement('span'); h.className = 'wp-le-handle wp-le-resize'; h.textContent = '◢'; h.title = '끌어서 크기 조절'; h.addEventListener('pointerdown', (e) => startDrag(e, 'resize')); el.appendChild(h); handles.push(h); }
+      if (d.move) { const h = document.createElement('span'); h.className = 'wp-le-handle wp-le-move'; h.textContent = '✥'; h.title = '끌어서 위치 이동'; h.addEventListener('pointerdown', (e) => startDrag(e, 'move')); el.appendChild(h); handles.push(h); }
+      cleanups.push(() => { el.classList.remove('wp-le-target'); el.removeEventListener('pointerdown', onDown); el.removeEventListener('wheel', onWheel); el.removeEventListener('click', onClick, true); handles.forEach(h => h.remove()); });
+    }
+    bar.__cleanup = () => { cleanups.forEach(f => f()); if (opts.onClose) opts.onClose(); };
+    sync();
+    return bar;
+  }
+  function closeLayoutEditor() {
+    const old = document.getElementById('wp-le-bar');
+    if (old) { if (old.__cleanup) old.__cleanup(); old.remove(); }
+  }
+  // 관리자에게만 화면 왼쪽 아래 편집 버튼을 띄운다
+  async function addLayoutEditButton(label, onClick) {
+    if (!(await isAdminViewer())) return null;
+    ensureLayoutEditorStyle();
+    const b = document.createElement('button');
+    b.type = 'button'; b.className = 'wp-le-fab'; b.textContent = label;
+    b.addEventListener('click', onClick);
+    document.body.appendChild(b);
+    return b;
   }
 
   function isShellPage() {
@@ -1157,7 +1405,7 @@
       const cats = cachedCategoriesRaw.filter(c => !c.parent_id);
       catsEl.innerHTML = (cats.length ? cats : [{ slug: '', label: '전체 상품', emoji: '🛍️' }]).map(c => `
         <a href="${c.slug ? '/category/' + encodeURIComponent(c.slug) : '/'}">
-          <span class="wp-cat-ico">${getCategoryLineIcon(c)}</span>
+          <span class="wp-cat-ico">${getCategory3DIcon(c, 30)}</span>
           <span>${escapeHtml(c.label)}</span>
         </a>`).join('');
       catsEl.dataset.loaded = '1';
@@ -1666,6 +1914,14 @@
     registerPwa,
     shellIcon,
     getCategoryLineIcon,
+    getCategory3DIcon,
+    getLayout,
+    saveLayout,
+    isAdminViewer,
+    applyPhotoState,
+    openLayoutEditor,
+    closeLayoutEditor,
+    addLayoutEditButton,
     renderStars,
     applyWatermark,
     watermarkImage,

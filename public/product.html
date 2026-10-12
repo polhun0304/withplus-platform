@@ -152,6 +152,68 @@
         .band-review-text.open { -webkit-line-clamp: unset; display: block; }
         .band-review-photos { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
         .band-review-photos img { width: 84px; height: 84px; object-fit: cover; border-radius: 8px; }
+        /* 🛍️ 스마트스토어형 상품 상세 */
+        .detail-grid.ss-top { gap: 44px; align-items: start; }
+        .detail-image { height: var(--main-h, 460px) !important; background: #F7F7F9 !important; }
+        .detail-image .main-pic { position: absolute; inset: 0; background: center / cover no-repeat; display: flex; align-items: center; justify-content: center; font-size: 1em; }
+        .detail-image .detail-badge { z-index: 2; }
+        .ss-nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 3; width: 40px; height: 40px; border-radius: 50%; border: none; background: rgba(255,255,255,.85); box-shadow: 0 2px 8px rgba(0,0,0,.15); font-size: 24px; line-height: 38px; cursor: pointer; color: #333; }
+        .ss-nav.prev { left: 12px; } .ss-nav.next { right: 12px; }
+        .ss-count { position: absolute; left: 14px; bottom: 14px; z-index: 3; background: rgba(0,0,0,.55); color: #fff; font-size: 12px; padding: 3px 10px; border-radius: 999px; }
+        .ss-brand { display: inline-block; font-size: .9em; color: #555; text-decoration: none; margin-bottom: 6px; font-weight: 600; }
+        .ss-brand:hover { color: var(--primary-color); }
+        .detail-info h1 { font-size: 1.55em; line-height: 1.4; font-weight: 700; }
+        .ss-rating { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+        .ss-band-count { color: #2E7D32; font-size: .9em; }
+        .ss-price { border-top: 2px solid #222; padding: 16px 0 14px; }
+        .ss-was .detail-original-price { font-size: .95em; }
+        .ss-now { display: flex; align-items: baseline; gap: 10px; }
+        .ss-now .detail-discount { color: #F0343F; font-size: 1.6em; font-weight: 800; margin: 0; }
+        .ss-now .detail-price { font-size: 2em; font-weight: 800; color: #111; }
+        .ss-rows { display: grid; grid-template-columns: 64px 1fr; gap: 10px 8px; font-size: .9em; margin: 4px 0 14px; padding-bottom: 14px; border-bottom: 1px solid var(--border-color); }
+        .ss-rows dt { color: #888; }
+        .ss-rows dd { margin: 0; color: #333; }
+        .ss-rows b { color: var(--primary-color); }
+        .detail-desc { font-size: .92em; margin: 10px 0 16px; }
+        .ss-qty { justify-content: space-between; background: #F7F7F9; border-radius: 10px; padding: 10px 14px; }
+        .ss-qty-label { font-size: .9em; color: #555; }
+        .ss-qty .qty-control { background: #fff; }
+        .ss-total { display: flex; justify-content: space-between; align-items: baseline; padding: 14px 2px; border-top: 1px solid var(--border-color); margin-top: 6px; }
+        .ss-total span { font-size: .95em; color: #333; font-weight: 600; }
+        .ss-total b { font-size: 1.6em; color: var(--primary-color); font-weight: 800; }
+        .ss-actions { gap: 8px; }
+        .ss-actions .btn { padding: 17px 0; font-size: 1.05em; border-radius: 10px; }
+        .ss-actions .btn-buy { flex: 1.4; }
+        .ss-wish { flex: 0 0 56px; border: 1px solid var(--border-color); background: #fff; border-radius: 10px; font-size: 1.3em; cursor: pointer; }
+        .ss-tabs { position: sticky; top: 0; z-index: 90; display: grid; grid-template-columns: repeat(4, 1fr); background: #fff; border-top: 1px solid #222; border-bottom: 1px solid var(--border-color); margin: 56px 0 0; }
+        .ss-tabs a { text-align: center; padding: 15px 4px; text-decoration: none; color: #666; font-weight: 600; font-size: .98em; border-bottom: 3px solid transparent; }
+        .ss-tabs a b { color: var(--primary-color); font-weight: 700; margin-left: 2px; }
+        .ss-tabs a.on { color: #111; border-bottom-color: #111; }
+        .ss-panel { padding: 40px 0 10px; scroll-margin-top: 120px; }
+        .ss-panel > h2 { font-size: 1.3em; margin-bottom: 18px; }
+        .ss-h-count { color: var(--primary-color); }
+        .ss-detail-body { position: relative; margin-top: 0 !important; max-width: 860px; margin-left: auto !important; margin-right: auto !important; }
+        .ss-detail-body.collapsed { max-height: 1500px; overflow: hidden; }
+        .ss-detail-body.collapsed::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 180px; background: linear-gradient(rgba(255,255,255,0), #fff); }
+        .ss-expand { display: block; width: 100%; max-width: 860px; margin: 0 auto; padding: 16px; border: 1px solid #222; background: #fff; border-radius: 4px; font-size: 1em; font-weight: 700; cursor: pointer; }
+        .ss-expand:hover { background: #FAFAFA; }
+        .detail-section-block img { width: 100%; }
+        .ss-empty { color: #999; text-align: center; padding: 40px 0; }
+        .band-reviews { margin-top: 30px; padding-top: 20px; border-top: 1px dashed var(--border-color); }
+        .band-reviews h3 { font-size: 1.1em; margin-bottom: 14px; }
+        .ss-link-btn { display: inline-block; margin: 12px 8px 0 0; padding: 10px 18px; border: 1px solid var(--border-color); border-radius: 8px; text-decoration: none; color: #333; font-size: .92em; }
+        .ss-link-btn.primary { background: var(--primary-color); border-color: var(--primary-color); color: #fff; font-weight: 700; }
+        .ss-qna-box { background: #F7F7F9; border-radius: 12px; padding: 22px; color: #555; }
+        .ss-info-table { width: 100%; border-collapse: collapse; font-size: .9em; border-top: 1px solid #222; }
+        .ss-info-table th { width: 180px; text-align: left; background: #F7F7F9; padding: 12px 14px; font-weight: 600; color: #444; border-bottom: 1px solid var(--border-color); vertical-align: top; }
+        .ss-info-table td { padding: 12px 14px; border-bottom: 1px solid var(--border-color); color: #555; line-height: 1.7; }
+        .ss-info-table a { color: var(--primary-color); }
+        @media (max-width: 768px) {
+            .detail-image { height: auto !important; aspect-ratio: 1 / 1; }
+            .ss-tabs a { font-size: .85em; padding: 12px 2px; }
+            .ss-info-table th { width: 100px; }
+            .ss-actions .ss-wish { flex: 0 0 52px; }
+        }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -261,41 +323,48 @@
                     ? `<div class="thumb-strip" id="thumb-strip">${images.map((url, i) => `<div class="thumb-item${i === 0 ? ' active' : ''}" data-index="${i}" style="background-image:url('${WithPlus.safeUrlAttr(url)}');"></div>`).join('')}</div>`
                     : '';
 
+                const brandHtml = p.brand ? `<a class="ss-brand" href="/search?q=${encodeURIComponent(p.brand)}">${WithPlus.escapeHtml(p.brand)} ›</a>` : '';
+                const sections = Array.isArray(p.detail_sections) ? p.detail_sections : [];
+                const hasDetail = !!(p.long_description || sections.length);
                 wrap.innerHTML = `
-                    <div class="detail-grid">
+                    <div class="detail-grid ss-top" data-product-id="${WithPlus.escapeHtml(String(p.id))}">
                         <div class="image-gallery">
-                            <div class="detail-image" id="main-image" ${imageUrl ? `style="background-image:url('${WithPlus.safeUrlAttr(imageUrl)}');background-size:cover;background-position:center;"` : ''}>
+                            <div class="detail-image" id="main-image">
+                                <div class="main-pic" id="main-pic" ${imageUrl ? `style="background-image:url('${WithPlus.safeUrlAttr(imageUrl)}');"` : ''}>${imageUrl ? '' : emoji}</div>
                                 <div class="detail-badge">💰 개인 ${personalPct}% + 커뮤니티 ${communityPct}% 적립</div>
-                                ${imageUrl ? '' : emoji}
+                                ${images.length > 1 ? `<button type="button" class="ss-nav prev" id="main-prev" aria-label="이전 사진">‹</button><button type="button" class="ss-nav next" id="main-next" aria-label="다음 사진">›</button><span class="ss-count" id="main-count">1 / ${images.length}</span>` : ''}
                             </div>
                             ${thumbStripHtml}
                         </div>
                         <div class="detail-info">
+                            ${brandHtml}
                             <h1>${WithPlus.escapeHtml(p.name)}</h1>
-                            <div class="detail-rating">${WithPlus.renderRatingSummary(p.rating, reviewCount, p.review_satisfaction ? p.review_satisfaction.satisfied_count : 0, '#reviews')}</div>
-                            <div class="detail-price-box">
-                                ${hasDiscount ? `<span class="detail-original-price">${WithPlus.formatPrice(p.price)}</span><span class="detail-discount">${discountRate}%</span>` : ''}
-                                <span class="detail-price">${WithPlus.formatPrice(currentPrice)}</span>
+                            <div class="detail-rating ss-rating">${WithPlus.renderRatingSummary(p.rating, reviewCount, p.review_satisfaction ? p.review_satisfaction.satisfied_count : 0, '#reviews')}<span class="ss-band-count" id="ss-band-count"></span></div>
+                            <div class="detail-price-box ss-price">
+                                ${hasDiscount ? `<div class="ss-was"><span class="detail-original-price">${WithPlus.formatPrice(p.price)}</span></div>` : ''}
+                                <div class="ss-now">${hasDiscount ? `<span class="detail-discount">${discountRate}%</span>` : ''}<span class="detail-price">${WithPlus.formatPrice(currentPrice)}</span></div>
                             </div>
                             <p id="price-history-badge" style="font-size:0.85em; margin:-8px 0 12px; color:var(--text-gray);"></p>
-                            <div class="mileage-box">
-                                이 상품 구매 시 <strong>개인 마일리지 ${personalMileage.toLocaleString('ko-KR')}원(${personalPct}%)</strong> +
-                                커뮤니티 참여 시 <strong>추가 ${communityMileage.toLocaleString('ko-KR')}원(${communityPct}%)</strong>이 적립됩니다.
-                            </div>
+                            <dl class="ss-rows">
+                                <dt>적립</dt><dd>구매 시 <b>${personalMileage.toLocaleString('ko-KR')}원</b>(${personalPct}%) · 커뮤니티 참여 시 <b>+${communityMileage.toLocaleString('ko-KR')}원</b>(${communityPct}%)</dd>
+                                <dt>배송</dt><dd><span id="ss-ship-fee">배송비 정보를 불러오는 중...</span><br><span class="stock-info" id="shipping-badge-text" style="color:#2e7d32; margin:0;">${hasVariants ? '' : (WithPlus.getShippingBadgeLabel(p.stock) || '')}</span></dd>
+                                <dt>재고</dt><dd><span class="stock-info" id="stock-info-text" style="margin:0;">${hasVariants ? '옵션을 선택하면 재고를 확인할 수 있어요' : (outOfStock ? '❌ 현재 품절된 상품입니다' : '✅ 재고 ' + p.stock + '개 남음')}</span></dd>
+                            </dl>
                             <p class="detail-desc">${WithPlus.escapeHtml(p.description || '상품 설명이 준비 중입니다.')}</p>
                             ${variantSelectHtml}
-                            <p class="stock-info" id="stock-info-text">${hasVariants ? '옵션을 선택하면 재고를 확인할 수 있어요' : (outOfStock ? '❌ 현재 품절된 상품입니다' : '✅ 재고 ' + p.stock + '개 남음 | 배송비 무료')}</p>
-                            <p class="stock-info" id="shipping-badge-text" style="color:#2e7d32;">${hasVariants ? '' : (WithPlus.getShippingBadgeLabel(p.stock) || '')}</p>
-                            <div class="qty-row">
+                            <div class="qty-row ss-qty">
+                                <span class="ss-qty-label">수량</span>
                                 <div class="qty-control">
                                     <button type="button" id="qty-minus">−</button>
                                     <input type="text" id="qty-input" value="1" readonly>
                                     <button type="button" id="qty-plus">+</button>
                                 </div>
                             </div>
-                            <div class="detail-actions">
-                                <button class="btn btn-cart" id="detail-cart-btn" ${(outOfStock || hasVariants) ? 'disabled' : ''}>장바구니 담기</button>
-                                <button class="btn btn-buy" id="detail-buy-btn" ${(outOfStock || hasVariants) ? 'disabled' : ''}>바로 구매</button>
+                            <div class="ss-total"><span>총 상품 금액</span><b id="ss-total-price">${WithPlus.formatPrice(currentPrice)}</b></div>
+                            <div class="detail-actions ss-actions">
+                                <button type="button" class="ss-wish wishlist-btn" aria-label="찜하기">❤️</button>
+                                <button class="btn btn-cart" id="detail-cart-btn" ${(outOfStock || hasVariants) ? 'disabled' : ''}>장바구니</button>
+                                <button class="btn btn-buy" id="detail-buy-btn" ${(outOfStock || hasVariants) ? 'disabled' : ''}>구매하기</button>
                             </div>
                             ${(outOfStock && !hasVariants) ? `
                             <div class="restock-notify-box" id="restock-notify-box">
@@ -336,16 +405,59 @@
                         </div>
                     </div>
 
-                    ${(p.long_description || (Array.isArray(p.detail_sections) && p.detail_sections.length > 0)) ? `
-                    <div class="detail-info-section">
-                        <h2>📄 상세 정보</h2>
-                        ${p.long_description ? `<p class="long-desc">${WithPlus.escapeHtml(p.long_description)}</p>` : ''}
-                        ${(Array.isArray(p.detail_sections) ? p.detail_sections : []).map(s => `
-                            <div class="detail-section-block">
-                                ${s.image_url ? `<img src="${WithPlus.escapeHtml(s.image_url)}" alt="상품 상세 이미지" loading="lazy">` : ''}
-                                ${s.text ? `<p>${WithPlus.escapeHtml(s.text)}</p>` : ''}
-                            </div>`).join('')}
-                    </div>` : ''}
+                    <nav class="ss-tabs" id="ss-tabs" aria-label="상품 정보 메뉴">
+                        <a href="#ss-detail" class="on">상세정보</a>
+                        <a href="#reviews">리뷰 <b id="ss-tab-review-count">${reviewCount}</b></a>
+                        <a href="#ss-qna">Q&amp;A</a>
+                        <a href="#ss-returns">반품/교환정보</a>
+                    </nav>
+
+                    <section class="ss-panel" id="ss-detail">
+                        ${hasDetail ? `
+                        <div class="detail-info-section ss-detail-body" id="ss-detail-body">
+                            ${p.long_description ? `<p class="long-desc">${WithPlus.escapeHtml(p.long_description)}</p>` : ''}
+                            ${sections.map((s, i) => `
+                                <div class="detail-section-block" data-block="${i}">
+                                    ${s.image_url ? `<img src="${WithPlus.safeUrlAttr(s.image_url)}" alt="상품 상세 이미지" loading="lazy">` : ''}
+                                    ${s.text ? `<p>${WithPlus.escapeHtml(s.text)}</p>` : ''}
+                                </div>`).join('')}
+                        </div>
+                        <button type="button" class="ss-expand" id="ss-expand" hidden>상세정보 펼쳐보기 ⌄</button>` : `<p class="ss-empty">상세 정보가 준비 중입니다.</p>`}
+                    </section>
+
+                    <section class="ss-panel reviews-section" id="reviews">
+                        <h2>리뷰 <span class="ss-h-count">${reviewCount}</span></h2>
+                        ${p.review_satisfaction && p.review_satisfaction.percent !== null ? `<p style="color:var(--primary-color); font-weight:600; margin:-8px 0 16px;">✅ 구매자 ${p.review_satisfaction.percent}% 만족 <span style="font-weight:400; color:var(--text-gray); font-size:0.85em;">(구매인증 리뷰 ${p.review_satisfaction.verified_count}건 기준)</span></p>` : ''}
+                        <div id="review-write-area"></div>
+                        <div id="reviews-list">${reviewsHtml}</div>
+                        <div class="band-reviews" id="band-reviews" style="display:none;">
+                            <h3>📣 창고털이 밴드 후기 <span id="band-reviews-count" style="font-size:0.8em; color:var(--text-gray); font-weight:400;"></span></h3>
+                            <p class="band-reviews-note">창고털이 밴드 회원분들이 남긴 후기입니다. 구매인증 리뷰·별점과는 별개이며, 작성자 이름은 가려서 보여드립니다.</p>
+                            <div id="band-reviews-list"></div>
+                            <a class="ss-link-btn" href="/reviews">후기 모아보기 ›</a>
+                        </div>
+                    </section>
+
+                    <section class="ss-panel" id="ss-qna">
+                        <h2>Q&amp;A</h2>
+                        <div class="ss-qna-box">
+                            <p>상품에 대해 궁금한 점이 있으신가요? 남겨주시면 빠르게 답변드리겠습니다.</p>
+                            <a class="ss-link-btn primary" href="/board/qa?product=${encodeURIComponent(p.id)}&amp;name=${encodeURIComponent(p.name)}">✍️ 상품 문의하기</a>
+                            <a class="ss-link-btn" href="/board/qa">문의 게시판 보기 ›</a>
+                        </div>
+                    </section>
+
+                    <section class="ss-panel" id="ss-returns">
+                        <h2>반품/교환정보</h2>
+                        <table class="ss-info-table" id="ss-returns-table">
+                            <tr><th>배송비</th><td id="ss-ret-ship">-</td></tr>
+                            <tr><th>반품/교환 신청 기간</th><td>상품 수령 후 7일 이내 (단, 표시·광고와 다르거나 계약 내용과 다르게 이행된 경우 수령 후 3개월 이내, 그 사실을 안 날로부터 30일 이내)</td></tr>
+                            <tr><th>반품/교환 배송비</th><td>단순 변심: 고객 부담 · 상품 하자/오배송: 판매자 부담</td></tr>
+                            <tr><th>반품/교환 불가 사유</th><td>사용·훼손으로 상품 가치가 떨어진 경우, 포장을 훼손하여 재판매가 어려운 경우(식품·화장품 등), 시간이 지나 재판매가 어려운 경우, 복제가 가능한 상품의 포장을 훼손한 경우</td></tr>
+                            <tr><th>신청 방법</th><td><a href="/returns">마이페이지 › 취소/반품/교환 신청</a> 또는 고객센터 문의</td></tr>
+                            <tr><th>판매자 정보</th><td id="ss-ret-seller">-</td></tr>
+                        </table>
+                    </section>
 
                     <div class="fbt-section" id="fbt-section" style="display:none;">
                         <h2>🛒 함께 구매한 상품</h2>
@@ -361,21 +473,194 @@
                         <h2 id="supplier-products-title">🏭 이 공급사의 다른 상품</h2>
                         <div class="fbt-scroll" id="supplier-products-scroll"></div>
                     </div>
-
-                    <div class="reviews-section" id="reviews" style="scroll-margin-top:90px;">
-                        <h2>⭐ 상품 리뷰 (${reviewCount})</h2>
-                        ${p.review_satisfaction && p.review_satisfaction.percent !== null ? `<p style="color:var(--primary-color); font-weight:600; margin:-8px 0 16px;">✅ 구매자 ${p.review_satisfaction.percent}% 만족 <span style="font-weight:400; color:var(--text-gray); font-size:0.85em;">(구매인증 리뷰 ${p.review_satisfaction.verified_count}건 기준)</span></p>` : ''}
-                        <div id="review-write-area"></div>
-                        <div id="reviews-list">${reviewsHtml}</div>
-                    </div>
-
-                    <div class="reviews-section band-reviews" id="band-reviews" style="display:none;">
-                        <h2>📣 창고털이 밴드 후기 <span id="band-reviews-count" style="font-size:0.6em; color:var(--text-gray); font-weight:400;"></span></h2>
-                        <p class="band-reviews-note">창고털이 밴드 회원분들이 남긴 후기입니다. WITH+ 구매인증 리뷰·별점과는 별개이며, 작성자 이름은 가려서 보여드립니다.</p>
-                        <div id="band-reviews-list"></div>
-                    </div>
                 `;
+                initSmartstoreLayout(p, images, Number(currentPrice), sections);
                 loadBandReviews(p.id);
+
+                // ============================================
+                // 🛍️ 스마트스토어형 상세 — 사진 넘기기·총 금액·고정 탭·상세 펼쳐보기·배송/판매자 정보·배치(관리자 편집)
+                // ============================================
+                function initSmartstoreLayout(p, images, unitPrice, sections) {
+                    const esc = WithPlus.escapeHtml;
+                    const mainPic = document.getElementById('main-pic');
+                    const thumbStripEl = document.getElementById('thumb-strip');
+                    let cur = 0;
+                    window.__wpShowImage = (i) => {
+                        if (!images.length) return;
+                        cur = (i + images.length) % images.length;
+                        try { activeImageIndex = cur; } catch (e) { /* 아직 준비 전 */ }
+                        mainPic.style.backgroundImage = `url('${WithPlus.safeUrlAttr(images[cur])}')`;
+                        const c = document.getElementById('main-count'); if (c) c.textContent = `${cur + 1} / ${images.length}`;
+                        if (thumbStripEl) thumbStripEl.querySelectorAll('.thumb-item').forEach((t, k) => t.classList.toggle('active', k === cur));
+                        applyMainLayout();
+                    };
+                    const prev = document.getElementById('main-prev'), next = document.getElementById('main-next');
+                    if (prev) prev.addEventListener('click', (e) => { e.stopPropagation(); window.__wpShowImage(cur - 1); });
+                    if (next) next.addEventListener('click', (e) => { e.stopPropagation(); window.__wpShowImage(cur + 1); });
+
+                    // 총 상품 금액 = 현재 가격(옵션 반영) × 수량
+                    const totalEl = document.getElementById('ss-total-price');
+                    const recalc = () => {
+                        const priceText = (document.querySelector('.detail-price') || {}).textContent || '';
+                        const price = Number(priceText.replace(/[^0-9]/g, '')) || unitPrice;
+                        const qty = parseInt(document.getElementById('qty-input').value, 10) || 1;
+                        totalEl.textContent = WithPlus.formatPrice(price * qty);
+                    };
+                    setTimeout(() => {
+                        ['qty-minus', 'qty-plus'].forEach(id => { const b = document.getElementById(id); if (b) b.addEventListener('click', () => setTimeout(recalc, 0)); });
+                        const vs = document.getElementById('variant-select'); if (vs) vs.addEventListener('change', () => setTimeout(recalc, 0));
+                    }, 0);
+
+                    // 찜하기(하트) — 상품 카드와 같은 공용 처리
+                    if (WithPlus.attachProductCardInteractions) WithPlus.attachProductCardInteractions();
+                    if (WithPlus.syncWishlistHearts) WithPlus.syncWishlistHearts();
+
+                    // 배송비 · 판매자 정보 (관리자 설정값 그대로)
+                    WithPlus.fetchJSON('/api/settings/shipping-policy').then(({ ok, json }) => {
+                        if (!ok || !json || !json.success) return;
+                        const sp = json.data || {};
+                        const fee = Number(sp.base_fee || 0), free = Number(sp.free_shipping_threshold || 0);
+                        const txt = fee === 0 ? '무료배송' : `${fee.toLocaleString('ko-KR')}원` + (free ? ` (${free.toLocaleString('ko-KR')}원 이상 구매 시 무료)` : '') + ((sp.surcharge_zones || []).length ? ' · 제주/도서산간 추가' : '');
+                        document.getElementById('ss-ship-fee').textContent = '배송비 ' + txt;
+                        document.getElementById('ss-ret-ship').textContent = txt;
+                    }).catch(() => {});
+                    WithPlus.fetchJSON('/api/public/business-info').then(({ ok, json }) => {
+                        if (!ok || !json || !json.success) return;
+                        const b = json.data || {};
+                        const parts = [b.company_name && `상호 ${b.company_name}`, b.ceo_name && `대표 ${b.ceo_name}`, b.business_number && `사업자등록번호 ${b.business_number}`, b.mail_order_registration_number && `통신판매업 ${b.mail_order_registration_number}`, b.phone && `고객센터 ${b.phone}`, b.address && `주소 ${b.address}`].filter(Boolean);
+                        if (parts.length) document.getElementById('ss-ret-seller').innerHTML = parts.map(esc).join('<br>');
+                    }).catch(() => {});
+
+                    // 고정 탭 — 누르면 해당 칸으로, 스크롤하면 지금 보는 칸에 밑줄
+                    const tabs = document.getElementById('ss-tabs');
+                    const links = Array.from(tabs.querySelectorAll('a'));
+                    links.forEach(a => a.addEventListener('click', (e) => {
+                        e.preventDefault();
+                        const t = document.querySelector(a.getAttribute('href'));
+                        if (t) window.scrollTo({ top: t.getBoundingClientRect().top + window.scrollY - tabs.offsetHeight - 70, behavior: 'smooth' });
+                    }));
+                    const onScroll = () => {
+                        let on = links[0];
+                        links.forEach(a => { const t = document.querySelector(a.getAttribute('href')); if (t && t.getBoundingClientRect().top - tabs.offsetHeight - 90 <= 0) on = a; });
+                        links.forEach(a => a.classList.toggle('on', a === on));
+                    };
+                    window.addEventListener('scroll', () => requestAnimationFrame(onScroll), { passive: true });
+
+                    // 상세정보 펼쳐보기 — 길면 접어 두고 버튼으로 펼친다
+                    const body = document.getElementById('ss-detail-body');
+                    const expand = document.getElementById('ss-expand');
+                    const checkCollapse = () => {
+                        if (!body || !expand || body.classList.contains('open')) return;
+                        const tall = body.scrollHeight > 1500;
+                        body.classList.toggle('collapsed', tall);
+                        expand.hidden = !tall;
+                    };
+                    if (body && expand) {
+                        body.querySelectorAll('img').forEach(img => img.addEventListener('load', checkCollapse));
+                        setTimeout(checkCollapse, 300);
+                        expand.addEventListener('click', () => {
+                            const open = !body.classList.contains('open');
+                            body.classList.toggle('open', open);
+                            body.classList.toggle('collapsed', !open);
+                            expand.textContent = open ? '상세정보 접기 ⌃' : '상세정보 펼쳐보기 ⌄';
+                            if (!open) document.getElementById('ss-detail').scrollIntoView({ behavior: 'smooth' });
+                        });
+                    }
+
+                    // 🧩 배치 — 대표 사진 칸 높이·사진 확대/위치, 상세 사진 너비·정렬 (관리자가 저장한 값)
+                    const LKEY = 'product:' + p.id;
+                    const MAIN_DEF = { h: 460, zoom: 1, x: 50, y: 50, fit: 'cover' };
+                    const DET_DEF = { w: 100, align: 'center' };
+                    let lay = { main: {}, detail: { blocks: {} } };
+                    function applyMainLayout() {
+                        const m = Object.assign({}, MAIN_DEF, lay.main || {});
+                        document.getElementById('main-image').style.setProperty('--main-h', m.h + 'px');
+                        WithPlus.applyPhotoState(mainPic, m);
+                    }
+                    function applyDetailLayout() {
+                        const d = Object.assign({}, DET_DEF, lay.detail || {});
+                        document.querySelectorAll('#ss-detail-body .detail-section-block').forEach(block => {
+                            const img = block.querySelector('img');
+                            if (!img) return;
+                            const own = ((lay.detail || {}).blocks || {})[block.dataset.block] || {};
+                            const w = own.w != null ? own.w : d.w;
+                            const align = own.align || d.align;
+                            const box = block.querySelector('.wp-wm-frame') || img;
+                            box.style.width = w + '%';
+                            box.style.marginLeft = align === 'left' ? '0' : 'auto';
+                            box.style.marginRight = align === 'right' ? '0' : 'auto';
+                            if (box !== img) img.style.width = '100%';
+                        });
+                    }
+                    (async () => {
+                        const v = await WithPlus.getLayout(LKEY);
+                        lay = { main: (v && v.main) || {}, detail: Object.assign({ blocks: {} }, (v && v.detail) || {}) };
+                        applyMainLayout(); applyDetailLayout();
+                        const save = () => WithPlus.saveLayout(LKEY, lay);
+                        await WithPlus.addLayoutEditButton('🛠 대표 사진 편집', () => {
+                            const st = Object.assign({}, MAIN_DEF, lay.main);
+                            WithPlus.openLayoutEditor({
+                                title: '대표 사진 (이 상품)', state: st, defaults: Object.assign({}, MAIN_DEF),
+                                hint: '사진을 끌면 이동 · 휠로 확대 · ◢ 끌면 칸 높이 · 사진마다 같은 값 적용',
+                                fields: [
+                                    { key: 'h', label: '사진 칸 높이', min: 260, max: 900, step: 1, unit: 'px' },
+                                    { key: 'zoom', label: '사진 확대', min: 1, max: 4, step: 0.01, unit: '배' },
+                                    { key: 'x', label: '사진 좌우', min: 0, max: 100, step: 1, unit: '%' },
+                                    { key: 'y', label: '사진 위아래', min: 0, max: 100, step: 1, unit: '%' },
+                                    { key: 'fit', label: '사진 맞춤', type: 'select', options: [['cover', '칸 꽉 채우기'], ['contain', '사진 전체 보이기']] }
+                                ],
+                                onChange: (s) => { lay.main = { h: s.h, zoom: s.zoom, x: s.x, y: s.y, fit: s.fit }; applyMainLayout(); },
+                                onSave: () => save(),
+                                drag: { el: document.getElementById('main-image'), pan: ['x', 'y'], zoomKey: 'zoom', resize: [null, 'h'], move: null, toUnits: (dim, delta) => delta }
+                            });
+                        });
+                        if (!document.querySelector('#ss-detail-body .detail-section-block img')) return;
+                        function openDetailEditor(blockEl) {
+                            const all = Object.assign({}, DET_DEF, lay.detail);
+                            const idx = blockEl ? blockEl.dataset.block : null;
+                            const own = idx != null ? Object.assign({ w: all.w, align: all.align }, (lay.detail.blocks || {})[idx] || {}) : null;
+                            const st = own || { w: all.w, align: all.align };
+                            const target = blockEl || document.querySelector('#ss-detail-body .detail-section-block img').closest('.detail-section-block');
+                            const frame = target.querySelector('.wp-wm-frame') || target.querySelector('img');
+                            document.querySelectorAll('#ss-detail-body .detail-section-block img').forEach(img => img.closest('.detail-section-block').classList.add('wp-le-pick'));
+                            const pickHandler = (e) => { const b = e.target.closest('.detail-section-block'); if (!b || !b.querySelector('img')) return; e.preventDefault(); e.stopPropagation(); WithPlus.closeLayoutEditor(); openDetailEditor(b); };
+                            document.getElementById('ss-detail-body').addEventListener('click', pickHandler, true);
+                            WithPlus.openLayoutEditor({
+                                title: idx != null ? `상세 사진 ${Number(idx) + 1}번만` : '상세 사진 전체(기본값)',
+                                hint: '다른 사진을 누르면 그 사진만 따로 조절 · ◢ 끌면 너비',
+                                state: st, defaults: Object.assign({}, DET_DEF),
+                                fields: [
+                                    { key: 'w', label: '사진 너비', min: 20, max: 100, step: 1, unit: '%' },
+                                    { key: 'align', label: '정렬', type: 'select', options: [['center', '가운데'], ['left', '왼쪽'], ['right', '오른쪽']] }
+                                ],
+                                extraButtons: idx != null ? '<button type="button" class="wp-le-all">↩ 전체 설정 따르기</button>' : '',
+                                onBar: (bar) => {
+                                    const b = bar.querySelector('.wp-le-all');
+                                    if (b) b.addEventListener('click', () => { delete lay.detail.blocks[idx]; applyDetailLayout(); WithPlus.closeLayoutEditor(); openDetailEditor(null); });
+                                },
+                                onChange: (s) => {
+                                    if (idx != null) lay.detail.blocks = Object.assign({}, lay.detail.blocks, { [idx]: { w: s.w, align: s.align } });
+                                    else Object.assign(lay.detail, { w: s.w, align: s.align });
+                                    applyDetailLayout();
+                                },
+                                onSave: () => save(),
+                                drag: { el: frame, pan: null, zoomKey: null, resize: ['w', null], move: null, toUnits: (dim, delta) => delta / document.getElementById('ss-detail-body').getBoundingClientRect().width * 100 },
+                                onClose: () => {
+                                    document.getElementById('ss-detail-body').removeEventListener('click', pickHandler, true);
+                                    document.querySelectorAll('.wp-le-pick').forEach(el => el.classList.remove('wp-le-pick'));
+                                }
+                            });
+                        }
+                        await WithPlus.addLayoutEditButton('🛠 상세 사진 편집', () => {
+                            const body = document.getElementById('ss-detail-body');
+                            if (body.classList.contains('collapsed')) document.getElementById('ss-expand').click();
+                            body.scrollIntoView({ behavior: 'smooth' });
+                            openDetailEditor(null);
+                        });
+                        const fabs = document.querySelectorAll('.wp-le-fab');
+                        if (fabs.length > 1) fabs[1].style.bottom = '134px';
+                    })();
+                }
 
                 // 📣 창고털이 밴드 후기 — 관리자가 승인한 것만 서버가 내려준다
                 async function loadBandReviews(productId) {
@@ -385,6 +670,7 @@
                         const list = (json && json.success && json.data) || [];
                         if (!list.length) return;
                         document.getElementById('band-reviews-count').textContent = '(' + (json.total || list.length) + ')';
+                        const bc = document.getElementById('ss-band-count'); if (bc) bc.textContent = ' · 📣 밴드 후기 ' + (json.total || list.length);
                         document.getElementById('band-reviews-list').innerHTML = list.map(r => `
                             <div class="review-item band-review-item">
                                 <div class="wp-review-author">${WithPlus.escapeHtml(r.author_masked || '밴드 회원')} <span class="band-src">밴드</span></div>
@@ -407,7 +693,7 @@
                             const idx = parseInt(thumb.getAttribute('data-index'), 10);
                             if (!images[idx]) return;
                             activeImageIndex = idx;
-                            mainImageEl.style.backgroundImage = `url('${images[idx]}')`;
+                            window.__wpShowImage(idx);
                             thumbStrip.querySelectorAll('.thumb-item').forEach(t => t.classList.remove('active'));
                             thumb.classList.add('active');
                         });

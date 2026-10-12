@@ -330,6 +330,14 @@
         .band-msg { font-size: 0.85em; color: var(--text-gray); }
         .band-msg.error { color: #C62828; } .band-msg.ok { color: #2E7D32; }
         .band-pager { display: flex; gap: 12px; align-items: center; justify-content: center; margin: 16px 0; font-size: 0.9em; }
+        .section-bulk-drop { margin-top: 8px; background: #FFFAFC; }
+        .section-bulk-drop small { color: var(--text-gray); }
+        /* ↕ 상세 블록 도구 */
+        .detail-section-row .sec-tools { display: flex; gap: 4px; align-items: center; flex-wrap: wrap; }
+        .detail-section-row .sec-tools select { width: auto; padding: 3px 4px; font-size: 0.8em; margin: 0; border: 1px solid var(--border-color); border-radius: 6px; }
+        .sec-grip { cursor: grab; padding: 2px 6px; border-radius: 6px; background: #F4F4F6; font-weight: 400; user-select: none; }
+        .sec-move { border: 1px solid var(--border-color); background: #fff; border-radius: 6px; font-size: 0.72em; padding: 2px 6px; cursor: pointer; }
+        .detail-section-row.sec-dragging { opacity: .45; outline: 2px dashed var(--primary-color); }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -388,7 +396,17 @@
                 <div class="field">
                     <label>상세페이지 이미지+설명 블록 (사진/설명이 여러 장인 경우 아래에 필요한 만큼 추가하세요)</label>
                     <div id="pf-detail-sections"></div>
-                    <button type="button" class="btn btn-secondary" id="pf-add-section" style="margin-top:6px;">+ 블록 추가</button>
+                    <div class="img-drop section-bulk-drop" id="pf-section-bulk" tabindex="0">
+                        <span class="img-drop-icon">📚</span>
+                        <span>상세 사진 <b>여러 장(최대 30장)을 한꺼번에 끌어다 놓거나</b> <button type="button" class="btn btn-secondary" id="pf-section-bulk-pick">📁 여러 장 파일 추가</button><br><small>사진 1장마다 블록이 1개씩 순서대로 만들어집니다 (파일 이름 순 · Ctrl+V 붙여넣기 가능)</small></span>
+                        <input type="file" id="pf-section-bulk-file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden>
+                    </div>
+                    <div class="img-status" id="pf-section-bulk-status"></div>
+                    <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
+                        <button type="button" class="btn btn-secondary" id="pf-add-section">+ 블록 추가</button>
+                        <button type="button" class="btn btn-secondary" id="pf-preview-btn">👁 상세페이지 미리보기</button>
+                    </div>
+                    <p style="font-size:0.78em; color:var(--text-gray); margin:6px 0 0;">☰ 를 끌거나 ▲▼ 로 순서를 바꾸고, 블록마다 사진 크기(%)·정렬을 고를 수 있어요. 상품 화면에서 관리자로 「🛠 상세 사진 편집」을 눌러 마우스로도 조절할 수 있습니다.</p>
                 </div>
                 <div class="field" style="background:#FAFAFA; border:1px dashed var(--border-color); border-radius:8px; padding:12px;">
                     <label>🤖 AI로 상세페이지 문구 초안 만들기 (선택)</label>
@@ -3177,6 +3195,8 @@
                 async function addFiles(fileList) {
                     const files = Array.from(fileList || []).filter(f => f && f.type && f.type.startsWith('image/'));
                     if (!files.length) return;
+                    // 사진 1장짜리(블록) 칸에 여러 장을 놓으면 → 여러 장 한꺼번에 올리기로 넘겨 블록을 자동으로 만든다
+                    if (!multiple && files.length > 1 && opts.onMany) { opts.onMany(files); return; }
                     const list = multiple ? files : files.slice(0, 1);
                     pending += list.length; render(); setStatus(`사진 ${list.length}장 올리는 중...`);
                     const errors = [];
@@ -3220,7 +3240,8 @@
                 return {
                     setUrls(list) { urls = (list || []).filter(Boolean); pending = 0; setStatus(''); render(); },
                     getUrls() { return urls.slice(); },
-                    isBusy() { return pending > 0; }
+                    isBusy() { return pending > 0; },
+                    addFiles(files) { return addFiles(files); }
                 };
             }
 
@@ -3242,8 +3263,9 @@
                     if (!holder || holder.dataset.mounted) return;
                     holder.dataset.mounted = '1';
                     const hidden = row.querySelector('.section-image-input');
-                    const mgr = createImageManager(holder, { multiple: false, kind: 'detail', onChange: (list) => { hidden.value = list[0] || ''; if (list.length) scheduleAutoDescribe(); } });
+                    const mgr = createImageManager(holder, { multiple: false, kind: 'detail', onMany: (files) => addSectionPhotosBulk(files), onChange: (list) => { hidden.value = list[0] || ''; if (list.length) scheduleAutoDescribe(); } });
                     mgr.setUrls(hidden.value ? [hidden.value] : []);
+                    holder.__mgr = mgr;
                 });
             }
 
@@ -3253,7 +3275,14 @@
                     <div class="detail-section-row" data-index="${index}">
                         <div class="row-top">
                             <span>블록 ${index + 1}</span>
-                            <button type="button" class="remove-section-btn">✕ 삭제</button>
+                            <div class="sec-tools">
+                                <b class="sec-grip" draggable="true" title="끌어서 순서 바꾸기">☰</b>
+                                <button type="button" class="sec-move" data-dir="-1" title="위로">▲</button>
+                                <button type="button" class="sec-move" data-dir="1" title="아래로">▼</button>
+                                <select class="sec-w" title="상세페이지에서 이 사진 크기">${[100, 90, 80, 70, 60, 50, 40].map(w => `<option value="${w}" ${Number(s.w || 100) === w ? 'selected' : ''}>사진 ${w}%</option>`).join('')}</select>
+                                <select class="sec-align" title="사진 정렬"><option value="center" ${(s.align || 'center') === 'center' ? 'selected' : ''}>가운데</option><option value="left" ${s.align === 'left' ? 'selected' : ''}>왼쪽</option><option value="right" ${s.align === 'right' ? 'selected' : ''}>오른쪽</option></select>
+                                <button type="button" class="remove-section-btn">✕ 삭제</button>
+                            </div>
                         </div>
                         <input type="hidden" class="section-image-input" value="${(s.image_url || '').replace(/"/g, '&quot;')}">
                         <div class="section-img-mgr"></div>
@@ -3287,6 +3316,134 @@
                         row.querySelector('.row-top span').textContent = '블록 ' + (i + 1);
                     });
                 });
+            });
+
+            // 📚 상세 사진 여러 장 한꺼번에 → 사진마다 블록 자동 생성(빈 블록이 있으면 먼저 채움), 한 장씩 차례로 업로드
+            let sectionBulkBusy = false;
+            async function addSectionPhotosBulk(fileList) {
+                const status = document.getElementById('pf-section-bulk-status');
+                const MAX = 30;
+                let files = Array.from(fileList || []).filter(f => f && f.type && f.type.startsWith('image/'));
+                if (!files.length) return;
+                if (sectionBulkBusy) { status.textContent = '앞의 사진을 올리는 중입니다. 끝난 뒤 다시 놓아주세요.'; status.className = 'img-status error'; return; }
+                files.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ko', { numeric: true }));
+                const skipped = Math.max(0, files.length - MAX);
+                files = files.slice(0, MAX);
+                sectionBulkBusy = true;
+                // 사진이 없는 빈 블록부터 쓰고, 모자라면 새 블록을 만든다
+                const emptyRows = Array.from(sectionsArea.querySelectorAll('.detail-section-row')).filter(r => !r.querySelector('.section-image-input').value && !r.querySelector('.section-text-input').value.trim() && !r.querySelector('.img-thumb.loading'));
+                const targets = [];
+                for (let i = 0; i < files.length; i++) {
+                    let row = emptyRows[i];
+                    if (!row) {
+                        document.getElementById('pf-add-section').click();
+                        const rows = sectionsArea.querySelectorAll('.detail-section-row');
+                        row = rows[rows.length - 1];
+                    }
+                    targets.push(row);
+                }
+                let done = 0;
+                for (let i = 0; i < files.length; i++) {
+                    status.textContent = `📚 상세 사진 ${i + 1}/${files.length}장 올리는 중...`; status.className = 'img-status';
+                    const holder = targets[i].querySelector('.section-img-mgr');
+                    if (holder && holder.__mgr) { await holder.__mgr.addFiles([files[i]]); if (targets[i].querySelector('.section-image-input').value) done++; }
+                }
+                sectionBulkBusy = false;
+                const failed = files.length - done;
+                status.textContent = `✅ 상세 사진 ${done}장으로 블록을 만들었습니다` + (failed ? ` · 실패 ${failed}장(해당 블록에 이유 표시)` : '') + (skipped ? ` · 한 번에 ${MAX}장까지라 ${skipped}장은 빠졌어요` : '');
+                status.className = 'img-status' + (failed ? ' error' : '');
+            }
+            (function initSectionBulk() {
+                const zone = document.getElementById('pf-section-bulk');
+                const input = document.getElementById('pf-section-bulk-file');
+                document.getElementById('pf-section-bulk-pick').addEventListener('click', () => input.click());
+                input.addEventListener('change', () => { const f = Array.from(input.files || []); input.value = ''; addSectionPhotosBulk(f); });
+                ['dragenter', 'dragover'].forEach(ev => zone.addEventListener(ev, (e) => { if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) { e.preventDefault(); zone.classList.add('drag'); } }));
+                ['dragleave', 'drop'].forEach(ev => zone.addEventListener(ev, () => zone.classList.remove('drag')));
+                zone.addEventListener('drop', (e) => { if (e.dataTransfer && e.dataTransfer.files.length) { e.preventDefault(); addSectionPhotosBulk(e.dataTransfer.files); } });
+                zone.addEventListener('paste', (e) => { const f = Array.from((e.clipboardData && e.clipboardData.files) || []); if (f.length) { e.preventDefault(); addSectionPhotosBulk(f); } });
+                // 블록 목록 위(블록 사이)에 여러 장을 놓아도 똑같이 처리 — 블록 하나의 사진칸에 놓은 건 그 블록만
+                sectionsArea.addEventListener('dragover', (e) => { if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) e.preventDefault(); });
+                sectionsArea.addEventListener('drop', (e) => {
+                    if (e.defaultPrevented || !e.dataTransfer || !e.dataTransfer.files.length) return;
+                    e.preventDefault(); addSectionPhotosBulk(e.dataTransfer.files);
+                });
+            })();
+
+            // ↕ 블록 순서 바꾸기(▲▼ · ☰ 끌기) — 번호를 다시 매긴다
+            function renumberSections() {
+                sectionsArea.querySelectorAll('.detail-section-row').forEach((row, i) => {
+                    row.dataset.index = i;
+                    row.querySelector('.row-top span').textContent = '블록 ' + (i + 1);
+                });
+            }
+            sectionsArea.addEventListener('click', (e) => {
+                const mv = e.target.closest('.sec-move');
+                if (!mv) return;
+                const row = mv.closest('.detail-section-row');
+                if (mv.dataset.dir === '-1' && row.previousElementSibling) row.parentNode.insertBefore(row, row.previousElementSibling);
+                if (mv.dataset.dir === '1' && row.nextElementSibling) row.parentNode.insertBefore(row.nextElementSibling, row);
+                renumberSections();
+            });
+            let draggingRow = null;
+            sectionsArea.addEventListener('dragstart', (e) => {
+                const grip = e.target.closest && e.target.closest('.sec-grip');
+                if (!grip) return;
+                draggingRow = grip.closest('.detail-section-row');
+                draggingRow.classList.add('sec-dragging');
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/x-sec-reorder', '1');
+                try { e.dataTransfer.setDragImage(draggingRow, 20, 20); } catch (err) {}
+            });
+            sectionsArea.addEventListener('dragover', (e) => {
+                if (!draggingRow) return;
+                e.preventDefault();
+                const over = e.target.closest('.detail-section-row');
+                if (!over || over === draggingRow) return;
+                const r = over.getBoundingClientRect();
+                over.parentNode.insertBefore(draggingRow, (e.clientY - r.top) > r.height / 2 ? over.nextElementSibling : over);
+            });
+            sectionsArea.addEventListener('drop', (e) => { if (draggingRow) { e.preventDefault(); e.stopPropagation(); } }, true);
+            sectionsArea.addEventListener('dragend', () => { if (draggingRow) { draggingRow.classList.remove('sec-dragging'); draggingRow = null; renumberSections(); } });
+
+            // 상세페이지에서 블록별 사진 크기·정렬 — 상품 화면 배치 설정(product:<ID>)에 함께 저장한다
+            function collectSectionLayout() {
+                const blocks = {};
+                let k = 0;
+                sectionsArea.querySelectorAll('.detail-section-row').forEach(row => {
+                    const img = row.querySelector('.section-image-input').value.trim();
+                    const txt = row.querySelector('.section-text-input').value.trim();
+                    if (!img && !txt) return; // 저장 시 빠지는 빈 블록은 번호에서도 뺀다
+                    const w = Number(row.querySelector('.sec-w').value) || 100;
+                    const align = row.querySelector('.sec-align').value || 'center';
+                    if (w !== 100 || align !== 'center') blocks[k] = { w, align };
+                    k++;
+                });
+                return blocks;
+            }
+            async function saveSectionLayout(productId) {
+                if (!productId) return;
+                const key = 'product:' + productId;
+                const cur = await WithPlus.getLayout(key);
+                const blocks = collectSectionLayout();
+                if (!Object.keys(blocks).length && !(cur && cur.detail && cur.detail.blocks && Object.keys(cur.detail.blocks).length)) return;
+                const value = Object.assign({}, cur || {}, { detail: Object.assign({}, (cur && cur.detail) || {}, { blocks }) });
+                await WithPlus.saveLayout(key, value);
+            }
+            async function loadSectionLayoutIntoForm(productId) {
+                if (!productId) return;
+                const v = await WithPlus.getLayout('product:' + productId);
+                const blocks = (v && v.detail && v.detail.blocks) || {};
+                sectionsArea.querySelectorAll('.detail-section-row').forEach((row, i) => {
+                    const b = blocks[i]; if (!b) return;
+                    if (b.w) row.querySelector('.sec-w').value = String(b.w);
+                    if (b.align) row.querySelector('.sec-align').value = b.align;
+                });
+            }
+            document.getElementById('pf-preview-btn').addEventListener('click', () => {
+                const id = document.getElementById('pf-id').value;
+                if (!id) { alert('새 상품은 먼저 저장한 뒤 미리보기할 수 있어요.'); return; }
+                window.open('/product/' + encodeURIComponent(id), '_blank', 'noopener');
             });
 
             function collectDetailSections() {
@@ -3477,6 +3634,7 @@
                     document.getElementById('pf-supply-amount').value = (product.supply_amount === null || product.supply_amount === undefined) ? '' : product.supply_amount;
                     document.getElementById('pf-vat-amount').value = (product.vat_amount === null || product.vat_amount === undefined) ? '' : product.vat_amount;
                     renderAllSections(product.detail_sections);
+                    loadSectionLayoutIntoForm(product.id).catch(() => {});
                 } else {
                     document.getElementById('product-modal-title').textContent = '새 상품 등록';
                     document.getElementById('pf-id').value = '';
@@ -3551,7 +3709,7 @@
             pfForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 pfMsg.className = 'msg';
-                if (pfImageMgr.isBusy() || document.querySelector('#pf-detail-sections .img-thumb.loading')) {
+                if (pfImageMgr.isBusy() || sectionBulkBusy || document.querySelector('#pf-detail-sections .img-thumb.loading')) {
                     pfMsg.textContent = '사진을 올리는 중입니다. 업로드가 끝난 뒤 저장해주세요.';
                     pfMsg.className = 'msg error';
                     return;
@@ -3602,6 +3760,8 @@
                         : await authedFetch('/api/products', { method: 'POST', body: JSON.stringify(payload) });
 
                     if (!ok) throw new Error(json.message || '저장에 실패했습니다');
+                    // 블록별 사진 크기·정렬 저장 (관리자 권한일 때만 — 실패해도 상품 저장은 그대로)
+                    try { await saveSectionLayout(id || (json.data && json.data.id)); } catch (layoutErr) { console.warn('블록 배치 저장 건너뜀', layoutErr.message); }
 
                     pfMsg.textContent = '저장되었습니다.';
                     pfMsg.className = 'msg success';

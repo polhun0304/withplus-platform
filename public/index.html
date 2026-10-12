@@ -1420,6 +1420,44 @@
         .wp-ranking .product-image[data-rank="1"]::before, .wp-ranking .product-image[data-rank="2"]::before, .wp-ranking .product-image[data-rank="3"]::before { background: var(--primary-color); }
         .wp-ranking .mileage-badge { top: 36px; }
         @media (max-width: 768px) { .wp-ranking .product-grid { grid-template-rows: auto !important; } }
+        /* 🎨 카테고리 입체 아이콘 — 원형 배경에도 빛·그림자를 줘서 도톰하게 */
+        .category-icon { background: radial-gradient(circle at 35% 28%, #FFFFFF 0, #FFF3F7 42%, #FFE0EA 100%) !important; box-shadow: 0 8px 16px rgba(232,18,92,.13), inset 0 -5px 10px rgba(232,18,92,.08), inset 0 4px 8px #fff; }
+        .category-item:hover .category-icon { transform: translateY(-4px) scale(1.04); box-shadow: 0 12px 22px rgba(232,18,92,.2), inset 0 -5px 10px rgba(232,18,92,.08), inset 0 4px 8px #fff; }
+        .category-icon svg.wp-cat3d { width: 48px !important; height: 48px !important; filter: drop-shadow(0 4px 3px rgba(150,20,60,.25)); transition: transform .2s; }
+        .category-item:hover .category-icon svg.wp-cat3d { transform: rotate(-6deg); }
+        @media (max-width: 768px) { .category-icon svg.wp-cat3d { width: 38px !important; height: 38px !important; } }
+        /* 🔴 실시간 후기 + 지금 이 순간 */
+        .live-pulse { max-width: calc(var(--wp-container, 1200px) - 40px); margin: 22px auto; display: grid; grid-template-columns: 1.15fr 1fr; gap: 16px; padding: 0; }
+        .lp-card { background: #fff; border: 1px solid #F3E3E8; border-radius: 18px; padding: 16px 18px; box-shadow: 0 6px 18px rgba(232,18,92,.05); min-width: 0; }
+        .lp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+        .lp-head h2 { font-size: 1.12em; font-weight: 800; margin: 0; }
+        .lp-head h2 b { color: var(--wp-pink, #E8125C); }
+        .lp-more { font-size: .86em; color: #777; text-decoration: none; }
+        .lp-more:hover { color: var(--wp-pink, #E8125C); }
+        .lp-dot { width: 9px; height: 9px; border-radius: 50%; background: #E8125C; box-shadow: 0 0 0 0 rgba(232,18,92,.5); animation: lpPulse 1.6s infinite; }
+        @keyframes lpPulse { 0% { box-shadow: 0 0 0 0 rgba(232,18,92,.5); } 70% { box-shadow: 0 0 0 9px rgba(232,18,92,0); } 100% { box-shadow: 0 0 0 0 rgba(232,18,92,0); } }
+        .lp-review-scroll { display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 6px; scrollbar-width: thin; }
+        .lp-rv { flex: 0 0 132px; scroll-snap-align: start; text-decoration: none; color: inherit; }
+        .lp-rv-img { width: 132px; height: 132px; border-radius: 12px; background: #F6F1F3 center/cover no-repeat; position: relative; }
+        .lp-src { position: absolute; left: 6px; top: 6px; font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 6px; background: rgba(255,255,255,.92); color: #2E7D32; }
+        .lp-src.with { color: #E8125C; }
+        .lp-stars { color: #FFB400; font-size: 12px; margin-top: 6px; letter-spacing: 1px; }
+        .lp-rv-text { font-size: 12.5px; line-height: 1.45; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .lp-rv-who { font-size: 11.5px; color: #8A8A8A; margin-top: 3px; }
+        .lp-feed { list-style: none; margin: 0; padding: 0; }
+        .lp-feed li { display: flex; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px dashed #F2E6EA; font-size: 13.5px; }
+        .lp-feed li:last-child { border-bottom: none; }
+        .lp-ava { width: 30px; height: 30px; border-radius: 50%; flex: 0 0 30px; display: flex; align-items: center; justify-content: center; font-size: 14px; background: #FFF0F4; }
+        .lp-feed .lp-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .lp-feed .lp-msg a { color: inherit; font-weight: 700; text-decoration: none; }
+        .lp-feed .lp-time { color: #9A9A9A; font-size: 12px; white-space: nowrap; }
+        .lp-stats { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: linear-gradient(135deg, #FFF0F4, #FFE6EE); font-size: 13px; font-weight: 700; color: #C2185B; }
+        @media (max-width: 860px) { .live-pulse { grid-template-columns: 1fr; margin: 16px 12px; } .lp-rv { flex-basis: 112px; } .lp-rv-img { width: 112px; height: 112px; } }
+        /* 🛠 특가 배너 사진 칸 — 관리자가 저장한 크기·위치(--deal-*) 적용 */
+        .deal-slide { grid-template-columns: 1fr minmax(140px, var(--deal-col, 38%)) !important; }
+        .deal-img { aspect-ratio: var(--deal-ar, 1) !important; border-radius: var(--deal-radius, 18px) !important; overflow: hidden; position: relative; transform: translate(var(--deal-dx, 0px), var(--deal-dy, 0px)); }
+        .deal-img .deal-pic { width: 100%; height: 100%; display: block; object-fit: cover; }
+        @media (max-width: 768px) { .deal-slide { grid-template-columns: 1fr minmax(120px, calc(var(--deal-col, 38%) + 4%)) !important; } }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -1577,6 +1615,19 @@
     </section>
 
     <!-- 🔥 실시간 랭킹 (실시간 인기 · 구매순 · 오래 본 순 · 노출순 — 서버가 3분마다 자동 계산) -->
+    <!-- 🔴 실시간 후기 + 지금 이 순간 (밴드 후기·구매 후기·실제 주문만 — 이름은 가려서) -->
+    <section class="live-pulse" id="live-pulse" style="display:none;">
+        <div class="lp-card lp-reviews">
+            <div class="lp-head"><h2>💬 실시간 후기</h2><a href="/reviews" class="lp-more">전체보기 ›</a></div>
+            <div class="lp-review-scroll" id="lp-review-scroll"></div>
+        </div>
+        <div class="lp-card lp-now">
+            <div class="lp-head"><h2>지금 이 순간, <b>WITH+</b></h2><span class="lp-dot" aria-hidden="true"></span></div>
+            <ul class="lp-feed" id="lp-feed"></ul>
+            <div class="lp-stats" id="lp-stats"></div>
+        </div>
+    </section>
+
     <section class="products-section wp-ranking" id="ranking-section">
         <div class="section-header">
             <h2 class="section-title">🔥 실시간 랭킹</h2>
@@ -2001,7 +2052,7 @@
                             <div class="deal-price"><span class="now">${WithPlus.formatPrice(p.discount_price)}</span><span class="was">${WithPlus.formatPrice(p.price)}</span></div>
                             <span class="deal-cta">특가 상품 보러가기 ›</span>
                         </div>
-                        <div class="deal-img" ${img ? `style="background-image:url('${WithPlus.safeUrlAttr(img)}')"` : ''}>${img ? '' : '🎁'}</div>
+                        <div class="deal-img" data-pid="${WithPlus.escapeHtml(String(p.id))}">${img ? `<img class="deal-pic" src="${WithPlus.safeUrlAttr(img)}" alt="${WithPlus.escapeHtml(p.name)}" loading="lazy">` : '🎁'}</div>
                     </a>`;
                 }).join(''));
 
@@ -2024,10 +2075,87 @@
                 ['pointerdown', 'touchstart', 'mouseenter'].forEach(ev => track.addEventListener(ev, () => { paused = true; }, { passive: true }));
                 ['pointerup', 'touchend', 'mouseleave'].forEach(ev => track.addEventListener(ev, () => { setTimeout(() => { paused = false; }, 3000); }, { passive: true }));
                 setInterval(() => {
-                    if (paused || document.hidden) return;
+                    if (paused || document.hidden || window.__wpLayoutEditing) return;
                     const next = (index + 1) % slides.length;
                     track.scrollTo({ left: next * track.clientWidth, behavior: 'smooth' });
                 }, 4000);
+                applyBannerLayout();
+            }
+
+            // ============================================
+            // 🛠 오늘의 특가 배너 — 오른쪽 사진 칸의 크기·위치와 상품별 사진 확대·위치 (관리자가 저장한 값 적용)
+            // ============================================
+            const BANNER_DEFAULTS = { col: 38, ar: 1, dx: 0, dy: 0, radius: 18, zoom: 1, x: 50, y: 50, fit: 'cover' };
+            let bannerLayout = { box: {}, items: {} };
+            function applyBannerLayout() {
+                const hero = document.getElementById('hero-slider');
+                if (!hero) return;
+                const b = Object.assign({}, BANNER_DEFAULTS, bannerLayout.box || {});
+                hero.style.setProperty('--deal-col', b.col + '%');
+                hero.style.setProperty('--deal-ar', String(1 / (Number(b.ar) || 1)));
+                hero.style.setProperty('--deal-dx', b.dx + 'px');
+                hero.style.setProperty('--deal-dy', b.dy + 'px');
+                hero.style.setProperty('--deal-radius', b.radius + 'px');
+                hero.querySelectorAll('.deal-img[data-pid]').forEach(box => {
+                    WithPlus.applyPhotoState(box.querySelector('img'), Object.assign({}, BANNER_DEFAULTS, (bannerLayout.items || {})[box.dataset.pid] || {}));
+                });
+            }
+            async function initBannerLayout() {
+                const v = await WithPlus.getLayout('home_banner');
+                bannerLayout = { box: (v && v.box) || {}, items: (v && v.items) || {} };
+                applyBannerLayout();
+                WithPlus.addLayoutEditButton('🛠 배너 사진 편집', () => {
+                    const track = document.getElementById('hero-track');
+                    const slides = Array.from(track.querySelectorAll('.hero-slide'));
+                    let idx = Math.round(track.scrollLeft / track.clientWidth);
+                    if (!slides[idx] || !slides[idx].classList.contains('deal-slide')) {
+                        idx = slides.findIndex(s => s.classList.contains('deal-slide'));
+                        if (idx < 0) { alert('편집할 특가 배너가 없습니다'); return; }
+                        track.scrollTo({ left: idx * track.clientWidth });
+                    }
+                    const slide = slides[idx];
+                    const box = slide.querySelector('.deal-img');
+                    const pid = box.dataset.pid;
+                    window.__wpLayoutEditing = true;
+                    const state = Object.assign({}, BANNER_DEFAULTS, bannerLayout.box, (bannerLayout.items || {})[pid] || {});
+                    const pick = (s) => ({ box: { col: s.col, ar: s.ar, dx: s.dx, dy: s.dy, radius: s.radius }, item: { zoom: s.zoom, x: s.x, y: s.y, fit: s.fit } });
+                    WithPlus.openLayoutEditor({
+                        title: '오늘의 특가 배너 사진',
+                        hint: '칸 크기·위치는 모든 배너 공통, 사진 확대·위치·맞춤은 이 상품만 · ◀ ▶ 로 다른 배너',
+                        state, defaults: Object.assign({}, BANNER_DEFAULTS),
+                        fields: [
+                            { key: 'col', label: '사진 칸 너비', min: 20, max: 60, step: 1, unit: '%' },
+                            { key: 'ar', label: '사진 칸 세로 비율', min: 0.5, max: 1.6, step: 0.01, unit: '배' },
+                            { key: 'dx', label: '칸 좌우 위치', min: -300, max: 300, step: 1, unit: 'px' },
+                            { key: 'dy', label: '칸 위아래 위치', min: -200, max: 200, step: 1, unit: 'px' },
+                            { key: 'radius', label: '모서리 둥글기', min: 0, max: 60, step: 1, unit: 'px' },
+                            { key: 'zoom', label: '사진 확대', min: 1, max: 4, step: 0.01, unit: '배' },
+                            { key: 'x', label: '사진 좌우', min: 0, max: 100, step: 1, unit: '%' },
+                            { key: 'y', label: '사진 위아래', min: 0, max: 100, step: 1, unit: '%' },
+                            { key: 'fit', label: '사진 맞춤', type: 'select', options: [['cover', '칸 꽉 채우기'], ['contain', '사진 전체 보이기']] }
+                        ],
+                        onChange: (s) => { const p = pick(s); bannerLayout.box = p.box; bannerLayout.items = Object.assign({}, bannerLayout.items, { [pid]: p.item }); applyBannerLayout(); },
+                        onSave: (s) => { const p = pick(s); return WithPlus.saveLayout('home_banner', { box: p.box, items: Object.assign({}, bannerLayout.items, { [pid]: p.item }) }); },
+                        extraButtons: '<button type="button" class="wp-le-prev">◀ 이전 배너</button><button type="button" class="wp-le-next">다음 배너 ▶</button>',
+                        onBar: (bar) => {
+                            const go = (step) => {
+                                const deals = slides.filter(s => s.classList.contains('deal-slide'));
+                                const cur = deals.indexOf(slide);
+                                const next = deals[(cur + step + deals.length) % deals.length];
+                                WithPlus.closeLayoutEditor();
+                                track.scrollTo({ left: slides.indexOf(next) * track.clientWidth });
+                                setTimeout(() => document.querySelector('.wp-le-fab') && document.querySelector('.wp-le-fab').click(), 450);
+                            };
+                            bar.querySelector('.wp-le-prev').addEventListener('click', () => go(-1));
+                            bar.querySelector('.wp-le-next').addEventListener('click', () => go(1));
+                        },
+                        drag: {
+                            el: box, pan: ['x', 'y'], zoomKey: 'zoom', resize: ['col', 'ar'], move: ['dx', 'dy'],
+                            toUnits: (dim, delta, rect) => dim === 'w' ? delta / slide.getBoundingClientRect().width * 100 : delta / rect.width
+                        },
+                        onClose: () => { window.__wpLayoutEditing = false; }
+                    });
+                });
             }
 
             // ============================================
@@ -2164,6 +2292,38 @@
             }
 
             // ============================================
+            // 🔴 실시간 후기 + 지금 이 순간 — /api/home/live (실제 데이터만, 이름은 가려서)
+            // ============================================
+            async function loadLivePulse() {
+                const sec = document.getElementById('live-pulse');
+                if (!sec) return;
+                try {
+                    const { ok, json } = await WithPlus.fetchJSON('/api/home/live');
+                    if (!ok || !json.success) return;
+                    const d = json.data || {};
+                    const reviews = d.reviews || [], feed = d.feed || [];
+                    if (!reviews.length && !feed.length) return; // 보여줄 실제 데이터가 없으면 섹션을 숨긴 채로 둔다
+                    const esc = WithPlus.escapeHtml;
+                    document.getElementById('lp-review-scroll').innerHTML = reviews.length ? reviews.map(r => `
+                        <a class="lp-rv" href="${r.product ? '/product/' + encodeURIComponent(r.product.id) : '/reviews'}">
+                            <div class="lp-rv-img" style="${r.photo ? `background-image:url('${WithPlus.safeUrlAttr(r.photo)}')` : ''}"><span class="lp-src ${r.source}">${r.source === 'band' ? '밴드 후기' : '구매 후기'}</span></div>
+                            <div class="lp-stars">${r.rating ? '★'.repeat(r.rating) + '<span style="color:#E6E6E6">' + '★'.repeat(5 - r.rating) + '</span>' : '<span style="color:#2E7D32;letter-spacing:0;">📣 창고털이 밴드</span>'}</div>
+                            <div class="lp-rv-text">${esc(r.text || (r.product ? r.product.name : ''))}</div>
+                            <div class="lp-rv-who">${esc(r.author)}님</div>
+                        </a>`).join('') : '<p style="color:#999;font-size:.9em;">아직 공개된 후기가 없습니다</p>';
+                    const icon = { order: '🛍️', review: '⭐', band_review: '📣' };
+                    const verb = { order: '구매했습니다', review: '후기를 남겼습니다', band_review: '밴드에 후기를 남겼습니다' };
+                    document.getElementById('lp-feed').innerHTML = feed.map(e => {
+                        const prod = e.product_name ? (e.product_id ? `<a href="/product/${encodeURIComponent(e.product_id)}">${esc(e.product_name)}</a>` : `<b>${esc(e.product_name)}</b>`) + (e.extra ? ` 외 ${e.extra}건` : '') + (e.type === 'order' ? '을(를) ' : ' ') : '';
+                        return `<li><span class="lp-ava">${icon[e.type] || '✨'}</span><span class="lp-msg">${esc(e.author)}님이 ${prod}${verb[e.type] || ''}</span><span class="lp-time">${WithPlus.timeAgo(e.at)}</span></li>`;
+                    }).join('');
+                    const s = d.stats || {};
+                    document.getElementById('lp-stats').textContent = `🛒 누적 주문 ${(s.orders || 0).toLocaleString('ko-KR')}건 · ⭐ 구매 후기 ${(s.reviews || 0).toLocaleString('ko-KR')}건 · 📣 밴드 후기 ${(s.bandReviews || 0).toLocaleString('ko-KR')}건`;
+                    sec.style.display = '';
+                } catch (e) { /* 실패하면 섹션을 숨긴 채로 둔다 */ }
+            }
+
+            // ============================================
             // 최근 리뷰: 실제 리뷰 데이터 (작성자는 개인정보 보호로 비공개)
             // ============================================
             async function loadRecentReviews() {
@@ -2232,6 +2392,8 @@
                 loadRecommendedProducts(),
                 loadRecentlyViewed(),
                 loadRecentReviews(),
+                loadLivePulse(),
+                initBannerLayout(),
                 loadPlatformStats(),
                 loadMemberStrip().catch(() => { /* 실패 시 기본 안내 문구 유지 */ })
             ]);
