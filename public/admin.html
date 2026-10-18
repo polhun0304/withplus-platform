@@ -282,6 +282,7 @@
         .img-thumb { position: relative; width: 96px; height: 96px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border-color); background: #F4F4F6; cursor: grab; }
         .img-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; pointer-events: none; }
         .img-thumb.over { outline: 3px solid var(--primary-color); }
+        .img-thumb.lowres::after { content: '⚠ 해상도 낮음\A다시 올려주세요'; white-space: pre; position: absolute; left: 0; right: 0; bottom: 0; background: rgba(220,38,38,.9); color: #fff; font-size: 10px; font-weight: 700; text-align: center; padding: 3px 2px; line-height: 1.3; }
         .img-thumb.broken::after { content: '불러올 수 없는 사진'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 11px; color: #C62828; background: #FFF4F4; padding: 6px; }
         .img-main { position: absolute; left: 6px; top: 6px; background: var(--primary-color); color: #fff; font-size: 11px; font-weight: 700; border-radius: 6px; padding: 2px 6px; }
         .img-del { position: absolute; right: 4px; top: 4px; width: 24px; height: 24px; border-radius: 50%; border: none; background: rgba(0,0,0,.6); color: #fff; cursor: pointer; font-size: 12px; line-height: 24px; padding: 0; }
@@ -409,7 +410,7 @@
                     <div id="pf-detail-sections"></div>
                     <div class="img-drop section-bulk-drop" id="pf-section-bulk" tabindex="0">
                         <span class="img-drop-icon">📚</span>
-                        <span>상세 사진 <b>여러 장(최대 30장)을 한꺼번에 끌어다 놓거나</b> <button type="button" class="btn btn-secondary" id="pf-section-bulk-pick">📁 여러 장 파일 추가</button><br><small>사진 1장마다 블록이 1개씩 순서대로 만들어집니다 (파일 이름 순 · Ctrl+V 붙여넣기 가능)</small></span>
+                        <span>📜 <b>긴 상세페이지(통이미지) 1장</b> 또는 상세 사진 <b>여러 장(최대 30장)</b>을 끌어다 놓거나 <button type="button" class="btn btn-secondary" id="pf-section-bulk-pick">📁 파일 추가</button><br><small>아주 긴 이미지는 글 사이 빈 줄에서 자동으로 잘라 블록으로 이어 붙이고(간격 없이 한 장처럼 보임), 사진은 1장마다 블록 1개가 순서대로 만들어집니다 (파일 이름 순 · Ctrl+V 붙여넣기 가능)</small></span>
                         <input type="file" id="pf-section-bulk-file" accept="image/jpeg,image/png,image/webp,image/gif" multiple hidden>
                     </div>
                     <div class="img-status" id="pf-section-bulk-status"></div>
@@ -3112,8 +3113,12 @@
                 const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(file).catch(() => null));
                 if (!bitmap) return file;
                 const MAX = 1600;
-                // 1단계: 원본을 작업용 캔버스에 (긴 변 최대 1600px)
-                const scale = Math.min(1, MAX / Math.max(bitmap.width, bitmap.height));
+                // 1단계: 원본을 작업용 캔버스에 — 대표 사진은 긴 변 최대 1600px,
+                // 상세 사진은 가로 기준 최대 1200px(세로로 긴 상세이미지가 작게 줄어들어 깨지는 것 방지)
+                let scale = (kind === 'detail')
+                    ? Math.min(1, 1200 / bitmap.width)
+                    : Math.min(1, MAX / Math.max(bitmap.width, bitmap.height));
+                if (kind === 'detail' && bitmap.height * scale > 8000) scale = 8000 / bitmap.height; // 안전장치(보통은 아래 분할 업로드가 먼저 처리)
                 let canvas = document.createElement('canvas');
                 canvas.width = Math.max(1, Math.round(bitmap.width * scale));
                 canvas.height = Math.max(1, Math.round(bitmap.height * scale));
@@ -3124,7 +3129,7 @@
                     try {
                         const isMain = kind !== 'detail';
                         // 밝기 먼저 맞춘 뒤 여백을 찾아야, 채우는 배경색이 보정된 사진과 이어진다
-                        if (autoLevels(ctx, canvas.width, canvas.height)) changed = true;
+                        if (canvas.width * canvas.height <= 6000000 && autoLevels(ctx, canvas.width, canvas.height)) changed = true;
                         const box = isMain ? trimUniformBorder(ctx, canvas.width, canvas.height) : null;
                         const ratio = canvas.width / canvas.height;
                         if (isMain && box && ratio > 0.5 && ratio < 2) {
@@ -3149,11 +3154,90 @@
                 return (changed || blob.size < file.size) ? blob : file;
             }
 
+            // 세로로 아주 긴 상세 이미지는 여러 장으로 매끄럽게 잘라서 올린다(상세페이지에서 간격 없이 이어 붙어 보임)
+            // 가로 1200px 기준으로 높이가 8000px을 넘을 때만 자르고, 자르는 위치는 글자 줄 사이의 빈 줄을 찾아 고른다
+            async function prepareDetailSlices(file) {
+                if (file.type === 'image/gif') return null;
+                const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => createImageBitmap(file).catch(() => null));
+                if (!bitmap) return null;
+                const outW = Math.min(1200, bitmap.width);
+                const k = outW / bitmap.width;
+                const totalH = bitmap.height * k;
+                if (totalH <= 8000) { if (bitmap.close) bitmap.close(); return null; }
+                const SLICE = 3200; // 한 조각의 목표 높이(px)
+                const srcSlice = SLICE / k;
+                const cuts = [0];
+                const probe = document.createElement('canvas');
+                const pw = 160;
+                probe.width = pw;
+                while (bitmap.height - cuts[cuts.length - 1] > srcSlice * 1.35) {
+                    const target = cuts[cuts.length - 1] + srcSlice;
+                    const win = Math.min(srcSlice * 0.25, 600 / k); // 목표 위치 위쪽 일부 구간에서 빈 줄 찾기
+                    const y0 = Math.max(cuts[cuts.length - 1] + srcSlice * 0.5, target - win);
+                    const hh = Math.max(2, Math.round((target - y0) * pw / bitmap.width));
+                    probe.height = hh;
+                    const pctx = probe.getContext('2d', { willReadFrequently: true });
+                    pctx.drawImage(bitmap, 0, y0, bitmap.width, target - y0, 0, 0, pw, hh);
+                    const px = pctx.getImageData(0, 0, pw, hh).data;
+                    const ranges = new Array(hh);
+                    for (let r = 0; r < hh; r++) {
+                        let mn = 255, mx = 0;
+                        for (let c = 0; c < pw; c++) { const i = (r * pw + c) * 4; const l = (px[i] * 3 + px[i + 1] * 6 + px[i + 2]) / 10; if (l < mn) mn = l; if (l > mx) mx = l; }
+                        ranges[r] = mx - mn;
+                    }
+                    let best = hh - 1, bestRange = 1e9;
+                    for (let r = hh - 1; r >= 0; r--) {
+                        if (ranges[r] < bestRange - 0.5) { bestRange = ranges[r]; best = r; if (ranges[r] < 6) break; }
+                    }
+                    // 빈 줄이 이어지는 구간이면 그 한가운데에서 자른다
+                    let lo = best, hi = best;
+                    while (lo > 0 && ranges[lo - 1] <= bestRange + 3) lo--;
+                    while (hi < hh - 1 && ranges[hi + 1] <= bestRange + 3) hi++;
+                    best = Math.round((lo + hi) / 2);
+                    cuts.push(Math.round(y0 + best * (target - y0) / hh));
+                }
+                cuts.push(bitmap.height);
+                const blobs = [];
+                for (let i = 0; i < cuts.length - 1; i++) {
+                    const sy = cuts[i], sh = cuts[i + 1] - cuts[i];
+                    if (sh < 2) continue;
+                    const c = document.createElement('canvas');
+                    c.width = outW; c.height = Math.max(1, Math.round(sh * k));
+                    c.getContext('2d').drawImage(bitmap, 0, sy, bitmap.width, sh, 0, 0, c.width, c.height);
+                    let blob = await new Promise(r => c.toBlob(r, 'image/webp', 0.88));
+                    if (!blob || blob.size > 9.5 * 1024 * 1024) blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85));
+                    if (!blob) throw new Error('긴 사진을 나누는 데 실패했어요');
+                    blobs.push(blob);
+                }
+                if (bitmap.close) bitmap.close();
+                return blobs.length > 1 ? blobs : null;
+            }
+            async function uploadProductImages(file, kind) {
+                if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type)) throw new Error(`${file.name || '파일'}: JPG·PNG·WEBP·GIF만 올릴 수 있어요`);
+                if (file.size > 25 * 1024 * 1024) throw new Error(`${file.name || '파일'}: 25MB 이하 사진만 올릴 수 있어요`);
+                if (kind === 'detail') {
+                    let slices = null;
+                    try { slices = await prepareDetailSlices(file); } catch (e) { console.warn('긴 사진 분할 건너뜀', e); }
+                    if (slices && slices.length > 1) {
+                        const urls = [];
+                        for (const b of slices) {
+                            if (b.size > 10 * 1024 * 1024) throw new Error(`${file.name || '파일'}: 나눠도 한 조각이 10MB가 넘어요. 더 작은 사진을 사용해주세요`);
+                            urls.push(await uploadProductImageBlob(b, kind));
+                        }
+                        return urls;
+                    }
+                }
+                return [await uploadProductImage(file, kind)];
+            }
+
             async function uploadProductImage(file, kind) {
                 if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type)) throw new Error(`${file.name || '파일'}: JPG·PNG·WEBP·GIF만 올릴 수 있어요`);
                 if (file.size > 25 * 1024 * 1024) throw new Error(`${file.name || '파일'}: 25MB 이하 사진만 올릴 수 있어요`);
                 const body = await prepareImage(file, kind);
                 if (body.size > 10 * 1024 * 1024) throw new Error(`${file.name || '파일'}: 줄여도 10MB가 넘어요. 더 작은 사진을 사용해주세요`);
+                return uploadProductImageBlob(body, kind);
+            }
+            async function uploadProductImageBlob(body, kind) {
                 const token = await WithPlus.getAccessToken();
                 const res = await fetch('/api/admin/uploads/product-image', {
                     method: 'POST',
@@ -3195,7 +3279,7 @@
                 function render() {
                     thumbs.innerHTML = urls.map((u, i) => `
                         <div class="img-thumb" draggable="${multiple}" data-i="${i}">
-                            <img src="${WithPlus.safeUrlAttr(u)}" alt="" loading="lazy" onerror="this.parentNode.classList.add('broken')">
+                            <img src="${WithPlus.safeUrlAttr(u)}" alt="" loading="lazy" onerror="this.parentNode.classList.add('broken')" onload="if(this.naturalWidth<400&&this.naturalHeight>this.naturalWidth*4)this.parentNode.classList.add('lowres')">
                             ${multiple && i === 0 ? '<span class="img-main">대표</span>' : ''}
                             <button type="button" class="img-del" title="삭제" aria-label="사진 삭제">✕</button>
                         </div>`).join('') + (pending ? Array.from({ length: pending }).map(() => '<div class="img-thumb loading"><span class="img-spin"></span></div>').join('') : '');
@@ -3232,14 +3316,18 @@
                     pending += list.length; render(); setStatus(`사진 ${list.length}장 올리는 중...`);
                     const errors = [];
                     // 순서를 지키기 위해 한 장씩 차례로 올린다
+                    let extraUrls = [];
                     for (const f of list) {
                         try {
-                            const url = await uploadProductImage(f, opts.kind);
-                            if (multiple) urls.push(url); else urls = [url];
+                            const got = await uploadProductImages(f, opts.kind);
+                            if (multiple) urls.push(...got);
+                            else { urls = [got[0]]; if (got.length > 1) extraUrls = extraUrls.concat(got.slice(1)); }
                         } catch (err) { errors.push(err.message); }
                         pending--; render();
                     }
                     changed();
+                    // 긴 사진이 여러 조각으로 나뉘면 첫 조각은 이 칸에, 나머지는 바로 아래 새 블록으로 넣는다
+                    if (extraUrls.length && opts.onExtra) opts.onExtra(extraUrls);
                     setStatus(errors.length ? errors.join(' / ') : `✅ ${list.length - errors.length}장 저장 완료`, errors.length > 0);
                 }
 
@@ -3294,9 +3382,31 @@
                     if (!holder || holder.dataset.mounted) return;
                     holder.dataset.mounted = '1';
                     const hidden = row.querySelector('.section-image-input');
-                    const mgr = createImageManager(holder, { multiple: false, kind: 'detail', onMany: (files) => addSectionPhotosBulk(files), onChange: (list) => { hidden.value = list[0] || ''; if (list.length) scheduleAutoDescribe(); } });
+                    const mgr = createImageManager(holder, { multiple: false, kind: 'detail', onMany: (files) => addSectionPhotosBulk(files), onExtra: (extra) => insertSectionRowsAfter(row, extra), onChange: (list) => { hidden.value = list[0] || ''; if (list.length) scheduleAutoDescribe(); } });
                     mgr.setUrls(hidden.value ? [hidden.value] : []);
                     holder.__mgr = mgr;
+                });
+            }
+
+            // 긴 상세 사진을 나눈 나머지 조각을 현재 블록 바로 아래에 새 블록으로 넣는다
+            function insertSectionRowsAfter(row, urlList) {
+                let anchor = row;
+                (urlList || []).forEach(u => {
+                    anchor.insertAdjacentHTML('afterend', renderDetailSectionRow({ image_url: u, text: '' }, 0));
+                    const newRow = anchor.nextElementSibling;
+                    anchor = newRow;
+                    newRow.querySelector('.remove-section-btn').addEventListener('click', () => {
+                        newRow.remove();
+                        sectionsArea.querySelectorAll('.detail-section-row').forEach((r, i) => {
+                            r.dataset.index = i;
+                            r.querySelector('.row-top span').textContent = '블록 ' + (i + 1);
+                        });
+                    });
+                });
+                mountSectionImageManagers();
+                sectionsArea.querySelectorAll('.detail-section-row').forEach((r, i) => {
+                    r.dataset.index = i;
+                    r.querySelector('.row-top span').textContent = '블록 ' + (i + 1);
                 });
             }
 

@@ -560,13 +560,8 @@
     return `
     <div class="product-card" data-product-id="${product.id}" style="cursor:pointer;">
         <div class="product-image" ${imageUrl ? `style="background-image:url('${safeUrlAttr(imageUrl)}');background-size:cover;background-position:center;"` : ''}>
-            <div class="mileage-badge">
-                <span class="individual">적립 ${formatPercent(rates.personalPercent)}%</span>
-                <span class="bonus">+${formatPercent(rates.communityPercent)}%</span>
-            </div>
             <div class="product-actions">
                 <button class="action-btn wishlist-btn" type="button">❤️</button>
-                <button class="action-btn" type="button">🛒</button>
             </div>
             ${imageUrl ? '' : emoji}
             ${badges.length ? `<div class="wp-card-badges">${badges.map(b => `<span class="wp-card-badge ${b.cls}">${b.label}</span>`).join('')}</div>` : ''}
@@ -579,6 +574,7 @@
                 <span class="current-price">${formatPrice(currentPrice)}</span>
                 ${hasDiscount ? `<span class="original-price">${formatPrice(product.price)}</span>` : ''}
             </div>
+            <div class="wp-card-earn">적립 ${formatPercent(rates.personalPercent)}% <span>+${formatPercent(rates.communityPercent)}%</span></div>
             <div class="product-rating-line">${renderStars(rating, 14)} <span class="product-review-count">(${Number(reviewCount).toLocaleString('ko-KR')})</span></div>
             <div class="product-meta">
                 ${outOfStock ? '품절' : '재고 ' + product.stock + '개'} | 배송비 무료
@@ -594,12 +590,36 @@
     global.__withplusInteractionsAttached = true;
 
     // 상세 페이지 이동 (버튼/액션 영역 클릭은 제외)
+    // 한 번 눌러도 확실히 넘어가도록: click 외에 '누름-뗌' 이 같은 카드면 바로 이동(그 사이 목록이 다시 그려져도 인식)
+    let navigating = false;
+    function goProduct(id) {
+      if (!id || navigating) return;
+      navigating = true;
+      setTimeout(() => { navigating = false; }, 1500);
+      location.href = '/product/' + encodeURIComponent(id);
+    }
+    const isActionTarget = (t) => !!(t && t.closest && t.closest('.product-actions, .add-to-cart-btn, .wishlist-btn, a, button, input, select, textarea'));
+    let downInfo = null;
+    document.addEventListener('pointerdown', function (e) {
+      downInfo = null;
+      if (e.button > 0 || window.__wpLayoutEditing) return;
+      const card = e.target.closest && e.target.closest('.product-card[data-product-id]');
+      if (!card || isActionTarget(e.target)) return;
+      downInfo = { id: card.getAttribute('data-product-id'), x: e.clientX, y: e.clientY, t: Date.now() };
+    }, true);
+    document.addEventListener('pointerup', function (e) {
+      const d = downInfo; downInfo = null;
+      if (!d || window.__wpLayoutEditing) return;
+      if (Math.hypot(e.clientX - d.x, e.clientY - d.y) > 10 || Date.now() - d.t > 900) return;
+      const card = e.target.closest && e.target.closest('.product-card[data-product-id]');
+      if (!card || card.getAttribute('data-product-id') !== d.id || isActionTarget(e.target)) return;
+      goProduct(d.id);
+    }, true);
     document.addEventListener('click', function (e) {
       const card = e.target.closest('.product-card[data-product-id]');
       if (!card) return;
       if (e.target.closest('.product-actions') || e.target.closest('.add-to-cart-btn')) return;
-      const id = card.getAttribute('data-product-id');
-      if (id) location.href = '/product/' + id;
+      goProduct(card.getAttribute('data-product-id'));
     });
 
     // 장바구니 담기 (실제 localStorage 장바구니에 저장)
@@ -1308,6 +1328,23 @@
       .product-card .product-price { flex-wrap: wrap; align-items: baseline; }
       .product-card .discount-rate { color: #E8125C; font-size: 1.15em; font-weight: 800; }
       .product-card .current-price { font-weight: 800; }
+      /* 순위·적립 배지는 사진을 가리지 않게 작게 */
+      body .product-image .mileage-badge { top: 6px; left: 6px; padding: 2px 6px; border-radius: 4px; font-size: 10px; gap: 3px; line-height: 1.25; max-width: calc(100% - 12px); backdrop-filter: none; background: rgba(0,0,0,0.58); }
+      body .product-image .mileage-badge .individual { font-size: 10px; }
+      body .product-image .mileage-badge .bonus { font-size: 9px; }
+      body .wp-ranking .product-image[data-rank]::before { left: 0; top: 0; min-width: 17px; height: 17px; padding: 0 4px; font-size: 10px; border-radius: 0 0 7px 0; }
+      body.wp-m-grid .product-image .wp-card-badges { top: auto; bottom: 8px; }
+      /* 적립 안내는 사진 위가 아니라 가격 아래 작은 글씨로 */
+      body .product-card .wp-card-earn { font-size: 11.5px; color: #8A8A8A; margin: 0 0 4px; line-height: 1.3; }
+      body .product-card .wp-card-earn span { color: var(--lp-primary, #E8125C); }
+      /* 정상가·할인가 글씨 크기를 비슷하게 */
+      body .product-card .product-price { gap: 2px 6px; align-items: baseline; }
+      body .product-card .discount-rate { font-size: 1em; }
+      body .product-card .current-price { font-size: 1em; }
+      body .product-card .original-price { font-size: 1em; font-weight: 500; color: #9A9A9A; text-decoration: line-through; }
+      /* 카드가 눌릴 때 움직이면 클릭이 빗나가므로 올라오는 효과 제거 */
+      body .product-card:hover { transform: none; }
+      body .product-card .add-to-cart-btn { white-space: nowrap; word-break: keep-all; }
 
       /* 맨 위로 버튼 (모바일) */
       .wp-scroll-top { position: fixed; left: 14px; bottom: calc(80px + env(safe-area-inset-bottom)); z-index: 890; width: 44px; height: 44px; border-radius: 50%; border: 1px solid #EEE; background: rgba(255,255,255,0.96); box-shadow: 0 4px 12px rgba(0,0,0,0.12); color: #333; display: none; align-items: center; justify-content: center; cursor: pointer; }
@@ -1561,17 +1598,19 @@
     if (wmStyleInjected) return;
     wmStyleInjected = true;
     const tile = 'data:image/svg+xml;utf8,' + encodeURIComponent(
-      `<svg xmlns="http://www.w3.org/2000/svg" width="220" height="140"><g transform="rotate(-24 110 70)">` +
-      `<text x="110" y="78" text-anchor="middle" font-family="Pretendard Variable,Arial,sans-serif" font-size="26" font-weight="800" ` +
-      `fill="#ffffff" fill-opacity="0.32" stroke="#000000" stroke-opacity="0.10" stroke-width="1">${BRAND_WM_TEXT}</text></g></svg>`);
+      `<svg xmlns="http://www.w3.org/2000/svg" width="260" height="150"><g transform="rotate(-20 130 75)">` +
+      `<text x="130" y="82" text-anchor="middle" font-family="Pretendard Variable,Arial,sans-serif" font-size="28" font-weight="800" ` +
+      `fill="#ffffff" fill-opacity="0.20" stroke="#000000" stroke-opacity="0.07" stroke-width="1">${BRAND_WM_TEXT}</text></g></svg>`);
     const style = document.createElement('style');
     style.id = 'wp-wm-style';
     style.textContent = `
       .wp-wm-host { position: relative; }
       .wp-wm { position: absolute; inset: 0; pointer-events: none; z-index: 3; border-radius: inherit; overflow: hidden;
-               background-image: url("${tile}"); background-repeat: repeat; background-size: 220px 140px; }
-      .wp-wm::after { content: ''; position: absolute; right: 12px; bottom: 10px; width: 92px; height: 30px; opacity: .55;
-                      background: url("${BRAND_LOGO_SRC}") right bottom / contain no-repeat; filter: drop-shadow(0 1px 2px rgba(0,0,0,.35)); }
+               background-image: url("${tile}"); background-repeat: no-repeat; background-position: center; background-size: min(260px, 70%) auto; }
+      .wp-wm::after { content: ''; position: absolute; right: 10px; bottom: 8px; width: 72px; height: 24px; opacity: .30;
+                      background: url("${BRAND_LOGO_SRC}") right bottom / contain no-repeat; filter: drop-shadow(0 1px 2px rgba(0,0,0,.20)); }
+      .wp-wm.wp-wm-lite { background-image: none; }
+      .wp-wm.wp-wm-lite.is-top::after { top: 10px; bottom: auto; }
       .wp-protect, .wp-protect img { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; -webkit-user-drag: none; }
       .lightbox-overlay .wp-wm-frame { position: relative; display: inline-block; max-width: 92vw; max-height: 88vh; }
       .lightbox-overlay .wp-wm-frame img { display: block; max-width: 92vw; max-height: 88vh; }

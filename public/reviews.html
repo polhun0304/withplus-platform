@@ -14,7 +14,7 @@
     <script src="/pwa-install.js" defer></script>
     <script src="/voice-dictation.js?v=1" defer></script>
     <title>후기 모아보기 - WITH+</title>
-    <meta name="description" content="WITH+ 구매 후기와 창고털이 밴드 후기를 한곳에서">
+    <meta name="description" content="WITH+ 회원분들의 생생한 후기를 한곳에서">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         :root { --primary-color: #D32F5B; --text-dark: #333333; --text-gray: #666666; --border-color: #E0E0E0; }
@@ -41,6 +41,9 @@
         .rv-tabs button { border: 1px solid #EBD3DB; background: #fff; border-radius: 999px; padding: 8px 16px; font-size: .92em; cursor: pointer; }
         .rv-tabs button.on { background: #E8125C; border-color: #E8125C; color: #fff; font-weight: 700; }
         .rv-tabs label { margin-left: auto; font-size: .9em; display: flex; gap: 6px; align-items: center; cursor: pointer; }
+        .rv-search { display: flex; align-items: center; gap: 6px; flex: 1 1 260px; max-width: 420px; border: 1px solid #EBD3DB; background: #fff; border-radius: 999px; padding: 4px 6px 4px 16px; }
+        .rv-search input { flex: 1; min-width: 0; border: none; outline: none; font-size: .95em; background: transparent; padding: 6px 0; font-family: inherit; }
+        .rv-search button { border: none; background: #E8125C; color: #fff; border-radius: 999px; width: 36px; height: 32px; cursor: pointer; font-size: 1em; padding: 0; }
         .rv-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
         .rv-card { border: 1px solid #F1E2E7; border-radius: 14px; overflow: hidden; background: #fff; display: flex; flex-direction: column; }
         .rv-photos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; }
@@ -74,11 +77,9 @@
 
         <main class="rv-wrap">
         <h1>💬 후기 모아보기</h1>
-        <p class="rv-sub">WITH+ 구매 후기와 창고털이 밴드 회원분들의 후기를 한곳에 모았습니다. 작성자 이름은 가려서 보여드립니다.</p>
+        <p class="rv-sub">WITH+ 회원분들의 생생한 후기를 한곳에 모았습니다. 작성자 이름은 가려서 보여드립니다.</p>
         <div class="rv-tabs" id="rv-tabs">
-            <button data-src="all" class="on">전체</button>
-            <button data-src="band">📣 밴드 후기</button>
-            <button data-src="with">⭐ 구매 후기</button>
+            <form class="rv-search" id="rv-search" role="search"><input type="search" id="rv-q" placeholder="상품명·후기 내용으로 검색" maxlength="40" autocomplete="off"><button type="submit" aria-label="후기 검색">🔍</button></form>
             <label><input type="checkbox" id="rv-photo"> 📷 사진 후기만</label>
         </div>
         <div class="rv-grid" id="rv-grid"></div>
@@ -91,22 +92,22 @@
     <script>
         WithPlus.initHeader();
         (function () {
-            const st = { src: 'all', photo: false, page: 1 };
+            const st = { src: 'all', photo: false, page: 1, q: '' };
             const grid = document.getElementById('rv-grid'), more = document.getElementById('rv-more');
             const esc = WithPlus.escapeHtml, url = WithPlus.safeUrlAttr;
             async function load(reset) {
                 if (reset) { st.page = 1; grid.innerHTML = '<p class="rv-empty">불러오는 중...</p>'; }
                 const qs = new URLSearchParams({ source: st.src, page: st.page, size: 24 });
                 if (st.photo) qs.set('photo', '1');
+                if (st.q) qs.set('q', st.q);
                 const res = await fetch('/api/reviews/all?' + qs).then(r => r.json()).catch(() => null);
                 const list = (res && res.success && res.data) || [];
                 if (reset) grid.innerHTML = '';
-                if (!list.length && st.page === 1) { grid.innerHTML = '<p class="rv-empty">아직 공개된 후기가 없습니다</p>'; more.style.display = 'none'; return; }
+                if (!list.length && st.page === 1) { grid.innerHTML = '<p class="rv-empty">' + (st.q ? '\'' + esc(st.q) + '\' 검색 결과가 없습니다' : '아직 공개된 후기가 없습니다') + '</p>'; more.style.display = 'none'; return; }
                 grid.insertAdjacentHTML('beforeend', list.map(r => `
                     <div class="rv-card">
                         ${r.photos && r.photos.length ? `<div class="rv-photos">${r.photos.slice(0, 3).map(p => `<img src="${url(p)}" loading="lazy" alt="후기 사진">`).join('')}</div>` : ''}
                         <div class="rv-body">
-                            <span class="rv-badge ${r.source}">${r.source === 'band' ? '📣 창고털이 밴드 후기' : '⭐ 구매 후기'}</span>
                             ${r.rating ? `<div class="rv-stars">${'★'.repeat(r.rating)}<span style="color:#E6E6E6">${'★'.repeat(5 - r.rating)}</span></div>` : ''}
                             <div class="rv-text">${esc(r.text || '')}</div>
                             <div class="rv-meta"><span>${esc(r.author)}님</span><span>${r.at ? WithPlus.timeAgo(r.at) : ''}</span></div>
@@ -115,10 +116,14 @@
                     </div>`).join(''));
                 more.style.display = (res.total > st.page * res.size) ? '' : 'none';
             }
-            document.querySelectorAll('#rv-tabs button').forEach(b => b.addEventListener('click', () => {
-                document.querySelectorAll('#rv-tabs button').forEach(x => x.classList.toggle('on', x === b));
-                st.src = b.dataset.src; load(true);
-            }));
+            document.getElementById('rv-search').addEventListener('submit', (e) => {
+                e.preventDefault();
+                st.q = document.getElementById('rv-q').value.trim();
+                load(true);
+            });
+            document.getElementById('rv-q').addEventListener('input', (e) => {
+                if (!e.target.value && st.q) { st.q = ''; load(true); } // 검색어를 다 지우면 전체 후기로 돌아간다
+            });
             document.getElementById('rv-photo').addEventListener('change', (e) => { st.photo = e.target.checked; load(true); });
             more.addEventListener('click', () => { st.page++; load(false); });
             const zoom = document.getElementById('rv-zoom');

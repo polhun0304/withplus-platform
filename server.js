@@ -5481,6 +5481,36 @@ app.post('/api/admin/marketing-segments/notify', authenticate, requireRole(['adm
 // 상품 API
 // ============================================
 
+// 검색 보강: DB 검색함수(search_products_with)가 오류이거나 결과를 못 줄 때, 상품명·카테고리·브랜드·설명에서 직접 부분일치로 찾는다
+async function fallbackProductSearch(rawQuery, limit) {
+  const q = String(rawQuery || '').trim().slice(0, 60);
+  if (!q) return [];
+  const tokens = q.toLowerCase().split(/\s+/).map(t => t.replace(/[%_,()*\\"'`]/g, '')).filter(Boolean).slice(0, 5);
+  if (!tokens.length) return [];
+  const cols = ['name', 'category', 'brand', 'description'];
+  const orFilter = tokens.flatMap(t => cols.map(c => `${c}.ilike.%${t}%`)).join(',');
+  const { data, error } = await supabasePublic
+    .from('products_with')
+    .select(PRODUCT_SAFE_COLUMNS)
+    .eq('status', 'active')
+    .or(orFilter)
+    .limit(300);
+  if (error) throw error;
+  const squash = (s) => String(s || '').toLowerCase().replace(/\s+/g, '');
+  const qSq = squash(q);
+  const rows = (data || []).map(p => {
+    const nameSq = squash(p.name);
+    const hay = squash([p.name, p.category, p.brand, p.description].join(' '));
+    const all = tokens.every(t => hay.includes(squash(t)));
+    const nameHits = tokens.filter(t => nameSq.includes(squash(t))).length;
+    return { p, all, score: (nameSq.includes(qSq) ? 100 : 0) + nameHits * 10 + (all ? 5 : 0) };
+  });
+  let matched = rows.filter(r => r.all);
+  if (!matched.length) matched = rows;
+  matched.sort((a, b) => b.score - a.score || Number(b.p.rating || 0) - Number(a.p.rating || 0));
+  return matched.slice(0, limit || 100).map(r => r.p);
+}
+
 // 모든 상품 조회 (인증 필요 없음 - ANON_KEY 사용)
 // ?category=xxx 쿼리로 카테고리 필터링 가능
 app.get('/api/products', optionalAuth, async (req, res) => {
@@ -5492,6 +5522,13 @@ app.get('/api/products', optionalAuth, async (req, res) => {
     let data, error;
     if (searchQuery) {
       ({ data, error } = await supabasePublic.rpc('search_products_with', { search_query: searchQuery, limit_count: 100 }));
+      // DB 검색함수가 오류이거나 0건이면 직접 부분일치 검색으로 한 번 더 찾는다(검색해도 안 나오는 현상 방지)
+      if (error || !Array.isArray(data) || data.length === 0) {
+        try {
+          const fb = await fallbackProductSearch(searchQuery, 100);
+          if (fb.length > 0 || error) { data = fb; error = null; }
+        } catch (fbErr) { console.error('fallback product search failed:', fbErr.message); }
+      }
     } else {
       let query = supabasePublic
         .from('products_with')
@@ -5583,7 +5620,11 @@ app.get('/api/search/autocomplete', async (req, res) => {
     if (!q || q.length < 1) {
       return res.json({ success: true, data: [], timestamp: new Date().toISOString() });
     }
-    const { data, error } = await supabasePublic.rpc('search_products_with', { search_query: q, limit_count: 8 });
+    let { data, error } = await supabasePublic.rpc('search_products_with', { search_query: q, limit_count: 8 });
+    if (error || !Array.isArray(data) || data.length === 0) {
+      try { const fb = await fallbackProductSearch(q, 8); if (fb.length > 0 || error) { data = fb; error = null; } }
+      catch (fbErr) { /* 보강 검색도 실패하면 아래에서 원래 오류를 처리 */ }
+    }
     if (error) throw error;
     const suggestions = (data || []).map(p => ({ id: p.id, name: p.name, image_url: (p.images_urls && p.images_urls[0]) || null, price: p.price }));
     res.json({ success: true, data: suggestions, timestamp: new Date().toISOString() });
@@ -12712,7 +12753,8 @@ app.get('/api/reviews/all', async (req, res) => {
     const photoOnly = req.query.photo === '1';
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const size = Math.min(48, Math.max(6, parseInt(req.query.size, 10) || 24));
-    const need = page * size;
+    const rq = String(req.query.q || '').trim().slice(0, 40).toLowerCase();
+    const need = rq ? 400 : page * size; // 검색어가 있으면 넉넉히 가져와 글·상품명에서 찾는다
     let band = [], withRev = [], total = 0;
     if (source !== 'with') {
       let q = supabase.from('band_posts_with').select('post_no, author_masked, body, stored_photo_urls, posted_at, posted_label, products_with(id, name, images_urls)', { count: 'exact' })
@@ -12732,7 +12774,17 @@ app.get('/api/reviews/all', async (req, res) => {
       withRev = (await attachReviewerNames(data || [])).map(r => ({ source: 'with', id: 'r' + r.id, author: r.author_name || '구매자', text: String(r.comment || '').trim(), rating: r.rating,
         photos: [], product: r.products_with ? { id: r.products_with.id, name: r.products_with.name, image: firstImage(r.products_with) } : null, at: r.created_at }));
     }
-    const merged = [...band, ...withRev].sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
+    let merged = [...band, ...withRev].sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
+    if (rq) {
+      // 후기 글 내용·상품명에서 검색 (띄어쓰기 달라도 찾도록 공백 제거 비교 병행)
+      const toks = rq.split(/\s+/).filter(Boolean);
+      merged = merged.filter(r => {
+        const hay = [r.text, r.product && r.product.name].join(' ').toLowerCase();
+        const sq = hay.replace(/\s+/g, '');
+        return toks.every(t => hay.includes(t) || sq.includes(t));
+      });
+      total = merged.length;
+    }
     res.set('Cache-Control', 'public, max-age=60');
     res.json({ success: true, data: merged.slice((page - 1) * size, page * size), total, page, size, timestamp: new Date().toISOString() });
   } catch (err) {

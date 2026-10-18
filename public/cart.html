@@ -53,6 +53,23 @@
         .cart-item .qty-control input { width: 40px; text-align: center; border: none; }
         .cart-item .line-total { font-weight: bold; min-width: 90px; text-align: right; }
         .cart-item .remove-btn { background: none; border: none; color: #999; cursor: pointer; font-size: 1.2em; }
+        .cart-item .name, .cart-item .name a { word-break: keep-all; overflow-wrap: anywhere; }
+        .cart-item .qty-control, .cart-item .remove-btn, .cart-item .line-total { flex-shrink: 0; white-space: nowrap; }
+        /* 휴대폰: 상품명이 세로로 한 글자씩 깨지지 않도록 두 줄로 나눠 배치 */
+        @media (max-width: 640px) {
+            .wrap { padding: 0 14px; }
+            .steps { padding: 20px 8px 6px; gap: 6px; flex-wrap: wrap; }
+            .step { white-space: nowrap; font-size: 0.82em; }
+            h1.page-title { font-size: 1.25em; margin: 6px 0 20px; }
+            .cart-item { flex-wrap: wrap; gap: 10px 12px; align-items: flex-start; }
+            .cart-item .thumb { width: 60px; height: 60px; font-size: 1.6em; }
+            .cart-item .info { flex: 1 1 calc(100% - 80px); min-width: 0; }
+            .cart-item .qty-control { margin-left: 72px; }
+            .cart-item .line-total { min-width: 0; margin-left: auto; align-self: center; }
+            .cart-item .remove-btn { align-self: center; padding: 4px 6px; }
+            .summary-row, .coupon-row, .mileage-use-row .mileage-use-input-row { gap: 8px; }
+            .summary-row span { word-break: keep-all; }
+        }
 
         /* ===== 장바구니 "컴팩트형" 디자인 템플릿 (관리자 → 디자인 부품 갤러리에서 선택 가능) =====
            - 아이템 자체의 구조(클래스/버튼)는 그대로 재사용하고, 여백/크기만 줄여 한 줄에 더 많은 정보가 보이게 한다. */

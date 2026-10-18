@@ -1454,10 +1454,25 @@
         .lp-stats { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: linear-gradient(135deg, #FFF0F4, #FFE6EE); font-size: 13px; font-weight: 700; color: #C2185B; }
         @media (max-width: 860px) { .live-pulse { grid-template-columns: 1fr; margin: 16px 12px; } .lp-rv { flex-basis: 112px; } .lp-rv-img { width: 112px; height: 112px; } }
         /* 🛠 특가 배너 사진 칸 — 관리자가 저장한 크기·위치(--deal-*) 적용 */
-        .deal-slide { grid-template-columns: 1fr minmax(140px, var(--deal-col, 38%)) !important; }
-        .deal-img { aspect-ratio: var(--deal-ar, 1) !important; border-radius: var(--deal-radius, 18px) !important; overflow: hidden; position: relative; transform: translate(var(--deal-dx, 0px), var(--deal-dy, 0px)); }
+        .deal-slide { grid-template-columns: 1fr minmax(140px, var(--deal-col, 54%)) !important; }
+        .deal-img { aspect-ratio: var(--deal-ar, 1.39) !important; border-radius: var(--deal-radius, 18px) !important; overflow: hidden; position: relative; transform: translate(var(--deal-dx, 0px), var(--deal-dy, 0px)); }
         .deal-img .deal-pic { width: 100%; height: 100%; display: block; object-fit: cover; }
-        @media (max-width: 768px) { .deal-slide { grid-template-columns: 1fr minmax(120px, calc(var(--deal-col, 38%) + 4%)) !important; } }
+        @media (max-width: 768px) { .deal-slide { grid-template-columns: 1fr minmax(120px, calc(var(--deal-col, 54%) + 4%)) !important; } }
+        /* 배너: 사진은 크게, 왼쪽 글씨는 조금 작게 */
+        .hero-slide { padding: 28px 40px; }
+        .deal-kicker { font-size: .88em; }
+        .deal-name { font-size: 1.4em; margin: 8px 0 6px; }
+        .deal-price .now { font-size: 1.3em; }
+        .deal-price .was { font-size: 1.05em; }
+        .deal-cta { margin-top: 12px; padding: 8px 16px; font-size: .88em; }
+        @media (max-width: 768px) {
+            .hero-slide { padding: 16px 16px 30px; }
+            .deal-name { font-size: 1.02em; margin: 6px 0 4px; }
+            .deal-kicker { font-size: .78em; }
+            .deal-price .now { font-size: 1.05em; }
+            .deal-price .was { font-size: .8em; }
+            .deal-cta { margin-top: 8px; padding: 6px 12px; font-size: .78em; }
+        }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -2085,7 +2100,7 @@
             // ============================================
             // 🛠 오늘의 특가 배너 — 오른쪽 사진 칸의 크기·위치와 상품별 사진 확대·위치 (관리자가 저장한 값 적용)
             // ============================================
-            const BANNER_DEFAULTS = { col: 38, ar: 1, dx: 0, dy: 0, radius: 18, zoom: 1, x: 50, y: 50, fit: 'cover' };
+            const BANNER_DEFAULTS = { col: 54, ar: 0.72, dx: 0, dy: 0, radius: 18, zoom: 1, x: 50, y: 50, fit: 'cover' };
             let bannerLayout = { box: {}, items: {} };
             function applyBannerLayout() {
                 const hero = document.getElementById('hero-slider');
@@ -2124,7 +2139,7 @@
                         hint: '칸 크기·위치는 모든 배너 공통, 사진 확대·위치·맞춤은 이 상품만 · ◀ ▶ 로 다른 배너',
                         state, defaults: Object.assign({}, BANNER_DEFAULTS),
                         fields: [
-                            { key: 'col', label: '사진 칸 너비', min: 20, max: 60, step: 1, unit: '%' },
+                            { key: 'col', label: '사진 칸 너비', min: 20, max: 75, step: 1, unit: '%' },
                             { key: 'ar', label: '사진 칸 세로 비율', min: 0.5, max: 1.6, step: 0.01, unit: '배' },
                             { key: 'dx', label: '칸 좌우 위치', min: -300, max: 300, step: 1, unit: 'px' },
                             { key: 'dy', label: '칸 위아래 위치', min: -200, max: 200, step: 1, unit: 'px' },
@@ -2306,19 +2321,19 @@
                     const esc = WithPlus.escapeHtml;
                     document.getElementById('lp-review-scroll').innerHTML = reviews.length ? reviews.map(r => `
                         <a class="lp-rv" href="${r.product ? '/product/' + encodeURIComponent(r.product.id) : '/reviews'}">
-                            <div class="lp-rv-img" style="${r.photo ? `background-image:url('${WithPlus.safeUrlAttr(r.photo)}')` : ''}"><span class="lp-src ${r.source}">${r.source === 'band' ? '밴드 후기' : '구매 후기'}</span></div>
-                            <div class="lp-stars">${r.rating ? '★'.repeat(r.rating) + '<span style="color:#E6E6E6">' + '★'.repeat(5 - r.rating) + '</span>' : '<span style="color:#2E7D32;letter-spacing:0;">📣 창고털이 밴드</span>'}</div>
+                            <div class="lp-rv-img" style="${r.photo ? `background-image:url('${WithPlus.safeUrlAttr(r.photo)}')` : ''}"></div>
+                            <div class="lp-stars">${r.rating ? '★'.repeat(r.rating) + '<span style="color:#E6E6E6">' + '★'.repeat(5 - r.rating) + '</span>' : ''}</div>
                             <div class="lp-rv-text">${esc(r.text || (r.product ? r.product.name : ''))}</div>
                             <div class="lp-rv-who">${esc(r.author)}님</div>
                         </a>`).join('') : '<p style="color:#999;font-size:.9em;">아직 공개된 후기가 없습니다</p>';
-                    const icon = { order: '🛍️', review: '⭐', band_review: '📣' };
-                    const verb = { order: '구매했습니다', review: '후기를 남겼습니다', band_review: '밴드에 후기를 남겼습니다' };
+                    const icon = { order: '🛍️', review: '⭐', band_review: '⭐' };
+                    const verb = { order: '구매했습니다', review: '후기를 남겼습니다', band_review: '후기를 남겼습니다' };
                     document.getElementById('lp-feed').innerHTML = feed.map(e => {
                         const prod = e.product_name ? (e.product_id ? `<a href="/product/${encodeURIComponent(e.product_id)}">${esc(e.product_name)}</a>` : `<b>${esc(e.product_name)}</b>`) + (e.extra ? ` 외 ${e.extra}건` : '') + (e.type === 'order' ? '을(를) ' : ' ') : '';
                         return `<li><span class="lp-ava">${icon[e.type] || '✨'}</span><span class="lp-msg">${esc(e.author)}님이 ${prod}${verb[e.type] || ''}</span><span class="lp-time">${WithPlus.timeAgo(e.at)}</span></li>`;
                     }).join('');
                     const s = d.stats || {};
-                    document.getElementById('lp-stats').textContent = `🛒 누적 주문 ${(s.orders || 0).toLocaleString('ko-KR')}건 · ⭐ 구매 후기 ${(s.reviews || 0).toLocaleString('ko-KR')}건 · 📣 밴드 후기 ${(s.bandReviews || 0).toLocaleString('ko-KR')}건`;
+                    document.getElementById('lp-stats').textContent = `🛒 누적 주문 ${(s.orders || 0).toLocaleString('ko-KR')}건 · ⭐ 후기 ${((s.reviews || 0) + (s.bandReviews || 0)).toLocaleString('ko-KR')}건`;
                     sec.style.display = '';
                 } catch (e) { /* 실패하면 섹션을 숨긴 채로 둔다 */ }
             }

@@ -96,9 +96,15 @@
         .detail-info-section { margin-top: 50px; }
         .detail-info-section h2 { font-size: 1.4em; margin-bottom: 20px; }
         .detail-info-section .long-desc { color: var(--text-dark); white-space: pre-wrap; margin-bottom: 24px; line-height: 1.8; }
-        .detail-section-block { margin-bottom: 30px; }
-        .detail-section-block img { width: 100%; border-radius: 12px; display: block; }
-        .detail-section-block p { margin-top: 14px; color: var(--text-gray); white-space: pre-wrap; line-height: 1.7; }
+        /* 상세 사진은 이어 붙여 보이도록 사진 사이 간격을 없앤다(글이 있는 블록만 위아래 여백) */
+        .detail-section-block { margin: 0; padding: 0; line-height: 0; font-size: 0; }
+        .detail-section-block img { width: 100%; height: auto; border-radius: 0; display: block; margin: 0; }
+        .detail-section-block .wp-wm-frame { display: block; line-height: 0; }
+        .detail-section-block p { margin: 12px 0 16px; color: var(--text-gray); white-space: pre-wrap; line-height: 1.7; font-size: 1rem; }
+        /* 정상가·할인가 글씨를 비슷한 크기로 */
+        body .ss-was .detail-original-price { font-size: 1.7em; font-weight: 600; color: #8D8D8D; margin-right: 0; }
+        body .ss-now .detail-price { font-size: 1.45em; }
+        body .ss-now .detail-discount { font-size: 1.2em; }
 
         .reviews-section { margin-top: 60px; }
         .reviews-section h2 { font-size: 1.4em; margin-bottom: 20px; }
@@ -473,8 +479,8 @@
                         <div id="review-write-area"></div>
                         <div id="reviews-list">${reviewsHtml}</div>
                         <div class="band-reviews" id="band-reviews" style="display:none;">
-                            <h3>📣 창고털이 밴드 후기 <span id="band-reviews-count" style="font-size:0.8em; color:var(--text-gray); font-weight:400;"></span></h3>
-                            <p class="band-reviews-note">창고털이 밴드 회원분들이 남긴 후기입니다. 구매인증 리뷰·별점과는 별개이며, 작성자 이름은 가려서 보여드립니다.</p>
+                            <h3>💬 회원 후기 <span id="band-reviews-count" style="font-size:0.8em; color:var(--text-gray); font-weight:400;"></span></h3>
+                            <p class="band-reviews-note">작성자 이름은 가려서 보여드립니다.</p>
                             <div id="band-reviews-list"></div>
                             <a class="ss-link-btn" href="/reviews">후기 모아보기 ›</a>
                         </div>
@@ -792,12 +798,11 @@
                         const list = (json && json.success && json.data) || [];
                         if (!list.length) return;
                         document.getElementById('band-reviews-count').textContent = '(' + (json.total || list.length) + ')';
-                        const bc = document.getElementById('ss-band-count'); if (bc) bc.textContent = ' · 📣 밴드 후기 ' + (json.total || list.length);
                         document.getElementById('band-reviews-list').innerHTML = list.map(r => `
                             <div class="review-item band-review-item">
-                                <div class="wp-review-author">${WithPlus.escapeHtml(r.author_masked || '밴드 회원')} <span class="band-src">밴드</span></div>
+                                <div class="wp-review-author">${WithPlus.escapeHtml(r.author_masked || '회원')}</div>
                                 <div class="review-comment band-review-text">${WithPlus.escapeHtml(r.body || '')}</div>
-                                ${(r.stored_photo_urls || []).length ? `<div class="band-review-photos">${r.stored_photo_urls.slice(0, 6).map(u => `<img src="${WithPlus.safeUrlAttr(u)}" alt="밴드 후기 사진" loading="lazy">`).join('')}</div>` : ''}
+                                ${(r.stored_photo_urls || []).length ? `<div class="band-review-photos">${r.stored_photo_urls.slice(0, 6).map(u => `<img src="${WithPlus.safeUrlAttr(u)}" alt="후기 사진" loading="lazy">`).join('')}</div>` : ''}
                                 <div class="review-date">${WithPlus.escapeHtml(r.posted_label || '')}</div>
                             </div>`).join('');
                         document.querySelectorAll('.band-review-text').forEach(el => el.addEventListener('click', () => el.classList.toggle('open')));
@@ -825,7 +830,33 @@
                 WithPlus.protectImages(document);
                 if (mainImageEl) WithPlus.applyWatermark(mainImageEl);
                 if (thumbStrip) thumbStrip.classList.add('wp-protect');
-                wrap.querySelectorAll('.detail-section-block img').forEach(img => WithPlus.watermarkImage(img));
+                // 사진이 아닌 주소(상품 페이지 링크 등)가 섞여 있어 빈 칸으로 보이는 작은 사진은 자동으로 뺀다
+                if (thumbStrip) {
+                    Array.from(thumbStrip.querySelectorAll('.thumb-item')).forEach(function (t) {
+                        const u = images[parseInt(t.getAttribute('data-index'), 10)];
+                        if (!u) return;
+                        const probe = new Image();
+                        probe.onerror = function () {
+                            t.remove();
+                            const k = images.indexOf(u);
+                            if (k > 0) images.splice(k, 1);
+                            Array.from(thumbStrip.querySelectorAll('.thumb-item')).forEach(function (x, j) { x.setAttribute('data-index', j); });
+                            if (thumbStrip.querySelectorAll('.thumb-item').length < 2) thumbStrip.style.display = 'none';
+                        };
+                        probe.src = u;
+                    });
+                }
+                // 상세 사진은 번잡하지 않게 첫 사진(위)과 마지막 사진(아래)에만 작은 로고를 얹는다
+                (function () {
+                    const imgs = Array.from(wrap.querySelectorAll('.detail-section-block img'));
+                    if (!imgs.length) return;
+                    const pick = imgs.length > 1 ? [imgs[0], imgs[imgs.length - 1]] : [imgs[0]];
+                    pick.forEach((img, i) => {
+                        WithPlus.watermarkImage(img);
+                        const m = img.parentNode && img.parentNode.querySelector(':scope > .wp-wm');
+                        if (m) { m.classList.add('wp-wm-lite'); if (i === 0 && pick.length > 1) m.classList.add('is-top'); }
+                    });
+                })();
                 if (mainImageEl && images.length > 0) {
                     const lightboxOverlay = document.getElementById('lightbox-overlay');
                     const lightboxImg = document.getElementById('lightbox-img');
