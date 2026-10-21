@@ -19038,11 +19038,9 @@ app.get('/board/:type/:id', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'board-detail.html'));
 });
 
-// 📺 하단 탭바 "LIVE" — 실시간 라이브 판매는 별도 서비스(LIVE+)에서 제공한다.
-// LIVEPLUS_URL 환경변수가 설정돼 있으면 그쪽으로 보내고, 아직 없으면 준비중 안내 화면을 보여준다.
+// 📺 하단 탭바 "LIVE" — WITH+ 자체 라이브 채널 목록 (각 채널은 /live/:slug 시청 화면으로 이동).
+// (예전에는 별도 서비스 LIVE+로 보냈지만, 2026-10-22부터 WITH+에 라이브 기능을 이식해 WITH+ 전용 데이터로 운영한다)
 app.get('/live', (req, res) => {
-  const liveplusUrl = process.env.LIVEPLUS_URL;
-  if (liveplusUrl && /^https?:\/\//i.test(liveplusUrl)) return res.redirect(302, liveplusUrl);
   res.sendFile(path.join(__dirname, 'public', 'live.html'));
 });
 
@@ -19069,6 +19067,484 @@ STATIC_INFO_PAGES.forEach(slug => {
   app.get('/' + slug, (req, res) => {
     res.sendFile(path.join(__dirname, 'public', slug + '.html'));
   });
+});
+
+// ============================================
+// LIVE+ 공식 채널(FAN+/CREATOR+/BRAND+ 공용) API
+// ============================================
+// 스타/크리에이터/브랜드가 전부 같은 channels_live 구조를 쓴다(설계 근거는 마이그레이션 주석 참고).
+// is_official/verification_status는 여기서 누구도 임의로 true로 만들 수 없고, 관리자 전용 엔드포인트에서만
+// 명시적으로 바꿀 수 있다 - 권리계약 없이 "공식"으로 표시되는 사고를 구조적으로 막기 위함이다.
+
+
+// 상품 여러 개의 "라이브 채널(channel='live') 최종 판매가"를 한 번에 구한다.
+// 우선순위: 1) product_channel_prices_with에 이미 계산/수동고정된 값이 있으면 그 값을 그대로 쓰고,
+// 2) 없으면 cost_price+정책으로 즉석 계산하며, 3) 원가가 없거나(현재 거의 모든 상품이 이 상태) 적용 가능한
+// 정책이 없으면 호출부가 넘긴 폴백가(fallbackPrice - 표시용 호출은 discount_price||price, 결제 확정용
+// 호출은 기존 결제 로직과 동일하게 price)로 안전하게 대체한다. cost_price/마진율 자체는 절대 반환하지 않는다.
+// products: [{ id, cost_price, category, fallbackPrice }]
+async function resolveLiveChannelPrices(products) {
+  const ids = (products || []).map(p => p.id).filter(Boolean);
+  let pinnedByProductId = {};
+  if (ids.length > 0) {
+    const { data: pinnedRows } = await supabase
+      .from('product_channel_prices_with')
+      .select('product_id, price')
+      .eq('channel', 'live').in('product_id', ids);
+    (pinnedRows || []).forEach(r => { pinnedByProductId[r.product_id] = Number(r.price); });
+  }
+  const result = {};
+  for (const p of (products || [])) {
+    if (!p || !p.id) continue;
+    if (Object.prototype.hasOwnProperty.call(pinnedByProductId, p.id)) {
+      result[p.id] = pinnedByProductId[p.id];
+      continue;
+    }
+    // eslint-disable-next-line no-await-in-loop
+    const computed = await computeChannelPrice(p.cost_price, 'live', p.id, p.category);
+    // fallbackPrice를 null로 넘기면(주문 확정 시) 적용 가능한 라이브 채널가가 없을 때 null을 돌려준다 - 호출부가 일반 가격 규칙을 그대로 쓴다
+    result[p.id] = computed !== null ? computed : ((p.fallbackPrice === null || p.fallbackPrice === undefined) ? null : (Number(p.fallbackPrice) || 0));
+  }
+  return result;
+}
+
+const LIVE_FAN_ACTIVITY_POINTS = {
+  live_view: 5,       // 라이브 방송 시청
+  post_engage: 2,     // 게시물 좋아요/댓글
+  share: 3,           // 공유
+  purchase: 10,       // 구매(공식 굿즈/협업상품)
+  review: 5,          // 구매 후기 작성
+  invite: 4           // 신규 팬 초대
+};
+
+// 팬 활동 1건을 append-only 로그로 남기고, 멤버십 행의 누적 점수를 갱신한다.
+// 멤버십 행이 없으면(아직 채널에 가입하지 않은 상태) 자동으로 만들지 않는다 - "가입"은 명시적 행동이어야
+// 하고, 가입 안 한 사람의 활동을 점수로 쌓아주면 가입 자체의 의미가 없어지기 때문이다.
+async function awardFanActivity(channelId, userId, actionType, refId = null) {
+  const points = LIVE_FAN_ACTIVITY_POINTS[actionType];
+  if (!points) throw new Error(`알 수 없는 팬 활동 유형: ${actionType}`);
+
+  const { data: membership, error: mErr } = await supabase
+    .from(liveTable('channel_members'))
+    .select('id, fan_activity_score')
+    .eq('channel_id', channelId)
+    .eq('user_id', userId)
+    .eq('status', 'active')
+    .maybeSingle();
+  if (mErr) throw mErr;
+  if (!membership) return { awarded: false, reason: 'not_a_member' };
+
+  // 중복 지급 방지: ref_id가 있는 활동(구매/후기 등 실제 이벤트 기반)은 (channel_id,user_id,action_type,ref_id)
+  // 조합에 걸어둔 부분 유니크 인덱스가 이미 지급된 조합의 재insert를 거부한다 - 그 경우를 "이미 지급됨"으로 처리한다.
+  const { error: logErr } = await supabase.from(liveTable('channel_fan_activity')).insert([{
+    channel_id: channelId, user_id: userId, action_type: actionType, points, ref_id: refId
+  }]);
+  if (logErr) {
+    if (logErr.code === '23505') return { awarded: false, reason: 'already_awarded' };
+    throw logErr;
+  }
+
+  const { error: updErr } = await supabase
+    .from(liveTable('channel_members'))
+    .update({ fan_activity_score: (membership.fan_activity_score || 0) + points })
+    .eq('id', membership.id);
+  if (updErr) throw updErr;
+
+  return { awarded: true, points };
+}
+
+// 채널 목록(공개) - 활성 채널만, 인증배지/타입으로 필터 가능
+app.get('/api/live/channels', async (req, res) => {
+  try {
+    let query = supabase.from(liveTable('channels'))
+      .select('id, slug, name, channel_type, tagline, logo_url, cover_image_url, primary_color, is_official, verification_status')
+      .eq('status', 'active')
+      .order('created_at', { ascending: false });
+    if (req.query.channel_type) query = query.eq('channel_type', req.query.channel_type);
+    const { data, error } = await query;
+    if (error) throw error;
+    res.json({ success: true, data: data || [], count: (data || []).length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching live channels:', err);
+    res.status(500).json({ error: 'Failed to fetch channels', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 채널 상세(공개) - 등급 목록과 멤버 수 포함
+app.get('/api/live/channels/:slug', async (req, res) => {
+  try {
+    const { data: channel, error } = await supabase.from(liveTable('channels'))
+      .select('*').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (error) throw error;
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const [{ data: tiers }, { count: memberCount }] = await Promise.all([
+      supabase.from(liveTable('channel_membership_tiers')).select('*').eq('channel_id', channel.id).order('tier_order', { ascending: true }),
+      supabase.from(liveTable('channel_members')).select('id', { count: 'exact', head: true }).eq('channel_id', channel.id).eq('status', 'active')
+    ]);
+
+    res.json({ success: true, data: { ...channel, tiers: tiers || [], member_count: memberCount || 0 }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching live channel detail:', err);
+    res.status(500).json({ error: 'Failed to fetch channel', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 채널 가입(로그인 필요) - 기본 무료 등급(tier_id 없음)으로 가입, tier_id를 지정하면 해당 등급으로 가입
+app.post('/api/live/channels/:slug/join', authenticate, async (req, res) => {
+  try {
+    const { data: channel, error: cErr } = await supabase.from(liveTable('channels'))
+      .select('id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (cErr) throw cErr;
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    let tierId = null;
+    if (req.body?.tier_id) {
+      const { data: tier } = await supabase.from(liveTable('channel_membership_tiers'))
+        .select('id, is_paid').eq('id', req.body.tier_id).eq('channel_id', channel.id).maybeSingle();
+      if (!tier) return res.status(400).json({ error: 'Bad Request', message: '유효하지 않은 멤버십 등급입니다', timestamp: new Date().toISOString() });
+      if (tier.is_paid === true) {
+        // 유료 멤버십 등급: 결제 인프라가 아직 없으므로 무료 가입 경로로 우회되지 않도록 차단한다.
+        return res.status(403).json({ error: 'Forbidden', message: '유료 등급은 결제 기능 준비중입니다', timestamp: new Date().toISOString() });
+      }
+      tierId = tier.id;
+    }
+
+    const { data: existing } = await supabase.from(liveTable('channel_members'))
+      .select('id, status').eq('channel_id', channel.id).eq('user_id', req.user.id).maybeSingle();
+
+    if (existing) {
+      if (existing.status === 'active') {
+        return res.json({ success: true, data: { already_member: true }, timestamp: new Date().toISOString() });
+      }
+      const { error: reactErr } = await supabase.from(liveTable('channel_members'))
+        .update({ status: 'active', tier_id: tierId, joined_at: new Date().toISOString() }).eq('id', existing.id);
+      if (reactErr) throw reactErr;
+    } else {
+      const { error: insErr } = await supabase.from(liveTable('channel_members'))
+        .insert([{ channel_id: channel.id, user_id: req.user.id, tier_id: tierId }]);
+      if (insErr) throw insErr;
+    }
+
+    res.json({ success: true, data: { joined: true }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error joining live channel:', err);
+    res.status(500).json({ error: 'Failed to join channel', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 팬 활동 기록(로그인 필요) - 클라이언트가 발생시킨 활동을 점수로 반영한다.
+// purchase/review처럼 실제 이벤트가 있어야 하는 활동은 클라이언트가 보낸 action_type을 그대로 믿지 않고,
+// 그 이벤트를 가리키는 참조 ID(order_id/review_id)를 필수로 받아 서버가 실제로 본인 소유인지 검증한다
+// (검증 자체가 불가능한 가벼운 활동 - view/share 등 - 은 대신 fanActivityLimiter로 남용을 막는다).
+app.post('/api/live/channels/:slug/fan-activity', authenticate, fanActivityLimiter, async (req, res) => {
+  try {
+    const { action_type, order_id, review_id } = req.body || {};
+    if (!LIVE_FAN_ACTIVITY_POINTS[action_type]) {
+      return res.status(400).json({ error: 'Bad Request', message: '알 수 없는 활동 유형입니다', timestamp: new Date().toISOString() });
+    }
+    const { data: channel, error: cErr } = await supabase.from(liveTable('channels'))
+      .select('id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (cErr) throw cErr;
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    let refId = null;
+    if (action_type === 'purchase') {
+      if (!order_id) return res.status(400).json({ error: 'Bad Request', message: 'order_id가 필요합니다', timestamp: new Date().toISOString() });
+      const { data: order, error: oErr } = await supabase.from('orders_with')
+        .select('id, user_id, status').eq('id', order_id).maybeSingle();
+      if (oErr) throw oErr;
+      if (!order || order.user_id !== req.user.id) {
+        return res.status(403).json({ error: 'Forbidden', message: '본인의 주문만 인정됩니다', timestamp: new Date().toISOString() });
+      }
+      if (['pending', 'cancelled', 'refunded'].includes(order.status)) {
+        return res.status(400).json({ error: 'Bad Request', message: '결제가 완료된 구매만 인정됩니다', timestamp: new Date().toISOString() });
+      }
+      refId = order_id;
+    } else if (action_type === 'review') {
+      if (!review_id) return res.status(400).json({ error: 'Bad Request', message: 'review_id가 필요합니다', timestamp: new Date().toISOString() });
+      const { data: review, error: rErr } = await supabase.from('product_reviews')
+        .select('id, user_id').eq('id', review_id).maybeSingle();
+      if (rErr) throw rErr;
+      if (!review || review.user_id !== req.user.id) {
+        return res.status(403).json({ error: 'Forbidden', message: '본인의 후기만 인정됩니다', timestamp: new Date().toISOString() });
+      }
+      refId = review_id;
+    }
+
+    const result = await awardFanActivity(channel.id, req.user.id, action_type, refId);
+    res.json({ success: true, data: result, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error recording fan activity:', err);
+    res.status(500).json({ error: 'Failed to record activity', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 내가 가입한 채널 목록(로그인 필요)
+app.get('/api/me/live/channels', authenticate, async (req, res) => {
+  try {
+    const { data: memberships, error } = await supabase.from(liveTable('channel_members'))
+      .select(`fan_activity_score, joined_at, tier_id, channels_live:${liveTable('channels')}(id, slug, name, channel_type, logo_url, is_official)`)
+      .eq('user_id', req.user.id).eq('status', 'active').order('joined_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: memberships || [], count: (memberships || []).length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching my live channels:', err);
+    res.status(500).json({ error: 'Failed to fetch my channels', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// LIVE+ 채널 관리 API - 관리자 전용
+// ============================================
+app.get('/api/admin/live/channels', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('channels')).select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], count: (data || []).length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching admin live channels:', err);
+    res.status(500).json({ error: 'Failed to fetch channels', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/live/channels', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { slug, name, channel_type, owner_user_id, tagline, description, logo_url, cover_image_url, primary_color } = req.body || {};
+    if (!slug || !name || !channel_type) {
+      return res.status(400).json({ error: 'Bad Request', message: 'slug, name, channel_type은 필수입니다', timestamp: new Date().toISOString() });
+    }
+    if (!/^[a-z0-9-]+$/.test(slug)) {
+      return res.status(400).json({ error: 'Bad Request', message: 'slug는 영문 소문자/숫자/하이픈만 가능합니다', timestamp: new Date().toISOString() });
+    }
+    // 새 채널은 항상 draft + unofficial/unverified로 시작한다 - 계약 확인 전 상태를 만들 방법이 없다.
+    const { data, error } = await supabase.from(liveTable('channels')).insert([{
+      slug, name, channel_type, owner_user_id: owner_user_id || null,
+      tagline: tagline || null, description: description || null,
+      logo_url: logo_url || null, cover_image_url: cover_image_url || null, primary_color: primary_color || null,
+      status: 'draft', is_official: false, verification_status: 'unverified'
+    }]).select().single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating live channel:', err);
+    res.status(500).json({ error: 'Failed to create channel', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 채널 상태/공개여부 수정. is_official/verification_status 변경은 여기서만 가능하고, 반드시
+// rights_contract_ref(내부 계약 참조번호)가 함께 있어야 verified로 바꿀 수 있게 막는다 - 근거 없이
+// "검증됨"으로 표시되는 걸 막기 위한 최소한의 안전장치.
+app.patch('/api/admin/live/channels/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const updates = {};
+    const allowedFields = ['name', 'tagline', 'description', 'logo_url', 'cover_image_url', 'primary_color', 'status', 'is_official', 'verification_status', 'rights_contract_ref'];
+    allowedFields.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+
+    if ((updates.verification_status === 'verified' || updates.is_official === true)) {
+      const { data: current } = await supabase.from(liveTable('channels')).select('rights_contract_ref').eq('id', req.params.id).maybeSingle();
+      const contractRef = updates.rights_contract_ref !== undefined ? updates.rights_contract_ref : current?.rights_contract_ref;
+      if (!contractRef) {
+        return res.status(400).json({ error: 'Bad Request', message: '권리계약 참조번호(rights_contract_ref) 없이는 공식/검증 상태로 바꿀 수 없습니다', timestamp: new Date().toISOString() });
+      }
+    }
+
+    updates.updated_at = new Date().toISOString();
+    const { data, error } = await supabase.from(liveTable('channels')).update(updates).eq('id', req.params.id).select().single();
+    if (error) throw error;
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating live channel:', err);
+    res.status(500).json({ error: 'Failed to update channel', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 채널 멤버십 등급 목록 + 가입 회원 수 (비공개(draft/중지) 채널도 조회 가능 - 공개 상세 API는 활성 채널만 보여줌)
+app.get('/api/admin/live/channels/:id/tiers', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id').eq('id', req.params.id).maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const [{ data: tiers, error }, { count: memberCount }] = await Promise.all([
+      supabase.from(liveTable('channel_membership_tiers')).select('*').eq('channel_id', channel.id).order('tier_order', { ascending: true }),
+      supabase.from(liveTable('channel_members')).select('id', { count: 'exact', head: true }).eq('channel_id', channel.id).eq('status', 'active')
+    ]);
+    if (error) throw error;
+    res.json({ success: true, data: { tiers: tiers || [], member_count: memberCount || 0 }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching channel tiers:', err);
+    res.status(500).json({ error: 'Failed to fetch tiers', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/live/channels/:id/tiers', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { tier_key, tier_name, tier_order, is_paid, price_monthly, benefits_description } = req.body || {};
+    if (!tier_key || !tier_name) {
+      return res.status(400).json({ error: 'Bad Request', message: 'tier_key, tier_name은 필수입니다', timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase.from(liveTable('channel_membership_tiers')).insert([{
+      channel_id: req.params.id, tier_key, tier_name, tier_order: tier_order || 0,
+      is_paid: !!is_paid, price_monthly: price_monthly || null, benefits_description: benefits_description || null
+    }]).select().single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating membership tier:', err);
+    res.status(500).json({ error: 'Failed to create tier', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// LIVE+ 채널 업종별 자격/등록정보 관리 - 관리자 전용
+// ============================================
+// 이 엔드포인트들은 자격의 법적 유효성을 판단하지 않는다. 형님(운영자)이 실제 법적 검토를 마친 뒤
+// "확인된 자격 정보를 기록"하는 용도이며, 서버는 어떤 상품 판매도 이 정보를 근거로 자동 허용/차단하지 않는다.
+//
+// 상태 모델: "입력됨"과 "검증완료"는 절대 같은 상태가 아니다. 생성 직후에는 항상 submitted(입력됨)이고,
+// 관리자가 증빙(document_ref)과 함께 명시적으로 verified 전환 액션을 호출해야만 검증완료로 바뀐다.
+// 만료예정/만료는 DB에 저장하지 않고 expires_at을 기준으로 조회 시점에 계산해서 얹어준다(스케줄러 불필요,
+// 항상 최신 값 보장). 모든 상태 변경은 channel_license_status_history_live에 append-only로 기록한다.
+const LIVE_CHANNEL_LICENSE_TYPES = ['insurance_broker', 'prepaid_funeral_registration', 'burial_facility_permit', 'real_estate_broker', 'elder_care_facility_permit', 'other'];
+const LIVE_CHANNEL_LICENSE_STATUSES = ['submitted', 'pending_review', 'verified', 'needs_more_info', 'suspended', 'revoked'];
+const LIVE_LICENSE_EXPIRY_WARNING_DAYS = 30;
+
+// expires_at 값을 기준으로 만료예정/만료 여부를 계산해 각 레코드에 얹어준다. 저장된 status와는 독립적인
+// 표시 전용 값이며(expiry_state), 실제 status가 revoked/suspended 등이어도 만료 정보는 그대로 함께 보여준다.
+function withLicenseExpiryState(license) {
+  if (!license) return license;
+  let expiry_state = 'none';
+  if (license.expires_at) {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const expires = new Date(license.expires_at);
+    const daysLeft = Math.ceil((expires - today) / (1000 * 60 * 60 * 24));
+    if (daysLeft < 0) expiry_state = 'expired';
+    else if (daysLeft <= LIVE_LICENSE_EXPIRY_WARNING_DAYS) expiry_state = 'expiring_soon';
+    else expiry_state = 'valid';
+  }
+  return { ...license, expiry_state };
+}
+
+async function recordLicenseStatusChange(licenseId, fromStatus, toStatus, changedBy, note) {
+  if (fromStatus === toStatus) return;
+  await supabase.from(liveTable('channel_license_status_history')).insert([{
+    license_id: licenseId, from_status: fromStatus || null, to_status: toStatus, changed_by: changedBy, note: note || null
+  }]);
+}
+
+app.get('/api/admin/live/channels/:id/licenses', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('channel_licenses'))
+      .select('*').eq('channel_id', req.params.id).order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: (data || []).map(withLicenseExpiryState), count: (data || []).length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching channel licenses:', err);
+    res.status(500).json({ error: 'Failed to fetch licenses', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/live/channels/:id/licenses/:licenseId/history', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('channel_license_status_history'))
+      .select('*, profiles(full_name, email)').eq('license_id', req.params.licenseId).order('changed_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], count: (data || []).length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching license status history:', err);
+    res.status(500).json({ error: 'Failed to fetch license history', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/live/channels/:id/licenses', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const {
+      license_type, license_number, license_holder_name, license_holder_org, issuing_authority,
+      issued_at, expires_at, region_scope, product_scope, engagement_ref, document_ref, notes
+    } = req.body || {};
+    if (!LIVE_CHANNEL_LICENSE_TYPES.includes(license_type)) {
+      return res.status(400).json({ error: 'Bad Request', message: '유효하지 않은 자격 유형입니다', timestamp: new Date().toISOString() });
+    }
+    // 입력 즉시 검증완료로 표시되지 않도록 항상 submitted(입력됨)로 시작한다 - verified_by/verified_at도 비워둔다.
+    const { data, error } = await supabase.from(liveTable('channel_licenses')).insert([{
+      channel_id: req.params.id, license_type,
+      license_number: license_number || null, license_holder_name: license_holder_name || null,
+      license_holder_org: license_holder_org || null, issuing_authority: issuing_authority || null,
+      issued_at: issued_at || null, expires_at: expires_at || null,
+      region_scope: region_scope || null, product_scope: product_scope || null, engagement_ref: engagement_ref || null,
+      document_ref: document_ref || null, notes: notes || null,
+      status: 'submitted', verified_by: null, verified_at: null
+    }]).select().single();
+    if (error) throw error;
+    await recordLicenseStatusChange(data.id, null, 'submitted', req.user.id, '최초 등록');
+    res.status(201).json({ success: true, data: withLicenseExpiryState(data), timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating channel license:', err);
+    res.status(500).json({ error: 'Failed to create license', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 정보 수정(내용 필드)과 상태 전환(status)을 분리해서 처리한다.
+// status를 'verified'로 바꾸려면 document_ref(증빙 참조)가 있어야 하고, 그 순간에만 verified_by/verified_at을 채운다.
+// 그 외 상태로 바뀌면 verified_by/verified_at은 지운다(과거에 검증됐다는 흔적이 최신 상태와 혼동되지 않도록).
+app.patch('/api/admin/live/channels/:id/licenses/:licenseId', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: current, error: curErr } = await supabase.from(liveTable('channel_licenses'))
+      .select('status, document_ref').eq('id', req.params.licenseId).eq('channel_id', req.params.id).maybeSingle();
+    if (curErr) throw curErr;
+    if (!current) return res.status(404).json({ error: 'Not Found', message: '자격정보를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const updates = {};
+    const allowedFields = [
+      'license_number', 'license_holder_name', 'license_holder_org', 'issuing_authority',
+      'issued_at', 'expires_at', 'region_scope', 'product_scope', 'engagement_ref',
+      'status', 'document_ref', 'notes', 'status_note'
+    ];
+    allowedFields.forEach(f => { if (req.body[f] !== undefined) updates[f] = req.body[f]; });
+    const statusNote = updates.status_note; delete updates.status_note;
+
+    if (updates.status !== undefined) {
+      if (!LIVE_CHANNEL_LICENSE_STATUSES.includes(updates.status)) {
+        return res.status(400).json({ error: 'Bad Request', message: '유효하지 않은 상태입니다', timestamp: new Date().toISOString() });
+      }
+      const effectiveDocumentRef = updates.document_ref !== undefined ? updates.document_ref : current.document_ref;
+      if (updates.status === 'verified') {
+        if (!effectiveDocumentRef) {
+          return res.status(400).json({ error: 'Bad Request', message: '증빙 참조번호(document_ref) 없이는 검증완료로 전환할 수 없습니다', timestamp: new Date().toISOString() });
+        }
+        updates.verified_by = req.user.id;
+        updates.verified_at = new Date().toISOString();
+      } else {
+        updates.verified_by = null;
+        updates.verified_at = null;
+      }
+    }
+
+    updates.updated_at = new Date().toISOString();
+    const { data, error } = await supabase.from(liveTable('channel_licenses'))
+      .update(updates).eq('id', req.params.licenseId).eq('channel_id', req.params.id).select().single();
+    if (error) throw error;
+
+    if (updates.status !== undefined) {
+      await recordLicenseStatusChange(req.params.licenseId, current.status, updates.status, req.user.id, statusNote);
+    }
+
+    res.json({ success: true, data: withLicenseExpiryState(data), timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating channel license:', err);
+    res.status(500).json({ error: 'Failed to update license', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.delete('/api/admin/live/channels/:id/licenses/:licenseId', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { error } = await supabase.from(liveTable('channel_licenses'))
+      .delete().eq('id', req.params.licenseId).eq('channel_id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting channel license:', err);
+    res.status(500).json({ error: 'Failed to delete license', message: err.message, timestamp: new Date().toISOString() });
+  }
 });
 
 // ============================================

@@ -1,0 +1,58 @@
+/* ==========================================================================
+   WITH+ 라이브 공통 스타일 — live.html · live-channel.html · live-host-control.html
+   - 각 화면 <head>의 인라인 스타일 "뒤"에 로드되어 색상 변수를 WITH+ 핑크 팔레트로 맞춘다.
+   - 화면 크롬(헤더·버튼·강조색)은 WITH+ 핑크, 영상 영역(검은 무대)만 각 화면의 어두운 배경을 그대로 쓴다.
+   - 360px 폭 가로 넘침 방지 공통 규칙 포함(격자 칸/입력칸 min-width:0, 미디어 max-width:100%).
+   ========================================================================== */
+:root {
+    --primary-color: #D32F5B;
+    --primary-dark: #B0154F;
+    --live-red: #E8125C;          /* LIVE 표시·고정상품 테두리 — WITH+ 라이브 액센트 */
+    --wp-live-soft: #FFF0F4;      /* 칩·연한 배경 */
+    --wp-live-line: #F7D3DE;      /* 연한 핑크 테두리 */
+}
+
+::selection { background: rgba(211, 47, 91, 0.18); }
+:focus-visible { outline: 2px solid var(--primary-color); outline-offset: 2px; }
+
+/* ---------- 360px 가로 넘침 방지 ---------- */
+body { overflow-x: clip; }
+:where(img, video, iframe, canvas) { max-width: 100%; }
+:where(.product-grid > *, .live-grid > *, fieldset, textarea, select,
+       input:not([type="checkbox"]):not([type="radio"])) { min-width: 0; }
+:where(.sched-row, .dest-row, .target-row, .platform-cfg-row, .chat-row, .pin-row,
+       .new-session-row, .omnicast-add-row, .cf-connect-row, .header-inner, .header-main) > * { min-width: 0; }
+:where(select, textarea) { max-width: 100%; }
+.sr-only { left: 0; top: 0; }
+:where(code, pre, .ingest-box) { overflow-wrap: anywhere; word-break: break-all; }
+
+/* ---------- 라이브 목록(/live) ---------- */
+.live-badge { background: linear-gradient(120deg, #E8125C, #FF5C8A); }
+
+/* ---------- 시청 화면(/live/:slug) ---------- */
+.ch-brand { overflow: hidden; }
+.join-btn { background: linear-gradient(120deg, #D32F5B, #E8125C); box-shadow: 0 4px 12px rgba(211, 47, 91, 0.25); }
+.join-btn[disabled] { background: #ccc; box-shadow: none; }
+.ch-brand .official-badge { background: var(--primary-color); }
+.category-icon-item.active .ci-emoji { background: var(--wp-live-soft); box-shadow: inset 0 0 0 2px var(--primary-color); }
+@media (max-width: 400px) {
+    .header-inner { padding: 10px 12px; gap: 6px; }
+    .header-right { gap: 6px; }
+    .member-count-badge { display: none; }
+    .product-grid { gap: 8px; padding: 0 12px 12px; }
+    .pinned-card { margin: 10px 12px; }
+}
+
+/* ---------- 방송 진행(관리자 /admin/live-host/:channelId) ---------- */
+.lhc-brand { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.lhc-logo { display: inline-flex; align-items: center; }
+.lhc-logo img { height: 28px; width: auto; display: block; }
+.lhc-title { font-weight: 800; font-size: 0.95em; color: var(--primary-color); }
+.lhc-code { background: var(--wp-live-soft); border: 1px solid var(--wp-live-line); border-radius: 4px; padding: 1px 5px; font-size: 0.95em; }
+@media (max-width: 560px) {
+    .wrap { padding: 0 12px; margin: 16px auto; }
+    .card { padding: 14px; }
+    table.inv-table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    .platform-cfg-row strong { width: auto !important; }
+    .new-session-row input, .omnicast-add-row select, .cf-connect-row input, .platform-cfg-row input { min-width: 0; flex-basis: 100%; }
+}
