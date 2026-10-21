@@ -9554,7 +9554,7 @@
                 async function loadSettings() {
                     const settingsArea = document.getElementById('settings-area');
                     try {
-                        const [ratesRes, gradesRes, pageTemplatesRes, pgRes, kakaoPgRes, naverPgRes, aiRes, shippingRes, emailRes, cartReminderRes, referralRes, naverOauthRes, bizInfoRes] = await Promise.all([
+                        const [ratesRes, gradesRes, pageTemplatesRes, pgRes, kakaoPgRes, naverPgRes, aiRes, shippingRes, emailRes, cartReminderRes, referralRes, naverOauthRes, bizInfoRes, kakaoOauthRes] = await Promise.all([
                             authedFetch('/api/settings/mileage-rates'),
                             authedFetch('/api/settings/member-grades'),
                             authedFetch('/api/settings/page-templates'),
@@ -9567,7 +9567,8 @@
                             authedFetch('/api/admin/settings/cart-reminder'),
                             authedFetch('/api/admin/settings/referral-program'),
                             authedFetch('/api/admin/oauth-config/naver'),
-                            authedFetch('/api/admin/settings/business-info')
+                            authedFetch('/api/admin/settings/business-info'),
+                            authedFetch('/api/admin/oauth-config/kakao')
                         ]);
                         if (!ratesRes.ok || !ratesRes.json.success) throw new Error(ratesRes.json.message || '설정을 불러오지 못했습니다');
                         const rates = ratesRes.json.data;
@@ -9577,6 +9578,105 @@
                         const kakaoPg = (kakaoPgRes.ok && kakaoPgRes.json.success) ? kakaoPgRes.json.data : null;
                         const naverPg = (naverPgRes.ok && naverPgRes.json.success) ? naverPgRes.json.data : null;
                         const naverOauth = (naverOauthRes.ok && naverOauthRes.json.success) ? naverOauthRes.json.data : null;
+                        // ===== 🔑 소셜 로그인(카카오·네이버) 카드 - 저장된 시크릿 원문은 서버가 내려주지 않는다(설정됨/미설정만) =====
+                        const kakaoOauth = (kakaoOauthRes.ok && kakaoOauthRes.json.success) ? kakaoOauthRes.json.data : null;
+                        const socialEsc = (v) => WithPlus.escapeHtml(v == null ? '' : String(v));
+                        const socialBadge = (cfg) => {
+                            if (!cfg) return '<span style="display:inline-block; padding:2px 10px; border-radius:999px; font-size:0.78em; background:#ECEFF1; color:#546E7A;">불러오기 실패</span>';
+                            if (cfg.ready) return '<span style="display:inline-block; padding:2px 10px; border-radius:999px; font-size:0.78em; background:#E8F5E9; color:#2E7D32; font-weight:700;">✅ 설정됨 · 사용 중</span>';
+                            if (cfg.client_id || cfg.has_client_secret) return '<span style="display:inline-block; padding:2px 10px; border-radius:999px; font-size:0.78em; background:#FFF8E1; color:#F57F17; font-weight:700;">⚠️ 일부 입력됨 · ' + (cfg.enabled ? '키 부족' : '꺼짐') + '</span>';
+                            return '<span style="display:inline-block; padding:2px 10px; border-radius:999px; font-size:0.78em; background:#FDECEA; color:#C62828; font-weight:700;">미설정</span>';
+                        };
+                        const socialUriRows = (provider, cfg) => {
+                            const list = (cfg && cfg.redirect_uris && cfg.redirect_uris.length) ? cfg.redirect_uris : (cfg && cfg.callback_url ? [{ label: '지금 접속한 주소', url: cfg.callback_url }] : []);
+                            if (!list.length) return '<div style="font-size:0.82em; color:var(--text-gray);">주소를 계산하지 못했습니다.</div>';
+                            return list.map((u, i) => `
+                                        <div style="font-size:0.78em; color:var(--text-gray); margin:6px 0 2px;">${socialEsc(u.label)}</div>
+                                        <div class="rate-input-row"><input type="text" id="${provider}-oauth-uri-${i}" value="${socialEsc(u.url)}" readonly style="flex:1; min-width:0; background:#F5F5F5; font-size:0.85em;"><button type="button" class="btn btn-secondary social-oauth-copy-btn" data-target="${provider}-oauth-uri-${i}" style="padding:8px 12px;">복사</button></div>`).join('');
+                        };
+                        const socialOauthCardHtml = `
+                            <div class="settings-card" style="margin-top:20px; max-width:640px;">
+                                <h3>🔑 소셜 로그인 (카카오 · 네이버)</h3>
+                                <p class="desc">
+                                    아래에 키를 입력하고 <b>활성화</b>를 켜면 로그인·회원가입 화면의 카카오/네이버 버튼이 바로 동작합니다(PC·모바일 공통).
+                                    처음 로그인하는 회원은 자동으로 가입되고, 카카오/네이버가 <b>인증된 이메일</b>을 알려준 경우에만 같은 이메일의 기존 회원과 연결됩니다.
+                                    탈퇴·이용정지 계정은 로그인되지 않습니다. 저장된 Client Secret은 화면에 다시 표시되지 않습니다.
+                                </p>
+                                <p class="desc" style="background:#F3F6FB; padding:10px 12px; border-radius:8px;">
+                                    WITH+와 LIVE+는 같은 회원DB를 쓰므로 <b>키는 두 사이트가 함께 씁니다</b> — 카카오/네이버 앱 하나에 두 사이트의 Redirect URI를 모두 등록하세요.
+                                    "지금 접속한 주소"는 이 관리자 화면을 연 사이트 기준이라, LIVE+ 관리자 화면에서 열면 LIVE+ 주소가 표시됩니다.
+                                </p>
+
+                                <div style="border:1px solid var(--border-color); border-radius:10px; padding:14px; margin:14px 0;">
+                                    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                                        <b>💬 카카오 로그인</b>${socialBadge(kakaoOauth)}
+                                    </div>
+                                    <details style="font-size:0.84em; line-height:1.7; margin-bottom:10px;">
+                                        <summary style="cursor:pointer; font-weight:600;">카카오 설정 순서 보기</summary>
+                                        <ol style="padding-left:18px; margin:6px 0;">
+                                            <li><a href="https://developers.kakao.com/console/app" target="_blank" rel="noopener">Kakao Developers</a> 로그인 → <b>애플리케이션 추가하기</b>(앱 이름: WITH+ 등)</li>
+                                            <li>앱 설정 &gt; 플랫폼 &gt; <b>Web 플랫폼 등록</b> → 사이트 도메인에 <code>${socialEsc((kakaoOauth && kakaoOauth.service_url) || location.origin)}</code> 등록(LIVE+ 주소도 함께)</li>
+                                            <li>제품 설정 &gt; 카카오 로그인 → <b>활성화 설정 ON</b></li>
+                                            <li>같은 화면의 <b>Redirect URI</b>에 아래 주소를 그대로 등록(사이트별로 모두)</li>
+                                            <li>카카오 로그인 &gt; <b>동의항목</b>: 닉네임, 카카오계정(이메일) 설정(이메일은 비즈 앱 전환 후 '필수 동의' 가능 — 이메일이 없으면 카카오 회원번호로 가입됩니다)</li>
+                                            <li>카카오 로그인 &gt; <b>보안</b>: Client Secret 코드 생성 → 활성화 상태 <b>사용함</b></li>
+                                            <li>앱 설정 &gt; 앱 키의 <b>REST API 키</b>와 위 Client Secret을 아래에 입력 → 활성화 체크 → 저장</li>
+                                        </ol>
+                                    </details>
+                                    <div class="field">
+                                        <label>Redirect URI (Kakao Developers에 그대로 등록)</label>
+                                        ${socialUriRows('kakao', kakaoOauth)}
+                                    </div>
+                                    <div class="field">
+                                        <label>REST API 키</label>
+                                        <div class="rate-input-row"><input type="text" id="kakao-oauth-client-id" value="${socialEsc(kakaoOauth && kakaoOauth.client_id)}" placeholder="REST API 키 (앱 설정 > 앱 키)" autocomplete="off" style="flex:1; min-width:0;"></div>
+                                    </div>
+                                    <div class="field">
+                                        <label>Client Secret <span style="font-weight:400; color:var(--text-gray);">${kakaoOauth && kakaoOauth.has_client_secret ? '· 저장됨' : '· 미설정'}</span></label>
+                                        <div class="rate-input-row"><input type="password" id="kakao-oauth-client-secret" placeholder="${kakaoOauth && kakaoOauth.has_client_secret ? '저장된 값이 있습니다 (변경하려면 새로 입력)' : 'Client Secret (카카오 로그인 > 보안)'}" autocomplete="new-password" style="flex:1; min-width:0;"></div>
+                                    </div>
+                                    <label style="display:flex; align-items:center; gap:6px; font-size:0.85em; margin-bottom:14px;">
+                                        <input type="checkbox" id="kakao-oauth-enabled" ${kakaoOauth && kakaoOauth.enabled ? 'checked' : ''}> 카카오 로그인 활성화
+                                    </label>
+                                    <button type="button" class="settings-save-btn social-oauth-save-btn" data-provider="kakao">저장</button>
+                                    <div id="kakao-oauth-save-msg" style="font-size:0.82em; color:var(--text-gray); margin-top:6px;"></div>
+                                </div>
+
+                                <div style="border:1px solid var(--border-color); border-radius:10px; padding:14px; margin:14px 0 4px;">
+                                    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                                        <b>🟢 네이버 로그인</b>${socialBadge(naverOauth)}
+                                    </div>
+                                    <details style="font-size:0.84em; line-height:1.7; margin-bottom:10px;">
+                                        <summary style="cursor:pointer; font-weight:600;">네이버 설정 순서 보기</summary>
+                                        <ol style="padding-left:18px; margin:6px 0;">
+                                            <li><a href="https://developers.naver.com/apps/#/register" target="_blank" rel="noopener">NAVER Developers</a> → Application &gt; <b>애플리케이션 등록</b></li>
+                                            <li>사용 API: <b>네이버 로그인</b> 선택</li>
+                                            <li>제공 정보: <b>이메일 주소·이름</b>(필수), 휴대전화번호(선택)</li>
+                                            <li>로그인 오픈 API 서비스 환경: <b>PC 웹</b>(+ <b>Mobile 웹</b>) → 서비스 URL <code>${socialEsc((naverOauth && naverOauth.service_url) || location.origin)}</code>, Callback URL에 아래 주소 등록(사이트별로 모두)</li>
+                                            <li>등록 후 <b>Client ID / Client Secret</b>을 아래에 입력 → 활성화 체크 → 저장</li>
+                                            <li>⚠️ <b>검수 요청 승인 전</b>에는 '멤버관리 &gt; 테스터 ID'에 등록한 네이버 아이디만 로그인됩니다 → 실제 오픈 전 <b>검수 요청</b> 필요</li>
+                                        </ol>
+                                    </details>
+                                    <div class="field">
+                                        <label>Callback URL (NAVER Developers에 그대로 등록)</label>
+                                        ${socialUriRows('naver', naverOauth)}
+                                    </div>
+                                    <div class="field">
+                                        <label>Client ID</label>
+                                        <div class="rate-input-row"><input type="text" id="naver-oauth-client-id" value="${socialEsc(naverOauth && naverOauth.client_id)}" placeholder="Client ID" autocomplete="off" style="flex:1; min-width:0;"></div>
+                                    </div>
+                                    <div class="field">
+                                        <label>Client Secret <span style="font-weight:400; color:var(--text-gray);">${naverOauth && naverOauth.has_client_secret ? '· 저장됨' : '· 미설정'}</span></label>
+                                        <div class="rate-input-row"><input type="password" id="naver-oauth-client-secret" placeholder="${naverOauth && naverOauth.has_client_secret ? '저장된 값이 있습니다 (변경하려면 새로 입력)' : 'Client Secret'}" autocomplete="new-password" style="flex:1; min-width:0;"></div>
+                                    </div>
+                                    <label style="display:flex; align-items:center; gap:6px; font-size:0.85em; margin-bottom:14px;">
+                                        <input type="checkbox" id="naver-oauth-enabled" ${naverOauth && naverOauth.enabled ? 'checked' : ''}> 네이버 로그인 활성화
+                                    </label>
+                                    <button type="button" class="settings-save-btn social-oauth-save-btn" data-provider="naver">저장</button>
+                                    <div id="naver-oauth-save-msg" style="font-size:0.82em; color:var(--text-gray); margin-top:6px;"></div>
+                                </div>
+                                <p class="desc" style="margin-top:10px;">구글 로그인은 Supabase 대시보드(Authentication &gt; Providers)에서 설정합니다.</p>
+                            </div>`;
                         const ai = (aiRes.ok && aiRes.json.success) ? aiRes.json.data : null;
                         const shipping = (shippingRes.ok && shippingRes.json.success) ? shippingRes.json.data : { base_fee: 3000, free_shipping_threshold: 30000, surcharge_zones: [] };
                         const email = (emailRes.ok && emailRes.json.success) ? emailRes.json.data : null;
@@ -9786,37 +9886,7 @@
                                 </div>
                                 <div id="naverpay-test-msg" style="font-size:0.82em; color:var(--text-gray); margin-top:6px;">${naverPg && naverPg.last_test_message ? WithPlus.escapeHtml(naverPg.last_test_message) : ''}</div>
                             </div>
-                            <div class="settings-card" style="margin-top:20px; max-width:640px;">
-                                <h3>🔑 소셜 로그인</h3>
-                                <p class="desc">
-                                    <b>Google · 카카오</b>는 Supabase가 기본 제공하는 로그인 방식이라 이 화면에서 설정할 것이 없습니다 —
-                                    <a href="https://supabase.com/dashboard" target="_blank" rel="noopener">Supabase 대시보드</a>에 로그인해 해당 프로젝트의 Authentication &gt; Providers 메뉴에서
-                                    Google/Kakao를 켜고 각 서비스에서 발급받은 클라이언트ID/시크릿을 등록하면 로그인 화면의 버튼이 바로 동작합니다
-                                    (Redirect URL은 Supabase가 안내하는 콜백 주소를 그대로 사용하면 됩니다).
-                                </p>
-                                <p class="desc">
-                                    <b>네이버</b>는 Supabase가 기본 제공하지 않아 우리 서버가 직접 처리합니다 —
-                                    <a href="https://developers.naver.com/apps" target="_blank" rel="noopener">네이버 개발자센터</a>에서 애플리케이션을 등록하고
-                                    "네이버 로그인" API 사용을 설정한 뒤(제공 정보에 이메일 필수 체크), Callback URL에 아래 주소를 그대로 등록해주세요.
-                                </p>
-                                <div class="field">
-                                    <label>Callback URL (네이버 개발자센터에 그대로 등록)</label>
-                                    <div class="rate-input-row"><input type="text" id="naver-oauth-callback-url" value="${naverOauth && naverOauth.callback_url ? WithPlus.escapeHtml(naverOauth.callback_url) : ''}" readonly style="flex:1; background:#F5F5F5;"><button type="button" class="btn btn-secondary" id="naver-oauth-copy-btn" style="padding:8px 12px;">복사</button></div>
-                                </div>
-                                <div class="field">
-                                    <label>Client ID</label>
-                                    <div class="rate-input-row"><input type="text" id="naver-oauth-client-id" value="${naverOauth && naverOauth.client_id ? WithPlus.escapeHtml(naverOauth.client_id) : ''}" placeholder="Client ID" style="flex:1;"></div>
-                                </div>
-                                <div class="field">
-                                    <label>Client Secret</label>
-                                    <div class="rate-input-row"><input type="text" id="naver-oauth-client-secret" placeholder="${naverOauth && naverOauth.has_client_secret ? '저장된 값이 있습니다 (변경하려면 새로 입력)' : 'Client Secret'}" style="flex:1;"></div>
-                                </div>
-                                <label style="display:flex; align-items:center; gap:6px; font-size:0.85em; margin-bottom:14px;">
-                                    <input type="checkbox" id="naver-oauth-enabled" ${naverOauth && naverOauth.enabled ? 'checked' : ''}> 네이버 로그인 활성화
-                                </label>
-                                <button type="button" class="settings-save-btn" id="naver-oauth-save-btn">저장</button>
-                                <div id="naver-oauth-save-msg" style="font-size:0.82em; color:var(--text-gray); margin-top:6px;"></div>
-                            </div>
+                            ${socialOauthCardHtml}
                             <div class="settings-card" style="margin-top:20px; max-width:640px;">
                                 <h3>🤖 AI 카테고리 추천</h3>
                                 <p class="desc">
@@ -10255,35 +10325,40 @@
                         bindSimplePayHandlers('kakaopay');
                         bindSimplePayHandlers('naverpay');
 
-                        // ===== 🔑 소셜 로그인 - 네이버 (구글/카카오는 Supabase 대시보드에서 직접 설정) =====
-                        document.getElementById('naver-oauth-copy-btn')?.addEventListener('click', () => {
-                            const input = document.getElementById('naver-oauth-callback-url');
+                        // ===== 🔑 소셜 로그인 - 카카오·네이버 (구글은 Supabase 대시보드에서 직접 설정) =====
+                        document.querySelectorAll('.social-oauth-copy-btn').forEach(b => b.addEventListener('click', () => {
+                            const input = document.getElementById(b.dataset.target);
+                            if (!input) return;
                             input.select();
-                            navigator.clipboard?.writeText(input.value).catch(() => {});
-                        });
-                        document.getElementById('naver-oauth-save-btn')?.addEventListener('click', async () => {
-                            const btn = document.getElementById('naver-oauth-save-btn');
-                            const msgEl = document.getElementById('naver-oauth-save-msg');
-                            const clientId = document.getElementById('naver-oauth-client-id').value.trim();
-                            const clientSecret = document.getElementById('naver-oauth-client-secret').value.trim();
-                            const enabled = document.getElementById('naver-oauth-enabled').checked;
+                            (navigator.clipboard ? navigator.clipboard.writeText(input.value) : Promise.reject(new Error('no clipboard'))).then(() => {
+                                b.textContent = '복사됨'; setTimeout(() => { b.textContent = '복사'; }, 1500);
+                            }).catch(() => { try { document.execCommand('copy'); } catch (e) { /* ignore */ } });
+                        }));
+                        document.querySelectorAll('.social-oauth-save-btn').forEach(btn => btn.addEventListener('click', async () => {
+                            const provider = btn.dataset.provider;
+                            const msgEl = document.getElementById(provider + '-oauth-save-msg');
+                            const clientId = document.getElementById(provider + '-oauth-client-id').value.trim();
+                            const clientSecret = document.getElementById(provider + '-oauth-client-secret').value.trim();
+                            const enabled = document.getElementById(provider + '-oauth-enabled').checked;
                             btn.disabled = true; btn.textContent = '저장 중...';
                             try {
                                 const payload = { client_id: clientId, enabled };
                                 if (clientSecret) payload.client_secret = clientSecret;
-                                const { ok, json } = await authedFetch('/api/admin/oauth-config/naver', { method: 'PUT', body: JSON.stringify(payload) });
+                                const { ok, json } = await authedFetch('/api/admin/oauth-config/' + provider, { method: 'PUT', body: JSON.stringify(payload) });
                                 if (!ok) throw new Error(json.message || '저장 실패');
-                                msgEl.style.color = '#2E7D32';
-                                msgEl.textContent = '저장되었습니다.';
-                                document.getElementById('settings-area').dataset.loaded = '';
-                                loadSettings();
+                                msgEl.style.color = (json.data && json.data.ready === false && enabled) ? '#F57F17' : '#2E7D32';
+                                msgEl.textContent = json.message || '저장되었습니다.';
+                                setTimeout(() => {
+                                    document.getElementById('settings-area').dataset.loaded = '';
+                                    loadSettings();
+                                }, 900);
                             } catch (err) {
                                 msgEl.style.color = '#C62828';
                                 msgEl.textContent = err.message;
                             } finally {
                                 btn.disabled = false; btn.textContent = '저장';
                             }
-                        });
+                        }));
 
                         // ===== 🤖 AI 카테고리 추천 연동 =====
                         document.getElementById('ai-save-btn').addEventListener('click', async () => {

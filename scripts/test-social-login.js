@@ -1,178 +1,218 @@
-// 소셜 로그인(구글/카카오/네이버) 중 서버 코드로 구현한 부분(네이버 OAuth 흐름 + 관리자 설정 API)을 검증한다.
-// 구글/카카오는 Supabase Auth가 기본 제공하는 OAuth Provider라 서버 코드가 없고(프론트엔드의
-// signInWithOAuth 호출 + Supabase 대시보드 설정만으로 동작), 실제 제공자 연동 여부는 Supabase 대시보드에서
-// 확인해야 하므로 이 테스트의 범위가 아니다. 네이버도 실제 발급받은 Client ID/Secret이 있어야만 완주할 수
-// 있는 "인가코드 → 토큰 교환 → 프로필 조회" 부분(실제 네이버 계정 필요)은 이 자동 테스트로 확인할 수 없고,
-// 그 앞뒤(관리자 설정 CRUD, state 서명/검증, 미설정 시 안전한 처리, 잘못된 state/코드 처리)만 검증한다.
-const { createClient } = require('@supabase/supabase-js');
+// 카카오·네이버 로그인(서버 직접 처리) 검증
+//   node scripts/test-social-login.js
+// - 이 스크립트가 테스트 전용 모드(SOCIAL_LOGIN_TEST_MODE=1, NODE_ENV≠production, 127.0.0.1 요청만)로
+//   서버를 포트 3106에 직접 띄운다. 테스트 모드에서는 카카오/네이버 서버 대신 인가코드에 담긴 가짜 프로필로
+//   토큰·회원정보 응답을 흉내내고, 나머지(state 검증·회원 연결/생성·세션 발급)는 운영과 똑같이 실행된다.
+// - 실제 DB(Supabase)에 테스트 회원을 만들고 끝나면 전부 지운다(테스트가 만든 회원만 - 이메일 접두사로 구분).
+// - 이미 떠 있는 테스트 모드 서버를 쓰려면 SOCIAL_TEST_BASE=http://127.0.0.1:포트 로 지정.
+const { spawn } = require('child_process');
+const path = require('path');
 const crypto = require('crypto');
-require('dotenv').config();
+const { createClient } = require('@supabase/supabase-js');
+require('dotenv').config({ path: path.join(__dirname, '..', '.env'), quiet: true });
 
+const PORT = 3106;
+const BASE = process.env.SOCIAL_TEST_BASE || `http://127.0.0.1:${PORT}`;
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-const admin = createClient(supabaseUrl, serviceKey);
-const API = 'http://localhost:3003';
+const admin = createClient(supabaseUrl, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
+const anon = createClient(supabaseUrl, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
 
 let pass = 0, fail = 0;
-function assert(cond, msg) {
+function assert(cond, msg, extra) {
   if (cond) { pass++; console.log('✅', msg); }
-  else { fail++; console.log('❌', msg); }
+  else { fail++; console.log('❌', msg, extra !== undefined ? JSON.stringify(extra).slice(0, 300) : ''); }
+}
+const RUN = crypto.randomBytes(4).toString('hex');
+const createdUserIds = new Set();
+
+function b64url(obj) { return Buffer.from(JSON.stringify(obj), 'utf8').toString('base64url'); }
+function decodeState(state) {
+  const [, payload] = state.split('.');
+  return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
+}
+function forgeState(data) { // 서버와 같은 비밀키로 서명(만료 테스트용)
+  const payload = b64url(data);
+  const sig = crypto.createHmac('sha256', process.env.JWT_SECRET).update('v1.' + payload).digest('base64url');
+  return `v1.${payload}.${sig}`;
+}
+async function get(pathname, headers) {
+  return fetch(BASE + pathname, { redirect: 'manual', headers: headers || {} });
+}
+function cookieFrom(res, name) {
+  const all = typeof res.headers.getSetCookie === 'function' ? res.headers.getSetCookie() : [res.headers.get('set-cookie') || ''];
+  for (const c of all) { const m = c.match(new RegExp('^' + name + '=([^;]*)')); if (m) return m[1]; }
+  return null;
+}
+function socialErrorOf(location) {
+  try { return new URL(location, BASE).searchParams.get('social_error'); } catch (e) { return null; }
 }
 
-async function loginAs(email, password) {
-  const res = await fetch(`${supabaseUrl}/auth/v1/token?grant_type=password`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', apikey: anonKey },
-    body: JSON.stringify({ email, password })
-  });
-  const json = await res.json();
-  return json.access_token;
+// 로그인 시작 → state·쿠키 확보 → 가짜 프로필 인가코드로 콜백 호출 → 결과 해석
+async function runFlow(provider, profileBody, next) {
+  const start = await get(`/api/auth/${provider}/login?` + new URLSearchParams({ next: next || '/', from: 'login' }));
+  const loc = new URL(start.headers.get('location'));
+  const state = loc.searchParams.get('state');
+  const nonce = cookieFrom(start, `wp_oauth_${provider}`);
+  const code = 'stub.' + b64url(profileBody);
+  const cb = await get(`/api/auth/${provider}/callback?` + new URLSearchParams({ code, state }), { Cookie: `wp_oauth_${provider}=${nonce}` });
+  const location = cb.headers.get('location') || '';
+  const out = { status: cb.status, location, error: socialErrorOf(location) };
+  const hashIdx = location.indexOf('#');
+  if (hashIdx >= 0) {
+    const h = new URLSearchParams(location.slice(hashIdx + 1));
+    out.at = h.get('at'); out.rt = h.get('rt');
+    const q = new URL(location.slice(0, hashIdx), BASE).searchParams;
+    out.next = q.get('next'); out.isNew = q.get('social_new') === '1'; out.done = q.get('social_done');
+    if (out.at) {
+      const { data } = await anon.auth.getUser(out.at);
+      out.user = data && data.user;
+      if (out.user) createdUserIds.add(out.user.id);
+    }
+  }
+  return out;
 }
 
-// server.js의 signNaverState/verifyNaverState와 동일한 알고리즘(JWT_SECRET으로 HMAC-SHA256 서명)을
-// 테스트에서도 재현해, 임의의 만료/위조 state를 만들어 서버가 정확히 거부하는지 확인한다.
-function makeState({ nonce = crypto.randomBytes(16).toString('hex'), tsOffsetMs = 0, badSig = false } = {}) {
-  const ts = (Date.now() + tsOffsetMs).toString();
-  const payload = `${nonce}.${ts}`;
-  const sig = badSig
-    ? crypto.randomBytes(32).toString('hex')
-    : crypto.createHmac('sha256', process.env.JWT_SECRET || 'withplus-fallback-secret').update(payload).digest('hex');
-  return `${payload}.${sig}`;
+async function waitForServer() {
+  for (let i = 0; i < 90; i++) {
+    try { const r = await fetch(BASE + '/api/health'); if (r.ok) return true; } catch (e) { /* not yet */ }
+    await new Promise(r => setTimeout(r, 1000));
+  }
+  return false;
 }
 
 async function main() {
-  const ts = Date.now();
-  const password = 'TestPass123!';
-  let superAdminId, providerId;
-  // 테스트 시작 전 oauth_configs.naver 백업 (테스트가 실제 저장된 값을 건드릴 수 있으므로 끝나면 복구)
-  const { data: backup } = await admin.from('oauth_configs').select('*').eq('provider_key', 'naver').maybeSingle();
-
-  try {
-    // ============================================
-    // 0) 계정 준비
-    // ============================================
-    const superAdminEmail = `test-social-admin-${ts}@withplus-test.local`;
-    const { data: saUser } = await admin.auth.admin.createUser({ email: superAdminEmail, password, email_confirm: true });
-    superAdminId = saUser.user.id;
-    await admin.from('profiles').upsert([{ id: superAdminId, email: superAdminEmail, full_name: '소셜테스트관리자', role: 'super_admin' }]);
-    const superAdminToken = await loginAs(superAdminEmail, password);
-
-    const providerEmail = `test-social-provider-${ts}@withplus-test.local`;
-    const { data: pUser } = await admin.auth.admin.createUser({ email: providerEmail, password, email_confirm: true });
-    providerId = pUser.user.id;
-    await admin.from('profiles').upsert([{ id: providerId, email: providerEmail, full_name: '소셜테스트공급자', role: 'provider' }]);
-    const providerToken = await loginAs(providerEmail, password);
-
-    // ============================================
-    // 1) 관리자 설정 API - 권한 분리
-    // ============================================
-    const noAuthGet = await fetch(`${API}/api/admin/oauth-config/naver`);
-    assert(noAuthGet.status === 401, `인증 없이 조회 시 401 (실제: ${noAuthGet.status})`);
-
-    const providerGet = await fetch(`${API}/api/admin/oauth-config/naver`, { headers: { Authorization: `Bearer ${providerToken}` } });
-    assert(providerGet.status === 403, `공급자는 네이버 로그인 설정을 조회할 수 없음 (실제: ${providerGet.status})`);
-
-    const providerPut = await fetch(`${API}/api/admin/oauth-config/naver`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${providerToken}` },
-      body: JSON.stringify({ client_id: 'hacked' })
+  let child = null;
+  if (!process.env.SOCIAL_TEST_BASE) {
+    child = spawn(process.execPath, ['server.js'], {
+      cwd: path.join(__dirname, '..'),
+      env: { ...process.env, PORT: String(PORT), SOCIAL_LOGIN_TEST_MODE: '1', NODE_ENV: 'development' },
+      stdio: ['ignore', 'ignore', 'pipe']
     });
-    assert(providerPut.status === 403, `공급자는 네이버 로그인 설정을 저장할 수 없음 (실제: ${providerPut.status})`);
-
-    // ============================================
-    // 2) 관리자 설정 API - 저장/조회 (시크릿은 절대 응답에 노출되지 않음)
-    // ============================================
-    const testClientId = `test-client-id-${ts}`;
-    const testSecret = `test-secret-${ts}`;
-    const saveRes = await fetch(`${API}/api/admin/oauth-config/naver`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${superAdminToken}` },
-      body: JSON.stringify({ client_id: testClientId, client_secret: testSecret, enabled: true })
-    });
-    const saveJson = await saveRes.json();
-    assert(saveRes.status === 200 && saveJson.data.client_id === testClientId, `super_admin이 네이버 로그인 설정 저장 성공 (실제: ${saveRes.status})`);
-    assert(saveJson.data.has_client_secret === true && saveJson.data.client_secret === undefined, '저장 응답에 시크릿 원문이 포함되지 않음(has_client_secret만 존재)');
-
-    const getRes = await fetch(`${API}/api/admin/oauth-config/naver`, { headers: { Authorization: `Bearer ${superAdminToken}` } });
-    const getJson = await getRes.json();
-    assert(getRes.status === 200 && getJson.data.client_id === testClientId && getJson.data.enabled === true, '저장한 설정이 조회 시 정확히 반영됨');
-    assert(getJson.data.client_secret === undefined, '조회 응답에도 시크릿 원문이 절대 포함되지 않음');
-    assert(typeof getJson.data.callback_url === 'string' && getJson.data.callback_url.endsWith('/api/auth/naver/callback'), `콜백 URL이 올바르게 계산됨 (실제: ${getJson.data.callback_url})`);
-
-    // 시크릿을 빈 값으로 보내면 기존 값을 유지해야 한다(실수로 빈 문자열 저장해 로그인이 깨지는 것을 방지)
-    const saveNoSecretRes = await fetch(`${API}/api/admin/oauth-config/naver`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${superAdminToken}` },
-      body: JSON.stringify({ client_id: testClientId, client_secret: '', enabled: true })
-    });
-    const saveNoSecretJson = await saveNoSecretRes.json();
-    assert(saveNoSecretRes.status === 200 && saveNoSecretJson.data.has_client_secret === true, '시크릿을 빈 값으로 보내면 기존 저장값이 유지됨');
-
-    // ============================================
-    // 3) 네이버 로그인 시작 (/api/auth/naver/login) - 설정된 상태에서는 네이버 인가 URL로 리다이렉트
-    // ============================================
-    const loginStartRes = await fetch(`${API}/api/auth/naver/login`, { redirect: 'manual' });
-    const loginLocation = loginStartRes.headers.get('location') || '';
-    assert(loginStartRes.status === 302 && loginLocation.startsWith('https://nid.naver.com/oauth2.0/authorize'), `설정된 상태에서 /api/auth/naver/login이 네이버 인가 URL로 리다이렉트 (실제: ${loginStartRes.status}, ${loginLocation.slice(0, 60)})`);
-    const loginUrl = new URL(loginLocation);
-    assert(loginUrl.searchParams.get('client_id') === testClientId, '인가 URL에 설정된 client_id가 그대로 포함됨');
-    assert(!!loginUrl.searchParams.get('state'), '인가 URL에 CSRF 방지용 state 파라미터가 포함됨');
-    assert(loginUrl.searchParams.get('redirect_uri') === getJson.data.callback_url, '인가 URL의 redirect_uri가 콜백 주소와 일치함');
-
-    // 비활성화 상태에서는 네이버로 보내지 않고 로그인 화면으로 안내 메시지와 함께 되돌아온다
-    await fetch(`${API}/api/admin/oauth-config/naver`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${superAdminToken}` },
-      body: JSON.stringify({ enabled: false })
-    });
-    const loginDisabledRes = await fetch(`${API}/api/auth/naver/login`, { redirect: 'manual' });
-    const disabledLocation = loginDisabledRes.headers.get('location') || '';
-    assert(loginDisabledRes.status === 302 && disabledLocation.startsWith('/login?social_error='), `비활성화 상태에서는 /login으로 안내 메시지와 함께 리다이렉트 (실제: ${loginDisabledRes.status}, ${disabledLocation.slice(0, 50)})`);
-
-    // 다시 활성화(이후 콜백 테스트에서 "설정은 되어 있음" 상태가 필요)
-    await fetch(`${API}/api/admin/oauth-config/naver`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${superAdminToken}` },
-      body: JSON.stringify({ enabled: true })
-    });
-
-    // ============================================
-    // 4) 네이버 로그인 콜백 (/api/auth/naver/callback) - state 서명/만료 검증
-    // 실제 네이버 계정으로 발급된 진짜 인가코드가 없어 토큰교환 이후(성공 로그인)까지는 이 자동
-    // 테스트로 확인할 수 없다 - 그 앞단의 방어 로직(위조/만료 state, 코드 누락, 취소)만 검증한다.
-    // ============================================
-    const noCodeRes = await fetch(`${API}/api/auth/naver/callback?state=${encodeURIComponent(makeState())}`, { redirect: 'manual' });
-    assert(noCodeRes.status === 302 && (noCodeRes.headers.get('location') || '').startsWith('/login?social_error='), `인가코드 없이 콜백 호출 시 안내 메시지와 함께 로그인 화면으로 리다이렉트 (실제: ${noCodeRes.status})`);
-
-    const tamperedSigRes = await fetch(`${API}/api/auth/naver/callback?code=fake&state=${encodeURIComponent(makeState({ badSig: true }))}`, { redirect: 'manual' });
-    assert(tamperedSigRes.status === 302 && (tamperedSigRes.headers.get('location') || '').startsWith('/login?social_error='), `서명이 위조된 state는 거부됨 (실제: ${tamperedSigRes.status})`);
-
-    const expiredStateRes = await fetch(`${API}/api/auth/naver/callback?code=fake&state=${encodeURIComponent(makeState({ tsOffsetMs: -11 * 60 * 1000 }))}`, { redirect: 'manual' });
-    assert(expiredStateRes.status === 302 && (expiredStateRes.headers.get('location') || '').startsWith('/login?social_error='), `11분 전에 발급된(만료된) state는 거부됨 (실제: ${expiredStateRes.status})`);
-
-    const noStateRes = await fetch(`${API}/api/auth/naver/callback?code=fake`, { redirect: 'manual' });
-    assert(noStateRes.status === 302 && (noStateRes.headers.get('location') || '').startsWith('/login?social_error='), `state 파라미터 자체가 없으면 거부됨 (실제: ${noStateRes.status})`);
-
-    const canceledRes = await fetch(`${API}/api/auth/naver/callback?error=access_denied&state=${encodeURIComponent(makeState())}`, { redirect: 'manual' });
-    assert(canceledRes.status === 302 && (canceledRes.headers.get('location') || '').startsWith('/login?social_error='), `사용자가 네이버 동의화면에서 취소하면(error 파라미터) 안내와 함께 되돌아옴 (실제: ${canceledRes.status})`);
-
-    // 유효한 state + 가짜 코드 → 네이버 토큰교환 서버 호출까지는 가지만(실제 네트워크 호출), 가짜 코드라
-    // 네이버 서버가 실패 응답을 주고, 그 실패도 안전하게(500 대신) 로그인 화면 리다이렉트로 처리되는지 확인
-    const validStateFakeCodeRes = await fetch(`${API}/api/auth/naver/callback?code=definitely-not-a-real-naver-auth-code&state=${encodeURIComponent(makeState())}`, { redirect: 'manual' });
-    assert(validStateFakeCodeRes.status === 302 && (validStateFakeCodeRes.headers.get('location') || '').startsWith('/login?social_error='), `유효한 state에 가짜 인가코드를 보내도(네이버가 거부) 서버가 500이 아닌 안내 리다이렉트로 안전하게 처리함 (실제: ${validStateFakeCodeRes.status})`);
-
-  } finally {
-    console.log('\n--- 정리 시작 ---');
-    try {
-      if (backup) {
-        await admin.from('oauth_configs').update({ client_id: backup.client_id, client_secret: backup.client_secret, enabled: backup.enabled }).eq('provider_key', 'naver');
-      } else {
-        await admin.from('oauth_configs').update({ client_id: null, client_secret: null, enabled: false }).eq('provider_key', 'naver');
-      }
-      if (superAdminId) await admin.auth.admin.deleteUser(superAdminId);
-      if (providerId) await admin.auth.admin.deleteUser(providerId);
-    } catch (e) { console.error('정리 중 오류:', e.message); }
-    console.log('--- 정리 완료 ---');
+    child.stderr.on('data', () => {});
   }
+  try {
+    if (!(await waitForServer())) throw new Error('테스트 서버가 뜨지 않았습니다');
 
-  console.log(`\n결과: ${pass} passed, ${fail} failed`);
-  process.exit(fail > 0 ? 1 : 0);
+    // ===== 1. 준비 상태 =====
+    const st = await (await fetch(BASE + '/api/auth/social-status')).json();
+    assert(st.data.kakao === true && st.data.kakao_via === 'server' && st.data.naver === true, '테스트 모드: 카카오(서버 방식)·네이버 준비됨', st.data);
+
+    // ===== 2. 로그인 시작 URL =====
+    const k = await get('/api/auth/kakao/login?next=' + encodeURIComponent('/product/123?opt=1') + '&from=join');
+    const kLoc = new URL(k.headers.get('location'));
+    assert(k.status === 302 && kLoc.origin + kLoc.pathname === 'https://kauth.kakao.com/oauth/authorize', '카카오: 인가 URL로 302');
+    assert(kLoc.searchParams.get('client_id') === 'test-kakao-client-id', '카카오: client_id = REST API 키');
+    assert(kLoc.searchParams.get('redirect_uri') === `${BASE}/api/auth/kakao/callback`, '카카오: redirect_uri = 이 사이트/api/auth/kakao/callback', kLoc.searchParams.get('redirect_uri'));
+    assert(kLoc.searchParams.get('response_type') === 'code', '카카오: response_type=code');
+    const kState = kLoc.searchParams.get('state');
+    const kData = decodeState(kState);
+    assert(kState.startsWith('v1.') && kData.p === 'kakao' && kData.r === '/product/123?opt=1' && kData.f === 'join', 'state: 서명 형식·제공자·복귀경로·출발화면 포함', kData);
+    assert(cookieFrom(k, 'wp_oauth_kakao') === kData.n, 'state nonce = HttpOnly 쿠키 nonce');
+    assert(/HttpOnly/i.test((k.headers.getSetCookie ? k.headers.getSetCookie() : []).join(';')) && /SameSite=Lax/i.test((k.headers.getSetCookie ? k.headers.getSetCookie() : []).join(';')), 'nonce 쿠키: HttpOnly; SameSite=Lax');
+
+    const n = await get('/api/auth/naver/login?next=/mypage');
+    const nLoc = new URL(n.headers.get('location'));
+    assert(nLoc.origin + nLoc.pathname === 'https://nid.naver.com/oauth2.0/authorize' && nLoc.searchParams.get('client_id') === 'test-naver-client-id' && nLoc.searchParams.get('redirect_uri') === `${BASE}/api/auth/naver/callback`, '네이버: 인가 URL·client_id·redirect_uri');
+
+    for (const bad of ['//evil.example.com/x', 'https://evil.example.com', '/\\evil.example.com', '/login?next=/x', 'javascript:alert(1)']) {
+      const r = await get('/api/auth/kakao/login?next=' + encodeURIComponent(bad));
+      const d = decodeState(new URL(r.headers.get('location')).searchParams.get('state'));
+      assert(d.r === '/', `복귀경로 차단: ${bad} → /`, d.r);
+    }
+
+    const fwd = await get('/api/auth/kakao/login', { 'X-Forwarded-For': '1.2.3.4' });
+    const fwdLoc = fwd.headers.get('location') || '';
+    assert(!fwdLoc.includes('test-kakao-client-id'), '프록시 경유 요청에는 테스트 키가 절대 쓰이지 않음', fwdLoc.slice(0, 120));
+
+    // ===== 3. 콜백 거부 =====
+    const goodCookie = { Cookie: `wp_oauth_kakao=${kData.n}` };
+    let r = await get('/api/auth/kakao/callback?code=stub.x&state=' + encodeURIComponent(kState.slice(0, -2) + 'AA'), goodCookie);
+    assert(/^\/login\?/.test(r.headers.get('location')) && /만료되었거나 올바르지/.test(socialErrorOf(r.headers.get('location'))), '변조된 state 거부');
+    const expired = forgeState({ p: 'kakao', n: 'abc', t: Date.now() - 11 * 60 * 1000, r: '/', f: 'login' });
+    r = await get('/api/auth/kakao/callback?code=stub.x&state=' + encodeURIComponent(expired), { Cookie: 'wp_oauth_kakao=abc' });
+    assert(/만료되었거나 올바르지/.test(socialErrorOf(r.headers.get('location')) || ''), '만료된 state(11분) 거부');
+    const naverState = forgeState({ p: 'naver', n: 'abc', t: Date.now(), r: '/', f: 'login' });
+    r = await get('/api/auth/kakao/callback?code=stub.x&state=' + encodeURIComponent(naverState), { Cookie: 'wp_oauth_kakao=abc' });
+    assert(/만료되었거나 올바르지/.test(socialErrorOf(r.headers.get('location')) || ''), '다른 제공자용 state 거부');
+    r = await get('/api/auth/kakao/callback?code=stub.x&state=' + encodeURIComponent(kState));
+    assert(/같은 브라우저/.test(socialErrorOf(r.headers.get('location')) || ''), 'nonce 쿠키 없는 콜백 거부(로그인 CSRF 방지)');
+    r = await get('/api/auth/kakao/callback?code=stub.x&state=' + encodeURIComponent(kState), { Cookie: 'wp_oauth_kakao=wrong' });
+    assert(/같은 브라우저/.test(socialErrorOf(r.headers.get('location')) || ''), 'nonce 불일치 거부');
+    r = await get('/api/auth/kakao/callback?error=access_denied&state=' + encodeURIComponent(kState), goodCookie);
+    const cancelLoc = r.headers.get('location') || '';
+    assert(/^\/join\?/.test(cancelLoc) && /취소/.test(socialErrorOf(cancelLoc)) && new URL(cancelLoc, BASE).searchParams.get('next') === '/product/123?opt=1', '사용자 취소 → 출발화면(가입)으로 안내·복귀경로 유지', cancelLoc);
+    r = await get('/api/auth/kakao/callback?code=bad-code&state=' + encodeURIComponent(kState), goodCookie);
+    assert(/인증 서버 응답에 실패/.test(socialErrorOf(r.headers.get('location')) || ''), '토큰 교환 실패 안내');
+
+    // ===== 4. 신규 가입(이메일 미제공) → 세션 =====
+    const kid1 = String(9000000000 + Math.floor(Math.random() * 99999999));
+    const f1 = await runFlow('kakao', { id: Number(kid1), properties: { nickname: `테스트${RUN}` }, kakao_account: { profile: { nickname: `테스트${RUN}` } } }, '/product/77');
+    assert(f1.status === 302 && f1.done === 'kakao' && !!f1.at && !!f1.rt, '카카오 신규: 세션(access/refresh) 발급 후 /login 으로 전달', f1.error || f1.location.slice(0, 80));
+    assert(f1.location.startsWith('/login?') && f1.location.includes('#wp_sso=1'), '세션은 URL 해시(#wp_sso)로만 전달(서버로 전송 안 됨)');
+    assert(f1.next === '/product/77', '복귀경로 유지(/product/77)', f1.next);
+    assert(f1.isNew === true, '신규 가입 표시(social_new=1)');
+    assert(f1.user && f1.user.email === `kakao_${kid1}@social.withplus.local`, '이메일 없으면 카카오 회원번호 기반 계정 생성', f1.user && f1.user.email);
+    const uid1 = f1.user && f1.user.id;
+    const { data: prof1 } = await admin.from('profiles').select('id, full_name, role').eq('id', uid1).maybeSingle();
+    assert(prof1 && prof1.full_name === `테스트${RUN}` && prof1.role === 'member', 'profiles 행 생성(닉네임·member)', prof1);
+    const { data: ident1 } = await admin.from('social_identities_with').select('user_id, linked_by').eq('provider', 'kakao').eq('provider_user_id', kid1).maybeSingle();
+    assert(ident1 && ident1.user_id === uid1 && ident1.linked_by === 'created', '소셜 연결 대장 기록', ident1);
+    const me = await fetch(BASE + '/api/me', { headers: { Authorization: 'Bearer ' + f1.at } });
+    assert(me.ok, '발급된 세션으로 우리 API 인증 통과', me.status);
+
+    // 재로그인 → 같은 회원
+    const f1b = await runFlow('kakao', { id: Number(kid1), kakao_account: { profile: { nickname: 'x' } } }, '/');
+    assert(f1b.user && f1b.user.id === uid1 && !f1b.isNew, '같은 카카오 회원번호 재로그인 → 같은 계정');
+
+    // ===== 5. 인증된 이메일 → 기존 회원 연결 / 미인증 → 연결 안 함 =====
+    const existingEmail = `wp-social-test-${RUN}@example.com`;
+    const { data: ex } = await admin.auth.admin.createUser({ email: existingEmail, password: crypto.randomBytes(12).toString('hex') + 'A1!', email_confirm: true });
+    createdUserIds.add(ex.user.id);
+    await admin.from('profiles').upsert([{ id: ex.user.id, email: existingEmail, full_name: '기존회원테스트', role: 'member', member_type: 'general' }], { onConflict: 'id' });
+    const kid2 = String(Number(kid1) + 1);
+    const f2 = await runFlow('kakao', { id: Number(kid2), kakao_account: { email: existingEmail.toUpperCase(), is_email_valid: true, is_email_verified: true, profile: { nickname: 'k2' } } });
+    assert(f2.user && f2.user.id === ex.user.id && !f2.isNew, '카카오 인증 이메일 → 같은 이메일 기존 회원에 연결', f2.error);
+    const { data: ident2 } = await admin.from('social_identities_with').select('linked_by').eq('provider', 'kakao').eq('provider_user_id', kid2).maybeSingle();
+    assert(ident2 && ident2.linked_by === 'email_match', '연결 방식 email_match 기록');
+    const kid3 = String(Number(kid1) + 2);
+    const f3 = await runFlow('kakao', { id: Number(kid3), kakao_account: { email: existingEmail, is_email_valid: true, is_email_verified: false } });
+    assert(f3.user && f3.user.id !== ex.user.id && f3.user.email === `kakao_${kid3}@social.withplus.local`, '미인증 이메일은 기존 회원에 연결하지 않고 별도 계정', f3.user && f3.user.email);
+
+    // ===== 6. 네이버 신규(이메일 제공) =====
+    const naverEmail = `wp-social-test-${RUN}-n@example.com`;
+    const nid = 'NV' + RUN;
+    const f4 = await runFlow('naver', { resultcode: '00', message: 'success', response: { id: nid, email: naverEmail, name: '네이버테스트' } }, '/cart');
+    assert(f4.user && f4.user.email === naverEmail && f4.isNew && f4.next === '/cart', '네이버 신규: 이메일 계정 생성·세션·복귀경로', f4.error);
+    const f4b = await runFlow('naver', { response: { id: nid, email: naverEmail } });
+    assert(f4b.user && f4.user && f4b.user.id === f4.user.id, '네이버 재로그인 → 같은 계정');
+
+    // ===== 7. 탈퇴·정지 계정 거부 =====
+    await admin.from('profiles').update({ is_active: false }).eq('id', f4.user.id);
+    const f5 = await runFlow('naver', { response: { id: nid, email: naverEmail } });
+    assert(!f5.at && /탈퇴한 계정/.test(f5.error || ''), '탈퇴(is_active=false) 계정 로그인 거부', f5.error);
+    await admin.auth.admin.updateUserById(uid1, { ban_duration: '24h' });
+    const f6 = await runFlow('kakao', { id: Number(kid1) });
+    assert(!f6.at && /이용이 제한된/.test(f6.error || ''), '이용정지(ban) 계정 로그인 거부', f6.error);
+  } finally {
+    // 테스트가 만든 회원만 정리(profiles·social_identities_with는 FK cascade로 함께 삭제)
+    let cleaned = 0;
+    for (const id of createdUserIds) {
+      const { data } = await admin.auth.admin.getUserById(id);
+      const email = data && data.user && data.user.email || '';
+      if (!/^kakao_9\d+@social\.withplus\.local$|^wp-social-test-/.test(email)) { console.log('⚠️ 정리 건너뜀(테스트 회원 아님):', id); continue; }
+      let error = null;
+      for (let i = 0; i < 3; i++) {
+        ({ error } = await admin.auth.admin.deleteUser(id));
+        if (!error) break;
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      if (!error) cleaned++; else console.log('⚠️ 테스트 회원 삭제 실패:', id, error.message);
+    }
+    console.log(`🧹 테스트 회원 ${cleaned}명 정리`);
+    if (child) child.kill();
+  }
+  console.log(`\n결과: ${pass} 통과 / ${fail} 실패`);
+  process.exit(fail ? 1 : 0);
 }
 
-main().catch(err => { console.error('💥 테스트 실패:', err.message); process.exit(1); });
+main().catch(err => { console.error('테스트 실행 오류:', err); process.exit(1); });
