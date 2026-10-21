@@ -493,7 +493,9 @@
                             return;
                         }
                     }
-                    const basePrice = (p.discount_price && Number(p.discount_price) < Number(p.price)) ? Number(p.discount_price) : Number(p.price);
+                    // ⚡ 진행중 한정수량 초특가는 초특가 가격(서버가 주문 생성 시 같은 규칙으로 다시 계산 — 판매가 대신 초특가)
+                    const flash = p.flash_deal && Number(p.flash_deal.deal_price) < Number(p.price) ? p.flash_deal : null;
+                    const basePrice = flash ? Number(flash.deal_price) : ((p.discount_price && Number(p.discount_price) < Number(p.price)) ? Number(p.discount_price) : Number(p.price));
                     const price = basePrice + (variant ? Number(variant.price_adjustment || 0) : 0);
                     lineItems.push({ product: p, variant, quantity: ci.quantity, price });
                 });
@@ -589,6 +591,7 @@
                             <div class="name"><a href="/product/${li.product.id}">${WithPlus.escapeHtml(li.product.name)}</a></div>
                             ${li.variant ? `<div style="font-size:0.85em; color:var(--text-gray); margin-bottom:2px;">옵션: ${WithPlus.escapeHtml(li.variant.name)}</div>` : ''}
                             <div class="price">${WithPlus.formatPrice(li.price)}</div>
+                            ${li.product.flash_deal ? `<div style="font-size:0.82em; color:#E8125C; font-weight:700;">⚡ 한정수량 초특가 · 잔여 ${Number(li.product.flash_deal.remaining).toLocaleString('ko-KR')}개${li.quantity > Number(li.product.flash_deal.remaining) ? ' — 잔여 수량을 넘어 주문할 수 없어요. 수량을 줄여주세요' : ''}</div>` : ''}
                         </div>
                         <div class="qty-control">
                             <button type="button" class="qty-minus">−</button>

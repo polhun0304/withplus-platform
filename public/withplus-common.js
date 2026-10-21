@@ -152,6 +152,7 @@
             </span>`;
         }).join('');
       }
+      insertFlashDealsLink(navEl, 'nav');
     }
     const gridEl = document.getElementById('category-grid');
     if (gridEl) {
@@ -165,7 +166,24 @@
               <div class="category-name">${escapeHtml(c.label)}</div>
           </a>`).join('');
       }
+      insertFlashDealsLink(gridEl, 'grid');
     }
+  }
+
+  // ⚡ '초특가' 메뉴 — 카테고리(DB) 메뉴가 아니라 고정 메뉴라서, '기획전'(special) 바로 오른쪽에 끼워 넣는다(없으면 맨 끝).
+  const FLASH_MENU = { slug: 'flash-deals', label: '초특가', href: '/deals' };
+  function flashDealsLinkHtml(kind) {
+    const active = location.pathname.replace(/\/$/, '') === FLASH_MENU.href ? ' class="active"' : '';
+    if (kind === 'nav') return `<a href="${FLASH_MENU.href}"${active} data-wp-flash-menu="1"><span class="wp-nav-ico">${getCategory3DIcon(FLASH_MENU, 24)}</span>${FLASH_MENU.label}</a>`;
+    if (kind === 'grid') return `<a href="${FLASH_MENU.href}" class="category-item" data-wp-flash-menu="1"><div class="category-icon">${getCategory3DIcon(FLASH_MENU, 46)}</div><div class="category-name">${FLASH_MENU.label}</div></a>`;
+    return `<a href="${FLASH_MENU.href}" data-wp-flash-menu="1"><span class="wp-cat-ico">${getCategory3DIcon(FLASH_MENU, 30)}</span><span>${FLASH_MENU.label}</span></a>`;
+  }
+  function insertFlashDealsLink(container, kind) {
+    if (!container || container.querySelector('[data-wp-flash-menu]')) return;
+    const special = [...container.querySelectorAll(':scope > a, :scope > .wp-nav-item')]
+      .find(el => /\/category\/special(?:$|[/?#])/.test(el.getAttribute('href') || (el.querySelector('a') ? el.querySelector('a').getAttribute('href') : '') || ''));
+    if (special) special.insertAdjacentHTML('afterend', flashDealsLinkHtml(kind));
+    else container.insertAdjacentHTML('beforeend', flashDealsLinkHtml(kind));
   }
 
   // refreshCategoryMap + renderCategoryNav를 함께 호출하는 편의 함수 (nav-menu/category-grid가 있는 페이지에서 사용)
@@ -544,10 +562,12 @@
 
   function renderProductCard(product) {
     const emoji = CATEGORY_EMOJI[product.category] || CATEGORY_EMOJI.default;
-    const hasDiscount = product.discount_price && Number(product.discount_price) < Number(product.price);
-    const currentPrice = hasDiscount ? product.discount_price : product.price;
+    // ⚡ 진행중인 한정수량 초특가가 있으면 그 가격을 보여준다(서버가 붙여준 flash_deal — 주문 시 서버가 같은 가격으로 계산)
+    const flash = product.flash_deal && Number(product.flash_deal.deal_price) < Number(product.price) ? product.flash_deal : null;
+    const hasDiscount = !!flash || (product.discount_price && Number(product.discount_price) < Number(product.price));
+    const currentPrice = flash ? flash.deal_price : (hasDiscount ? product.discount_price : product.price);
     const discountRate = hasDiscount
-      ? Math.round((1 - Number(product.discount_price) / Number(product.price)) * 100)
+      ? Math.round((1 - Number(currentPrice) / Number(product.price)) * 100)
       : 0;
     const rating = Number(product.rating || 0).toFixed(1);
     const reviewCount = product.review_count || 0;
@@ -567,6 +587,7 @@
             ${badges.length ? `<div class="wp-card-badges">${badges.map(b => `<span class="wp-card-badge ${b.cls}">${b.label}</span>`).join('')}</div>` : ''}
         </div>
         <div class="product-info">
+            ${flash ? `<p class="wp-card-catch" style="color:#E8125C;font-weight:700;">⚡ 한정수량 초특가 · 잔여 ${Number(flash.remaining).toLocaleString('ko-KR')}개</p>` : ''}
             ${catchLine ? `<p class="wp-card-catch">${escapeHtml(catchLine)}</p>` : ''}
             <h3 class="product-name">${escapeHtml(product.name)}</h3>
             <div class="product-price">
@@ -896,6 +917,7 @@
     function render(count) {
       const shown = (count == null) ? items : items.slice(0, count);
       gridEl.innerHTML = shown.map(renderItem).join('');
+      gridEl.scrollLeft = 0; // 가로 스크롤 목록이면 처음으로 되돌린다(개수를 바꿨는데 빈 칸만 보이는 현상 방지)
       syncWishlistHearts();
       attachProductCardInteractions();
     }
@@ -1023,6 +1045,14 @@
   // 같은 화면에 여러 번 그려도 그라데이션이 꼬이지 않게 그릴 때마다 고유 id 접미사를 붙인다.
   let cat3dSeq = 0;
   const CATEGORY_3D_ICONS = [
+    // ⚡ 한정수량 초특가 (상단 메뉴 '초특가') — '특가' 키워드보다 먼저 매칭되도록 맨 앞에 둔다
+    { keys: ['flash-deals', '초특가'], svg: (u) => `
+      <defs><linearGradient id="z1${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFD36E"/><stop offset=".55" stop-color="#FF8A3D"/><stop offset="1" stop-color="#F0457A"/></linearGradient>
+      <radialGradient id="z2${u}" cx=".5" cy=".55" r=".55"><stop offset="0" stop-color="#FFE7EF"/><stop offset="1" stop-color="#FFB3C7" stop-opacity="0"/></radialGradient></defs>
+      <circle cx="24" cy="25" r="18" fill="url(#z2${u})"/>
+      <path d="M27.5 4L11 27h11l-3.5 17L37 20H25.5z" fill="url(#z1${u})" stroke="#E5326B" stroke-width="1.2" stroke-linejoin="round"/>
+      <path d="M25.5 9.5L16.5 23" stroke="#fff" stroke-opacity=".7" stroke-width="2" stroke-linecap="round"/>
+      <path d="M38 8l1 2.4 2.4 1-2.4 1-1 2.4-1-2.4-2.4-1 2.4-1z" fill="#FFC93C"/><circle cx="9" cy="14" r="1.4" fill="#FF8A3D"/>` },
     { keys: ['diet', '다이어트', '슬림'], svg: (u) => `
       <defs><linearGradient id="d1${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFB3C7"/><stop offset="1" stop-color="#F0457A"/></linearGradient>
       <linearGradient id="d2${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFE9A8"/><stop offset="1" stop-color="#F5B83D"/></linearGradient></defs>
@@ -1445,6 +1475,7 @@
           <span class="wp-cat-ico">${getCategory3DIcon(c, 30)}</span>
           <span>${escapeHtml(c.label)}</span>
         </a>`).join('');
+      insertFlashDealsLink(catsEl, 'drawer');
       catsEl.dataset.loaded = '1';
     }
     const userEl = document.getElementById('wp-drawer-user');
