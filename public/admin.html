@@ -362,6 +362,81 @@
             .qtp-row { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
             .qtp-row .qtp-remove { grid-row:auto; grid-column: 1 / -1; }
         }
+        /* 📊 WMS 재고 현황판 */
+        .srp-filters { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; background: #fff; border: 1px solid var(--border-color); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+        .srp-filters label { display: block; font-size: 0.76em; color: var(--text-gray); font-weight: 600; margin-bottom: 3px; }
+        .srp-filters input[type=text], .srp-filters input[type=date], .srp-filters input[type=number], .srp-filters select { width: 100%; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.86em; background: #fff; min-width: 0; }
+        .srp-field-wide { grid-column: span 2; }
+        .srp-dates { display: flex; gap: 4px; align-items: center; }
+        .srp-dates input { flex: 1; }
+        .srp-presets, .srp-cats { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
+        .srp-chip { padding: 3px 9px; border: 1px solid var(--border-color); border-radius: 12px; background: #fff; font-size: 0.76em; cursor: pointer; color: var(--text-gray); }
+        .srp-chip.on { background: var(--primary-color); border-color: var(--primary-color); color: #fff; }
+        .srp-checks { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; font-size: 0.84em; }
+        .srp-checks label { display: inline-flex; gap: 4px; align-items: center; margin: 0; font-size: 1em; color: var(--text-dark); font-weight: 500; }
+        .srp-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+        .srp-summary { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+        .srp-kpi { background: #fff; border: 1px solid var(--border-color); border-radius: 10px; padding: 8px 12px; min-width: 110px; flex: 1 1 110px; }
+        .srp-kpi b { display: block; font-size: 1.15em; }
+        .srp-kpi span { font-size: 0.74em; color: var(--text-gray); }
+        .srp-table-wrap { overflow: auto; max-height: 70vh; border: 1px solid var(--border-color); border-radius: 10px; background: #fff; -webkit-overflow-scrolling: touch; }
+        table.srp-table { border-collapse: separate; border-spacing: 0; font-size: 0.8em; width: max-content; min-width: 100%; overflow: visible; border-radius: 0; box-shadow: none; } /* 전역 table{overflow:hidden}이 sticky 고정열/헤더를 막으므로 해제 */
+        /* 전역 모바일 규칙(700px 이하에서 table을 카드형 block으로 바꿈)을 현황판 표에서는 해제 - 시트처럼 가로 스크롤 표로 유지 */
+        table.srp-table, table.srp-mini { display: table; } .srp-table thead, .srp-mini thead { display: table-header-group; } .srp-table tbody, .srp-mini tbody { display: table-row-group; }
+        .srp-table tr, .srp-mini tr { display: table-row; margin: 0; box-shadow: none; border-radius: 0; } .srp-table th, .srp-table td, .srp-mini th, .srp-mini td { display: table-cell; } .srp-table td::before, .srp-mini td::before { content: none; }
+        .srp-table th, .srp-table td { padding: 6px 8px; border-bottom: 1px solid #EEE; border-right: 1px solid #F2F2F2; white-space: nowrap; text-align: right; background: #fff; }
+        .srp-table th { position: sticky; top: 0; z-index: 2; background: #FAFAFA; font-weight: 700; text-align: center; }
+        .srp-table th.live { background: #FFF3E0; color: #E65100; }
+        .srp-table td.live { background: #FFFAF3; }
+        .srp-table .c-sel { position: sticky; left: 0; z-index: 1; width: 30px; min-width: 30px; text-align: center; }
+        .srp-table .c-cat { position: sticky; left: 30px; z-index: 1; width: 74px; min-width: 74px; max-width: 74px; text-align: left; overflow: hidden; text-overflow: ellipsis; }
+        .srp-table .c-name { position: sticky; left: 104px; z-index: 1; min-width: 180px; max-width: 240px; text-align: left; white-space: normal; box-shadow: 2px 0 0 #E0E0E0; }
+        .srp-table th.c-sel, .srp-table th.c-cat, .srp-table th.c-name { z-index: 3; }
+        .srp-table td.c-name a { color: var(--text-dark); font-weight: 600; text-decoration: none; cursor: pointer; }
+        .srp-table td.c-name a:hover { color: var(--primary-color); text-decoration: underline; }
+        .srp-table .code { display: block; font-size: 0.85em; color: #999; font-weight: 400; }
+        .srp-table td.stock { background: #37474F; color: #fff; font-weight: 700; }
+        .srp-table th.stock { background: #263238; color: #fff; }
+        .srp-table td.out { color: #C62828; }
+        .srp-table td.zero { color: #CCC; }
+        .srp-table td.txt { text-align: left; }
+        .srp-table tr.tot td { position: sticky; bottom: 0; background: #FFF8E1; font-weight: 700; border-top: 2px solid #FFC107; z-index: 1; }
+        .srp-table tr.tot td.c-sel, .srp-table tr.tot td.c-cat, .srp-table tr.tot td.c-name { z-index: 2; }
+        .srp-table tr:hover td:not(.stock) { background: #FFF5F8; }
+        .srp-exp { display: inline-block; padding: 1px 7px; border-radius: 8px; font-size: 0.9em; font-weight: 700; }
+        .srp-exp.r { background: #FFCDD2; color: #B71C1C; }
+        .srp-exp.o { background: #FFE0B2; color: #E65100; }
+        .srp-exp.y { background: #FFF9C4; color: #827717; }
+        .srp-exp.x { background: #B71C1C; color: #fff; }
+        .srp-low { color: #C62828; font-weight: 700; }
+        .srp-note { font-size: 0.76em; color: var(--text-gray); margin-top: 8px; line-height: 1.6; }
+        .srp-drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(560px, 100vw); background: #fff; z-index: 260; box-shadow: -6px 0 24px rgba(0,0,0,0.18); transform: translateX(105%); transition: transform 0.2s; overflow-y: auto; padding: 18px 18px 40px; }
+        .srp-drawer.open { transform: translateX(0); }
+        .srp-drawer-backdrop { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.3); z-index: 250; }
+        .srp-drawer-backdrop.open { display: block; }
+        .srp-drawer h3 { font-size: 1.05em; margin: 0 30px 4px 0; word-break: break-all; }
+        .srp-drawer .close { position: absolute; top: 12px; right: 14px; border: none; background: none; font-size: 1.4em; cursor: pointer; }
+        .srp-dgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin: 12px 0; }
+        .srp-dgrid div { background: var(--bg-light); border-radius: 8px; padding: 8px 10px; font-size: 0.84em; min-width: 0; word-break: break-all; }
+        .srp-dgrid b { display: block; font-size: 1.05em; }
+        .srp-dgrid span { color: var(--text-gray); font-size: 0.85em; }
+        .srp-sec { font-weight: 700; font-size: 0.9em; margin: 16px 0 6px; }
+        .srp-bars { display: flex; align-items: flex-end; gap: 2px; height: 120px; border-bottom: 1px solid #ccc; padding-top: 14px; overflow-x: auto; }
+        .srp-bar { flex: 1 0 10px; display: flex; flex-direction: column-reverse; position: relative; min-width: 10px; }
+        .srp-bar i { display: block; width: 100%; }
+        .srp-bar i.on { background: #42A5F5; } .srp-bar i.li { background: #FF7043; } .srp-bar i.of { background: #66BB6A; }
+        .srp-bar em { position: absolute; top: -14px; left: 50%; transform: translateX(-50%); font-size: 0.62em; font-style: normal; color: #555; }
+        .srp-legend { display: flex; gap: 10px; font-size: 0.75em; color: var(--text-gray); margin-top: 4px; flex-wrap: wrap; }
+        .srp-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 3px; vertical-align: -1px; }
+        .srp-mini { width: 100%; border-collapse: collapse; font-size: 0.8em; }
+        .srp-mini th, .srp-mini td { border-bottom: 1px solid #EEE; padding: 5px 6px; text-align: left; }
+        .srp-mini .num { text-align: right; }
+        @media (max-width: 600px) {
+            .srp-field-wide { grid-column: span 1; }
+            .srp-table .c-name { min-width: 130px; max-width: 150px; }
+            .srp-table .c-cat { width: 56px; min-width: 56px; max-width: 56px; }
+            .srp-table .c-name { left: 86px; }
+        }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -2176,7 +2251,8 @@
                         ${isAdmin ? ' <strong style="color:var(--primary-dark);">AGV(물류로봇) 대시보드는 실제 로봇 하드웨어와 연동되지 않은 시뮬레이션 화면입니다.</strong>' : ''}</span>
                     </div>
                     <div style="display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px;">
-                        <button class="btn btn-secondary wms-subtab-btn active" data-wms-tab="ledger">📒 재고원장</button>
+                        <button class="btn btn-secondary wms-subtab-btn active" data-wms-tab="report">📊 재고 현황판</button>
+                        <button class="btn btn-secondary wms-subtab-btn" data-wms-tab="ledger">📒 재고원장</button>
                         <button class="btn btn-secondary wms-subtab-btn" data-wms-tab="scan">📷 바코드 스캔 터미널</button>
                         <button class="btn btn-secondary wms-subtab-btn" data-wms-tab="search">🔎 상품 검색 현황</button>
                         ${isAdmin ? '<button class="btn btn-secondary wms-subtab-btn" data-wms-tab="warehouses">🏭 창고 마스터</button>' : ''}
@@ -2185,7 +2261,96 @@
                         ${isAdmin ? '<button class="btn btn-secondary wms-subtab-btn" data-wms-tab="agv">🤖 AGV 시뮬레이션</button>' : ''}
                     </div>
 
-                    <div class="wms-subtab-panel active" id="wms-tab-ledger">
+                    <div class="wms-subtab-panel active" id="wms-tab-report">
+                        <div class="srp-filters">
+                            <div class="srp-field-wide">
+                                <label for="srp-q">검색 (상품명 · 바코드 · SKU · 상품코드)</label>
+                                <input type="text" id="srp-q" placeholder="예: 단백질쉐이크, B200005" autocomplete="off">
+                            </div>
+                            <div class="srp-field-wide">
+                                <label>기간 (일자별 출고)</label>
+                                <div class="srp-dates"><input type="date" id="srp-from" aria-label="시작일"><span>~</span><input type="date" id="srp-to" aria-label="종료일"></div>
+                                <div class="srp-presets" id="srp-presets">
+                                    <button type="button" class="srp-chip" data-preset="today">오늘</button>
+                                    <button type="button" class="srp-chip" data-preset="7">7일</button>
+                                    <button type="button" class="srp-chip on" data-preset="14">14일</button>
+                                    <button type="button" class="srp-chip" data-preset="30">30일</button>
+                                    <button type="button" class="srp-chip" data-preset="month">이번달</button>
+                                </div>
+                            </div>
+                            <div>
+                                <label for="srp-channel">채널 · 라이브</label>
+                                <select id="srp-channel">
+                                    <option value="">전체 채널</option>
+                                    <option value="online">온라인(쇼핑몰)</option>
+                                    <option value="live">라이브 전체</option>
+                                    <option value="offline">오프라인</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="srp-location">위치</label>
+                                <select id="srp-location"><option value="">전체 위치</option><option value="none">위치 미배정</option></select>
+                            </div>
+                            <div>
+                                <label for="srp-expiry">유통기한</label>
+                                <select id="srp-expiry">
+                                    <option value="">전체</option>
+                                    <option value="30">임박 30일 이내</option>
+                                    <option value="60">임박 60일 이내</option>
+                                    <option value="90">임박 90일 이내</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="srp-sort">정렬</label>
+                                <select id="srp-sort">
+                                    <option value="stock">현수량 많은 순</option>
+                                    <option value="outbound">출고량 많은 순</option>
+                                    <option value="expiry">유통기한 임박 순</option>
+                                    <option value="reorder">권장발주량 많은 순</option>
+                                    <option value="name">이름 순</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="srp-target">목표 보유일수 (발주 기준)</label>
+                                <input type="number" id="srp-target" value="30" min="1" max="365">
+                            </div>
+                            <div class="srp-field-wide">
+                                <label>구분 (여러 개 선택 가능)</label>
+                                <div class="srp-cats" id="srp-cats"><span style="font-size:0.8em; color:var(--text-gray);">불러오는 중...</span></div>
+                            </div>
+                            <div class="srp-field-wide srp-checks">
+                                <label><input type="checkbox" id="srp-low"> 재고부족만</label>
+                                <label><input type="checkbox" id="srp-disc"> 판매중지 상품 포함</label>
+                                <button type="button" class="btn btn-primary btn-sm" id="srp-apply">조회</button>
+                                <button type="button" class="btn btn-secondary btn-sm" id="srp-reset">초기화</button>
+                            </div>
+                        </div>
+                        <div class="srp-actions">
+                            <button type="button" class="btn btn-secondary btn-sm" id="srp-csv">📥 엑셀 다운로드</button>
+                            <button type="button" class="btn btn-secondary btn-sm" id="srp-print">🖨️ 인쇄</button>
+                            <button type="button" class="btn btn-secondary btn-sm" id="srp-po">📝 발주서 만들기</button>
+                            <span id="srp-selcount" style="font-size:0.8em; color:var(--text-gray);"></span>
+                        </div>
+                        <div class="srp-summary" id="srp-summary"></div>
+                        <div id="srp-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                        <div class="srp-note" id="srp-note"></div>
+                    </div>
+                    <div class="srp-drawer-backdrop" id="srp-backdrop"></div>
+                    <aside class="srp-drawer" id="srp-drawer" aria-label="상품 재고 상세"><button type="button" class="close" id="srp-drawer-close" aria-label="닫기">✕</button><div id="srp-drawer-body"></div></aside>
+                    <div class="modal-overlay" id="srp-po-modal">
+                        <div class="modal-box wide" style="max-width:860px;">
+                            <h3>📝 발주서 만들기</h3>
+                            <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:10px;">표에서 체크한 상품(체크가 없으면 권장발주량 &gt; 0 인 상품 전체)이 들어갑니다. 발주수량은 직접 고칠 수 있고, 0이면 발주서에서 빠집니다.</p>
+                            <div style="overflow:auto; max-height:55vh; border:1px solid var(--border-color); border-radius:8px;" id="srp-po-area"></div>
+                            <div class="modal-actions" style="display:flex; gap:8px; justify-content:flex-end; flex-wrap:wrap; margin-top:14px;">
+                                <button type="button" class="btn btn-secondary" id="srp-po-close">닫기</button>
+                                <button type="button" class="btn btn-secondary" id="srp-po-csv">📥 발주서 엑셀</button>
+                                <button type="button" class="btn btn-primary" id="srp-po-print">🖨️ 발주서 인쇄</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="wms-subtab-panel" id="wms-tab-ledger">
                         <div class="panel-toolbar">
                             <div class="search-box" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
                                 <input type="text" id="wms-ledger-lot-filter" placeholder="Lot 번호 검색" style="padding:9px 12px; border:1px solid var(--border-color); border-radius:8px; font-size:0.88em; width:160px;">
@@ -6574,6 +6739,366 @@
                         loadWmsAgvTasks();
                     });
 
+                    // ---- 📊 재고 현황판 (구분·상품명·일자별 출고·현수량·단가·위치·유통기한·평균출고·발주) ----
+                    // 고객사가 쓰던 구글시트 형태를 그대로 옮기되, 기간/채널/라이브 회차/위치/유통기한 필터와 엑셀·인쇄·발주서 출력을 붙였다.
+                    const srpState = { data: null, selected: new Set(), categories: new Set(), loading: false, seq: 0 };
+                    const srpEsc = (s) => WithPlus.escapeHtml(s === null || s === undefined ? '' : String(s));
+                    const srpNum = (n) => Number(n || 0).toLocaleString('ko-KR');
+                    function srpKstToday() { return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10); }
+                    function srpAddDays(day, n) { const d = new Date(day + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
+                    function srpApplyPreset(preset) {
+                        const today = srpKstToday();
+                        let from = today;
+                        if (preset === 'month') from = today.slice(0, 8) + '01';
+                        else if (preset !== 'today') from = srpAddDays(today, -(parseInt(preset, 10) - 1));
+                        document.getElementById('srp-from').value = from;
+                        document.getElementById('srp-to').value = today;
+                        document.querySelectorAll('#srp-presets .srp-chip').forEach(c => c.classList.toggle('on', c.dataset.preset === preset));
+                    }
+                    function srpExpiryBadge(r) {
+                        if (!r.expiry_date) return '<span style="color:#bbb;">-</span>';
+                        const d = r.expiry_d;
+                        const cls = d < 0 ? 'x' : d <= 30 ? 'r' : d <= 60 ? 'o' : d <= 90 ? 'y' : '';
+                        const dTxt = d < 0 ? '만료 ' + Math.abs(d) + '일 지남' : d === 0 ? 'D-DAY' : 'D-' + d;
+                        return `${srpEsc(r.expiry_date)} ${cls ? `<span class="srp-exp ${cls}">${dTxt}</span>` : `<span style="color:#999; font-size:0.9em;">${dTxt}</span>`}`;
+                    }
+                    function srpPriceText(r) {
+                        let t = srpNum(r.unit_price) + '원';
+                        if (r.discount_price !== null && r.discount_price < r.price) t = `<s style="color:#aaa;">${srpNum(r.price)}</s> ` + t;
+                        if (r.options && r.options.length) {
+                            const opts = r.options.slice(0, 3).map(o => `${srpEsc(o.name)} ${srpNum(o.price)}`).join(' / ');
+                            t += `<span class="code">${opts}${r.options.length > 3 ? ` 외 ${r.options.length - 3}` : ''}</span>`;
+                        }
+                        return t;
+                    }
+                    function srpPriceTextPlain(r) {
+                        let t = String(r.unit_price);
+                        if (r.options && r.options.length) t += ' (' + r.options.map(o => `${o.name} ${o.price}`).join(' / ') + ')';
+                        return t;
+                    }
+                    function srpQuery() {
+                        const p = new URLSearchParams();
+                        const v = (id) => document.getElementById(id).value.trim();
+                        if (v('srp-q')) p.set('q', v('srp-q'));
+                        if (v('srp-from')) p.set('from', v('srp-from'));
+                        if (v('srp-to')) p.set('to', v('srp-to'));
+                        const ch = v('srp-channel');
+                        if (ch.startsWith('live:')) p.set('live_id', ch.slice(5)); else if (ch) p.set('channel', ch);
+                        if (v('srp-location')) p.set('location', v('srp-location'));
+                        if (v('srp-expiry')) p.set('expiry_days', v('srp-expiry'));
+                        if (document.getElementById('srp-low').checked) p.set('low_stock', '1');
+                        if (document.getElementById('srp-disc').checked) p.set('include_discontinued', '1');
+                        p.set('sort', v('srp-sort') || 'stock');
+                        p.set('target_days', v('srp-target') || '30');
+                        if (srpState.categories.size) p.set('category', [...srpState.categories].join(','));
+                        return p.toString();
+                    }
+                    function srpFilterSummary() {
+                        const d = srpState.data; if (!d) return '';
+                        const parts = [`기간 ${d.range.from} ~ ${d.range.to}`];
+                        const chSel = document.getElementById('srp-channel');
+                        if (chSel.value) parts.push('채널: ' + chSel.options[chSel.selectedIndex].text);
+                        if (srpState.categories.size) parts.push('구분: ' + [...srpState.categories].map(c => (d.options.categories.find(x => x.value === c) || {}).label || c).join(', '));
+                        const q = document.getElementById('srp-q').value.trim(); if (q) parts.push('검색: ' + q);
+                        const locSel = document.getElementById('srp-location'); if (locSel.value) parts.push('위치: ' + locSel.options[locSel.selectedIndex].text);
+                        const ex = document.getElementById('srp-expiry').value; if (ex) parts.push(`유통기한 ${ex}일 이내`);
+                        if (document.getElementById('srp-low').checked) parts.push('재고부족만');
+                        parts.push(`목표 보유 ${d.target_days}일`);
+                        return parts.join(' · ');
+                    }
+                    async function loadWmsStockReport() {
+                        const area = document.getElementById('srp-table-area');
+                        const seq = ++srpState.seq;
+                        area.innerHTML = `<div class="state-box"><div class="emoji">⏳</div><h3>재고 현황을 집계하는 중...</h3></div>`;
+                        const { ok, json } = await authedFetch('/api/admin/wms/stock-report?' + srpQuery());
+                        if (seq !== srpState.seq) return; // 더 최근 요청이 있으면 무시
+                        if (!ok || !json.success) { area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>${srpEsc(json.message || '재고 현황을 불러오지 못했습니다')}</h3></div>`; return; }
+                        srpState.data = json.data;
+                        const live = new Set(json.data.rows.map(r => r.id));
+                        [...srpState.selected].forEach(id => { if (!live.has(id)) srpState.selected.delete(id); });
+                        srpRenderOptions();
+                        srpRender();
+                    }
+                    function srpRenderOptions() {
+                        const d = srpState.data;
+                        const catBox = document.getElementById('srp-cats');
+                        if (!catBox.dataset.ready) {
+                            catBox.dataset.ready = '1';
+                            catBox.innerHTML = d.options.categories.map(c => `<button type="button" class="srp-chip" data-cat="${srpEsc(c.value)}">${srpEsc(c.label)}</button>`).join('');
+                            catBox.querySelectorAll('.srp-chip').forEach(b => b.addEventListener('click', () => {
+                                const c = b.dataset.cat;
+                                if (srpState.categories.has(c)) srpState.categories.delete(c); else srpState.categories.add(c);
+                                b.classList.toggle('on', srpState.categories.has(c));
+                                loadWmsStockReport();
+                            }));
+                        }
+                        const locSel = document.getElementById('srp-location');
+                        if (!locSel.dataset.ready) {
+                            locSel.dataset.ready = '1';
+                            d.options.warehouses.forEach(w => { const o = document.createElement('option'); o.value = w.code; o.textContent = `${w.name} (${w.code})`; locSel.insertBefore(o, locSel.querySelector('option[value="none"]')); });
+                        }
+                        // 라이브 회차는 기간마다 다르므로 매번 갱신(선택값은 유지)
+                        const chSel = document.getElementById('srp-channel');
+                        const cur = chSel.value;
+                        chSel.querySelectorAll('option[data-live]').forEach(o => o.remove());
+                        d.options.live_sessions.forEach(s => {
+                            const o = document.createElement('option');
+                            o.value = 'live:' + s.id; o.dataset.live = '1';
+                            o.textContent = `🔴 ${s.day ? s.day.slice(5).replace('-', '/') + ' ' : ''}${s.channel_name ? '[' + s.channel_name + '] ' : ''}${s.title}`;
+                            chSel.appendChild(o);
+                        });
+                        if ([...chSel.options].some(o => o.value === cur)) chSel.value = cur;
+                    }
+                    function srpRender() {
+                        const d = srpState.data;
+                        const area = document.getElementById('srp-table-area');
+                        const t = d.totals;
+                        const lowCnt = d.rows.filter(r => r.low_stock).length;
+                        const expCnt = d.rows.filter(r => r.expiry_d !== null && r.expiry_d <= 30).length;
+                        const reorderCnt = d.rows.filter(r => r.reorder_qty > 0).length;
+                        document.getElementById('srp-summary').innerHTML = `
+                            <div class="srp-kpi"><b>${srpNum(t.products)}</b><span>상품 수</span></div>
+                            <div class="srp-kpi"><b>${srpNum(t.stock)}</b><span>총 현수량</span></div>
+                            <div class="srp-kpi"><b>${srpNum(t.period_total)}</b><span>기간 출고 (온 ${srpNum(t.online)} · 라 ${srpNum(t.live)} · 오 ${srpNum(t.offline)})</span></div>
+                            <div class="srp-kpi"><b>${t.avg_daily}</b><span>일평균 출고 (${d.range.elapsed_days}일 기준)</span></div>
+                            <div class="srp-kpi"><b class="${lowCnt ? 'srp-low' : ''}">${srpNum(lowCnt)}</b><span>재고부족</span></div>
+                            <div class="srp-kpi"><b class="${expCnt ? 'srp-low' : ''}">${srpNum(expCnt)}</b><span>유통기한 30일 이내·만료</span></div>
+                            <div class="srp-kpi"><b>${srpNum(reorderCnt)}</b><span>발주 필요 상품</span></div>`;
+                        document.getElementById('srp-note').innerHTML = `ⓘ ${srpEsc(d.notes.outbound_source)}<br>ⓘ ${srpEsc(d.notes.low_stock_rule)} · ${srpEsc(d.notes.reorder_rule)} · 일자별 칸의 출고는 시트처럼 음수(−)로 표시합니다. 주황색 날짜 = 그 날 라이브 판매가 있었던 날(괄호 안 = 라이브 채널).`;
+                        if (!d.rows.length) {
+                            area.innerHTML = '<div class="state-box"><div class="emoji">🔍</div><h3>조건에 맞는 상품이 없습니다</h3></div>';
+                            srpUpdateSelCount();
+                            return;
+                        }
+                        const dayHead = d.day_columns.map(c => `<th class="${c.lives.length ? 'live' : ''}" title="${srpEsc(c.date + ' (' + c.weekday + ')' + (c.lives.length ? ' · 라이브: ' + c.lives.map(l => l.title).join(', ') : ''))}">${srpEsc(c.label)}</th>`).join('');
+                        const liveDays = new Set(d.day_columns.filter(c => c.lives.length).map(c => c.date));
+                        // 렌더 비용 제한: 한 번에 최대 1500행(넘으면 필터를 좁히도록 안내). CSV는 전체 행으로 출력한다.
+                        const MAX = 1500;
+                        const rows = d.rows.slice(0, MAX);
+                        const body = rows.map(r => {
+                            const cells = d.day_columns.map(c => {
+                                const q = r.daily[c.date] || 0;
+                                return `<td class="${q ? 'out' : 'zero'} ${liveDays.has(c.date) ? 'live' : ''}">${q ? '-' + srpNum(q) : ''}</td>`;
+                            }).join('');
+                            return `<tr data-id="${r.id}">
+                                <td class="c-sel"><input type="checkbox" class="srp-sel" data-id="${r.id}" ${srpState.selected.has(r.id) ? 'checked' : ''} aria-label="선택"></td>
+                                <td class="c-cat txt" title="${srpEsc(r.category_label)}">${srpEsc(r.category_label)}</td>
+                                <td class="c-name"><a data-open="${r.id}">${srpEsc(r.name)}</a>${r.status === 'discontinued' ? ' <span style="color:#999; font-size:0.85em;">(판매중지)</span>' : ''}<span class="code">${srpEsc(r.code || '')}${r.skus.length ? ' · ' + srpEsc(r.skus.slice(0, 2).join(', ')) : ''}</span></td>
+                                ${cells}
+                                <td class="${r.period_total ? 'out' : 'zero'}"><b>${r.period_total ? '-' + srpNum(r.period_total) : 0}</b></td>
+                                <td>${r.avg_daily}</td>
+                                <td class="stock">${srpNum(r.stock)}</td>
+                                <td class="txt">${srpPriceText(r)}</td>
+                                <td class="txt">${r.location_text ? srpEsc(r.location_text) : '<span style="color:#bbb;">미배정</span>'}</td>
+                                <td class="txt">${srpExpiryBadge(r)}</td>
+                                <td>${r.depletion_date ? `<span class="${r.low_stock ? 'srp-low' : ''}">${srpEsc(r.depletion_date.slice(5))} (${r.days_left}일)</span>` : '<span style="color:#bbb;">-</span>'}</td>
+                                <td>${r.reorder_qty ? `<b class="srp-low">${srpNum(r.reorder_qty)}</b>` : '0'}</td>
+                            </tr>`;
+                        }).join('');
+                        const totDays = d.day_columns.map(c => `<td class="${liveDays.has(c.date) ? 'live' : ''}">${t.daily[c.date] ? '-' + srpNum(t.daily[c.date]) : ''}</td>`).join('');
+                        area.innerHTML = `${d.rows.length > MAX ? `<p class="srp-note" style="color:#C62828;">상품이 ${srpNum(d.rows.length)}개라 화면에는 앞의 ${MAX}개만 표시합니다(엑셀 다운로드는 전체). 구분/검색으로 좁혀 보세요.</p>` : ''}
+                            <div class="srp-table-wrap"><table class="srp-table">
+                            <thead><tr>
+                                <th class="c-sel"><input type="checkbox" id="srp-sel-all" aria-label="전체 선택"></th>
+                                <th class="c-cat">구분</th><th class="c-name">상품명(코드)</th>
+                                ${dayHead}
+                                <th>기간 출고합계</th><th>일평균 출고</th><th class="stock">현수량</th><th>단가</th><th>위치</th><th>유통기한</th><th>소진예상일</th><th>권장발주량</th>
+                            </tr></thead>
+                            <tbody>${body}
+                                <tr class="tot"><td class="c-sel"></td><td class="c-cat txt">합계</td><td class="c-name">${srpNum(t.products)}개 상품</td>${totDays}
+                                <td>-${srpNum(t.period_total)}</td><td>${t.avg_daily}</td><td>${srpNum(t.stock)}</td><td></td><td></td><td></td><td></td><td>${srpNum(t.reorder_qty)}</td></tr>
+                            </tbody></table></div>`;
+                        area.querySelectorAll('a[data-open]').forEach(a => a.addEventListener('click', () => openWmsStockDetail(a.dataset.open)));
+                        area.querySelectorAll('.srp-sel').forEach(cb => cb.addEventListener('change', () => {
+                            if (cb.checked) srpState.selected.add(cb.dataset.id); else srpState.selected.delete(cb.dataset.id);
+                            srpUpdateSelCount();
+                        }));
+                        document.getElementById('srp-sel-all').addEventListener('change', (e) => {
+                            area.querySelectorAll('.srp-sel').forEach(cb => { cb.checked = e.target.checked; if (cb.checked) srpState.selected.add(cb.dataset.id); else srpState.selected.delete(cb.dataset.id); });
+                            srpUpdateSelCount();
+                        });
+                        srpUpdateSelCount();
+                    }
+                    function srpUpdateSelCount() {
+                        const n = srpState.selected.size;
+                        document.getElementById('srp-selcount').textContent = n ? `${n}개 선택됨 (발주서에 선택 상품만 들어갑니다)` : '';
+                    }
+                    function srpDownloadCsv(filename, header, rows) {
+                        const esc = (v) => { const s = v === null || v === undefined ? '' : String(v); return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+                        const csv = '﻿' + [header, ...rows].map(r => r.map(esc).join(',')).join('\r\n');
+                        const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+                        const a = document.createElement('a');
+                        a.href = URL.createObjectURL(blob); a.download = filename;
+                        document.body.appendChild(a); a.click(); a.remove();
+                        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+                    }
+                    function srpReportMatrix() {
+                        const d = srpState.data;
+                        const header = ['구분', '상품명', '상품코드', ...d.day_columns.map(c => c.label), '기간 출고합계', '일평균 출고', '현수량', '단가', '위치', '유통기한', '유통기한 D-day', '소진예상일', '권장발주량'];
+                        const rows = d.rows.map(r => [r.category_label, r.name, r.code || '', ...d.day_columns.map(c => r.daily[c.date] ? -r.daily[c.date] : ''), r.period_total ? -r.period_total : 0, r.avg_daily, r.stock, srpPriceTextPlain(r), r.location_text || '미배정', r.expiry_date || '', r.expiry_d === null ? '' : r.expiry_d, r.depletion_date || '', r.reorder_qty]);
+                        rows.push(['합계', `${d.totals.products}개 상품`, '', ...d.day_columns.map(c => d.totals.daily[c.date] ? -d.totals.daily[c.date] : ''), -d.totals.period_total, d.totals.avg_daily, d.totals.stock, '', '', '', '', '', d.totals.reorder_qty]);
+                        return { header, rows };
+                    }
+                    function srpOpenPrint(title, subtitle, header, rows, extraCss) {
+                        const w = window.open('', '_blank');
+                        if (!w) { alert('팝업이 차단되었습니다. 브라우저에서 팝업을 허용해 주세요.'); return; }
+                        const esc = (s) => String(s === null || s === undefined ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+                        w.document.write(`<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><title>${esc(title)}</title>
+                            <style>@page { size: A4 landscape; margin: 10mm; } body { font-family: 'Malgun Gothic','Noto Sans KR',sans-serif; color: #222; margin: 0; padding: 12px; }
+                            h1 { font-size: 15pt; margin: 0 0 4px; } .sub { font-size: 8.5pt; color: #555; margin-bottom: 8px; }
+                            table { border-collapse: collapse; width: 100%; font-size: 7.5pt; } th, td { border: 1px solid #999; padding: 2px 4px; text-align: right; white-space: nowrap; }
+                            th { background: #eee; text-align: center; } td.l { text-align: left; white-space: normal; } tr.tot td { background: #FFF8E1; font-weight: bold; }
+                            thead { display: table-header-group; } tr { page-break-inside: avoid; } .toolbar { margin-bottom: 8px; } @media print { .toolbar { display: none; } } ${extraCss || ''}</style></head><body>
+                            <div class="toolbar"><button onclick="window.print()">🖨️ 인쇄</button></div>
+                            <h1>${esc(title)}</h1><div class="sub">${esc(subtitle)}</div>
+                            <table><thead><tr>${header.map(h => `<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>
+                            ${rows.map((r, i) => `<tr class="${r.__tot ? 'tot' : ''}">${r.map((v, j) => `<td class="${(r.__left || []).includes(j) ? 'l' : ''}">${esc(v)}</td>`).join('')}</tr>`).join('')}
+                            </tbody></table></body></html>`);
+                        w.document.close();
+                        setTimeout(() => { try { w.focus(); w.print(); } catch (e) {} }, 400);
+                    }
+                    function srpPrintReport() {
+                        if (!srpState.data) return;
+                        const { header, rows } = srpReportMatrix();
+                        rows.forEach(r => { r.__left = [0, 1, 2, header.length - 6, header.length - 5]; });
+                        rows[rows.length - 1].__tot = true;
+                        srpOpenPrint('재고 현황표', `${srpFilterSummary()} · 출력 ${new Date().toLocaleString('ko-KR')}`, header, rows);
+                    }
+                    function srpPoRows() {
+                        const d = srpState.data; if (!d) return [];
+                        const picked = srpState.selected.size ? d.rows.filter(r => srpState.selected.has(r.id)) : d.rows.filter(r => r.reorder_qty > 0);
+                        return picked;
+                    }
+                    function srpOpenPo() {
+                        const items = srpPoRows();
+                        const area = document.getElementById('srp-po-area');
+                        if (!items.length) { area.innerHTML = '<div class="state-box"><div class="emoji">✅</div><h3>발주가 필요한 상품이 없습니다</h3><p style="font-size:0.85em; color:var(--text-gray);">표에서 상품을 체크하면 원하는 상품으로 발주서를 만들 수 있습니다.</p></div>'; }
+                        else {
+                            area.innerHTML = `<table class="srp-mini"><thead><tr><th>상품</th><th>코드</th><th>공급처</th><th class="num">현수량</th><th class="num">일평균</th><th class="num">권장</th><th class="num">발주수량</th></tr></thead><tbody>
+                                ${items.map(r => `<tr><td>${srpEsc(r.name)}</td><td>${srpEsc(r.code || '-')}</td><td>${srpEsc(r.supplier_name || '-')}</td><td class="num">${srpNum(r.stock)}</td><td class="num">${r.avg_daily}</td><td class="num">${srpNum(r.reorder_qty)}</td>
+                                <td class="num"><input type="number" min="0" class="small-input srp-po-qty" data-id="${r.id}" value="${r.reorder_qty}" style="width:80px; text-align:right;"></td></tr>`).join('')}
+                            </tbody></table>`;
+                        }
+                        document.getElementById('srp-po-modal').classList.add('open');
+                    }
+                    function srpPoMatrix() {
+                        const items = srpPoRows();
+                        const qtyOf = {}; document.querySelectorAll('.srp-po-qty').forEach(i => { qtyOf[i.dataset.id] = Math.max(0, parseInt(i.value, 10) || 0); });
+                        const header = ['No', '상품명', '상품코드', '공급처', '현수량', '일평균 출고', '권장발주량', '발주수량', '단가', '위치'];
+                        const rows = items.filter(r => qtyOf[r.id] > 0).map((r, i) => [i + 1, r.name, r.code || '', r.supplier_name || '', r.stock, r.avg_daily, r.reorder_qty, qtyOf[r.id], r.unit_price, r.location_text || '']);
+                        return { header, rows, total: rows.reduce((s, r) => s + r[7], 0) };
+                    }
+
+                    async function openWmsStockDetail(productId) {
+                        const drawer = document.getElementById('srp-drawer');
+                        const body = document.getElementById('srp-drawer-body');
+                        body.innerHTML = '<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>';
+                        drawer.classList.add('open'); document.getElementById('srp-backdrop').classList.add('open');
+                        const p = new URLSearchParams();
+                        ['from', 'to', 'target'].forEach(k => { const v = document.getElementById('srp-' + k).value; if (v) p.set(k === 'target' ? 'target_days' : k, v); });
+                        const { ok, json } = await authedFetch(`/api/admin/wms/stock-report/${productId}?` + p.toString());
+                        if (!ok || !json.success) { body.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>${srpEsc(json.message || '불러오기 실패')}</h3></div>`; return; }
+                        const d = json.data, pr = d.product;
+                        const maxDay = Math.max(1, ...d.daily.map(x => x.total));
+                        const bars = d.daily.map(x => {
+                            const h = (v) => Math.round((v / maxDay) * 100);
+                            return `<div class="srp-bar" title="${x.date}: 온라인 ${x.online} · 라이브 ${x.live} · 오프라인 ${x.offline}">${x.total ? `<em>${x.total}</em>` : ''}<i class="on" style="height:${h(x.online)}px"></i><i class="li" style="height:${h(x.live)}px"></i><i class="of" style="height:${h(x.offline)}px"></i></div>`;
+                        }).join('');
+                        const sp = d.channel_split, tot = Math.max(1, d.period_total);
+                        const pct = (v) => Math.round((v / tot) * 100);
+                        const srcLabel = (s) => ({ pda_scan: 'PDA 스캔', admin_manual: '관리자 수동', order: '주문 차감', order_restore: '주문 취소/반품 복구', auto_cancel_pending: '미결제 자동취소 복구', live_commerce: '라이브 판매', offline_pos: '오프라인 판매' }[s] || s || '-');
+                        body.innerHTML = `
+                            <div style="font-size:0.78em; color:var(--text-gray);">${srpEsc(pr.category_label || '-')} · ${srpEsc(pr.code || '코드 없음')}${pr.status === 'discontinued' ? ' · 판매중지' : ''}</div>
+                            <h3>${srpEsc(pr.name)}</h3>
+                            ${pr.image ? `<img src="${srpEsc(pr.image)}" alt="" style="width:84px; height:84px; object-fit:cover; border-radius:8px; margin-top:6px;">` : ''}
+                            <div class="srp-dgrid">
+                                <div style="background:#37474F; color:#fff;"><span style="color:#cfd8dc;">현수량</span><b>${srpNum(pr.stock)}개</b></div>
+                                <div><span>단가</span><b>${srpNum(pr.discount_price !== null ? pr.discount_price : pr.price)}원</b>${pr.discount_price !== null && pr.discount_price < pr.price ? `<s style="color:#999;">${srpNum(pr.price)}</s>` : ''}</div>
+                                <div><span>위치</span><b>${d.locations.length ? d.locations.map(l => srpEsc(l.text) + (l.is_primary ? ' ★' : '')).join('<br>') : '미배정'}</b></div>
+                                <div><span>유통기한</span><b>${srpExpiryBadge(pr)}</b></div>
+                                <div><span>기간 출고 / 일평균</span><b>${srpNum(d.period_total)} / ${d.avg_daily}</b></div>
+                                <div><span>소진예상 · 권장발주(${d.target_days}일)</span><b>${d.depletion_date ? srpEsc(d.depletion_date) + ` (${d.days_left}일)` : '-'} · ${srpNum(d.reorder_qty)}</b></div>
+                                <div><span>공급처</span><b>${srpEsc(pr.supplier_name || '-')}</b></div>
+                                <div><span>원가</span><b>${pr.cost_price !== null ? srpNum(pr.cost_price) + '원' : '-'}</b></div>
+                            </div>
+                            ${d.variants.length ? `<div class="srp-sec">옵션</div><table class="srp-mini"><thead><tr><th>옵션</th><th>SKU/바코드</th><th class="num">가격</th><th class="num">재고</th></tr></thead><tbody>${d.variants.map(v => `<tr><td>${srpEsc(v.name)}${v.is_active === false ? ' (중지)' : ''}</td><td>${srpEsc(v.sku || v.barcode || '-')}</td><td class="num">${srpNum(v.price)}</td><td class="num">${srpNum(v.stock)}</td></tr>`).join('')}</tbody></table>` : ''}
+                            <div class="srp-sec">일자별 판매수량 (${srpEsc(d.range.from)} ~ ${srpEsc(d.range.to)})</div>
+                            ${d.period_total ? `<div class="srp-bars">${bars}</div>` : '<p style="font-size:0.8em; color:var(--text-gray);">이 기간에는 판매(출고) 기록이 없습니다.</p>'}
+                            <div class="srp-legend"><span><i style="background:#42A5F5"></i>온라인</span><span><i style="background:#FF7043"></i>라이브</span><span><i style="background:#66BB6A"></i>오프라인</span></div>
+                            <div class="srp-sec">채널별</div>
+                            <table class="srp-mini"><tbody>
+                                <tr><td>온라인(쇼핑몰)</td><td class="num">${srpNum(sp.online)}개</td><td class="num">${pct(sp.online)}%</td></tr>
+                                <tr><td>라이브</td><td class="num">${srpNum(sp.live)}개</td><td class="num">${pct(sp.live)}%</td></tr>
+                                <tr><td>오프라인</td><td class="num">${srpNum(sp.offline)}개</td><td class="num">${pct(sp.offline)}%</td></tr>
+                                ${d.live_sessions.map(s => `<tr><td style="padding-left:18px; color:#E65100;">↳ ${srpEsc((s.day ? s.day.slice(5) + ' ' : '') + (s.channel_name ? '[' + s.channel_name + '] ' : '') + s.title)}</td><td class="num">${srpNum(s.qty)}개</td><td></td></tr>`).join('')}
+                            </tbody></table>
+                            <div class="srp-sec">Lot (재고원장 기준 잔량)</div>
+                            ${d.lots.length ? `<table class="srp-mini"><thead><tr><th>Lot</th><th>최초 입고</th><th class="num">잔량</th></tr></thead><tbody>${d.lots.map(l => `<tr><td>${srpEsc(l.lot_number)}</td><td>${srpEsc(String(l.first_in).slice(0, 10))}</td><td class="num">${srpNum(l.qty)}</td></tr>`).join('')}</tbody></table>` : '<p style="font-size:0.8em; color:var(--text-gray);">Lot 번호로 입고된 이력이 없습니다. (바코드 스캔 터미널에서 Lot 번호와 함께 입고하면 여기 표시됩니다)</p>'}
+                            <div class="srp-sec">최근 재고 원장 (최대 30건)</div>
+                            ${d.ledger.length ? `<table class="srp-mini"><thead><tr><th>일시</th><th>사유</th><th class="num">증감</th></tr></thead><tbody>${d.ledger.map(l => `<tr><td>${srpEsc(new Date(l.created_at).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }))}</td><td>${srpEsc(l.reason || '-')}<br><span style="color:#999; font-size:0.9em;">${srpEsc(srcLabel(l.scan_source))}${l.lot_number ? ' · Lot ' + srpEsc(l.lot_number) : ''}${l.location_text ? ' · ' + srpEsc(l.location_text) : ''}</span></td><td class="num" style="color:${l.delta > 0 ? '#2E7D32' : '#C62828'}; font-weight:700;">${l.delta > 0 ? '+' : ''}${srpNum(l.delta)}</td></tr>`).join('')}</tbody></table>` : '<p style="font-size:0.8em; color:var(--text-gray);">원장 이력이 없습니다.</p>'}`;
+                    }
+                    function closeWmsStockDetail() {
+                        document.getElementById('srp-drawer').classList.remove('open');
+                        document.getElementById('srp-backdrop').classList.remove('open');
+                    }
+
+                    (function initWmsStockReport() {
+                        // 상위 요소의 transform/overflow 영향을 받지 않도록 서랍·모달은 body 바로 아래로 옮긴다(화면 오른쪽 끝에 정확히 붙게)
+                        ['srp-backdrop', 'srp-drawer', 'srp-po-modal'].forEach(id => { const el = document.getElementById(id); if (el) document.body.appendChild(el); });
+                        srpApplyPreset('14');
+                        let qTimer = null;
+                        document.getElementById('srp-q').addEventListener('input', () => { clearTimeout(qTimer); qTimer = setTimeout(loadWmsStockReport, 400); });
+                        document.getElementById('srp-q').addEventListener('keydown', (e) => {
+                            if (e.key !== 'Enter') return;
+                            clearTimeout(qTimer);
+                            // 바코드 스캐너/코드 검색: 정확히 1건이면 바로 상세를 연다
+                            loadWmsStockReport().then(() => { const d = srpState.data; if (d && d.rows.length === 1) openWmsStockDetail(d.rows[0].id); });
+                        });
+                        document.querySelectorAll('#srp-presets .srp-chip').forEach(c => c.addEventListener('click', () => { srpApplyPreset(c.dataset.preset); loadWmsStockReport(); }));
+                        ['srp-from', 'srp-to'].forEach(id => document.getElementById(id).addEventListener('change', () => {
+                            document.querySelectorAll('#srp-presets .srp-chip').forEach(c => c.classList.remove('on'));
+                            loadWmsStockReport();
+                        }));
+                        ['srp-channel', 'srp-location', 'srp-expiry', 'srp-sort', 'srp-low', 'srp-disc', 'srp-target'].forEach(id => document.getElementById(id).addEventListener('change', loadWmsStockReport));
+                        document.getElementById('srp-apply').addEventListener('click', loadWmsStockReport);
+                        document.getElementById('srp-reset').addEventListener('click', () => {
+                            document.getElementById('srp-q').value = '';
+                            ['srp-channel', 'srp-location', 'srp-expiry'].forEach(id => { document.getElementById(id).value = ''; });
+                            document.getElementById('srp-sort').value = 'stock';
+                            document.getElementById('srp-target').value = '30';
+                            document.getElementById('srp-low').checked = false;
+                            document.getElementById('srp-disc').checked = false;
+                            srpState.categories.clear(); srpState.selected.clear();
+                            document.querySelectorAll('#srp-cats .srp-chip').forEach(c => c.classList.remove('on'));
+                            srpApplyPreset('14');
+                            loadWmsStockReport();
+                        });
+                        document.getElementById('srp-csv').addEventListener('click', () => {
+                            if (!srpState.data) return;
+                            const { header, rows } = srpReportMatrix();
+                            srpDownloadCsv(`재고현황_${srpState.data.range.from}_${srpState.data.range.to}.csv`, header, rows);
+                        });
+                        document.getElementById('srp-print').addEventListener('click', srpPrintReport);
+                        document.getElementById('srp-po').addEventListener('click', srpOpenPo);
+                        document.getElementById('srp-po-close').addEventListener('click', () => document.getElementById('srp-po-modal').classList.remove('open'));
+                        document.getElementById('srp-po-csv').addEventListener('click', () => {
+                            const { header, rows, total } = srpPoMatrix();
+                            if (!rows.length) { alert('발주수량이 1 이상인 상품이 없습니다'); return; }
+                            rows.push(['', '합계', '', '', '', '', '', total, '', '']);
+                            srpDownloadCsv(`발주서_${srpKstToday()}.csv`, header, rows);
+                        });
+                        document.getElementById('srp-po-print').addEventListener('click', () => {
+                            const { header, rows, total } = srpPoMatrix();
+                            if (!rows.length) { alert('발주수량이 1 이상인 상품이 없습니다'); return; }
+                            rows.forEach(r => { r.__left = [1, 2, 3, 9]; });
+                            const totRow = ['', '합계', '', '', '', '', '', total, '', '']; totRow.__tot = true; rows.push(totRow);
+                            srpOpenPrint('발주서', `작성일 ${srpKstToday()} · 기준: ${srpFilterSummary()} · 품목 ${rows.length - 1}개`, header, rows, 'table { font-size: 9pt; } td, th { padding: 4px 6px; }');
+                        });
+                        document.getElementById('srp-drawer-close').addEventListener('click', closeWmsStockDetail);
+                        document.getElementById('srp-backdrop').addEventListener('click', closeWmsStockDetail);
+                        document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && document.getElementById('srp-drawer').classList.contains('open')) closeWmsStockDetail(); });
+                    })();
+
                     // ---- WMS 서브탭 전환 (메인 탭과 클래스 분리하여 충돌 방지) ----
                     document.querySelectorAll('.wms-subtab-btn').forEach(btn => {
                         btn.addEventListener('click', () => {
@@ -6581,6 +7106,8 @@
                             document.querySelectorAll('.wms-subtab-panel').forEach(p => p.classList.remove('active'));
                             btn.classList.add('active');
                             document.getElementById('wms-tab-' + btn.dataset.wmsTab).classList.add('active');
+                            if (btn.dataset.wmsTab === 'report') loadWmsStockReport();
+                            if (btn.dataset.wmsTab === 'ledger' && !document.getElementById('wms-ledger-table-area').dataset.loaded) { document.getElementById('wms-ledger-table-area').dataset.loaded = '1'; loadWmsLedger(1); }
                             if (btn.dataset.wmsTab === 'warehouses') loadWmsWarehouses();
                             if (btn.dataset.wmsTab === 'locations') loadWmsLocations();
                             if (btn.dataset.wmsTab === 'twin') loadWmsTwin();
@@ -6616,9 +7143,10 @@
                     document.getElementById('wms-search-q')?.addEventListener('keydown', (e) => { if (e.key === 'Enter') runWmsSearch(); });
 
                     document.querySelector('[data-tab="wms"]')?.addEventListener('click', () => {
-                        if (!document.getElementById('wms-ledger-table-area').dataset.loaded) {
-                            document.getElementById('wms-ledger-table-area').dataset.loaded = '1';
-                            loadWmsLedger(1);
+                        if (!document.getElementById('srp-table-area').dataset.loaded) {
+                            document.getElementById('srp-table-area').dataset.loaded = '1';
+                            // 기본 서브탭 = 📊 재고 현황판. 재고원장은 서브탭을 처음 열 때 불러온다.
+                            if (document.querySelector('.wms-subtab-btn.active')?.dataset.wmsTab === 'report') loadWmsStockReport();
                             loadWmsLocationOptions();
                             renderScanHistory();
                         }
