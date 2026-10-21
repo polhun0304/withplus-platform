@@ -6946,6 +6946,13 @@ const PRODUCT_HISTORY_TABLES = [
   ['live_flash_sales_live', 'product_id', '라이브 타임특가'],
   ['live_auctions_live', 'product_id', '라이브 경매'],
   ['live_sessions_live', 'pinned_product_id', '라이브 고정상품'],
+  // WITH+ 라이브(WITH+ 전용 테이블) - 상품은 두 사이트 공유라 양쪽 라이브 이력을 모두 확인한다
+  ['channel_products_with', 'product_id', 'WITH+ 라이브 판매 등록'],
+  ['live_session_inventory_with', 'product_id', 'WITH+ 라이브 재고'],
+  ['live_session_reservations_with', 'product_id', 'WITH+ 라이브 예약'],
+  ['live_flash_sales_with', 'product_id', 'WITH+ 라이브 타임특가'],
+  ['live_auctions_with', 'product_id', 'WITH+ 라이브 경매'],
+  ['live_sessions_with', 'pinned_product_id', 'WITH+ 라이브 고정상품'],
   ['agv_tasks_with', 'product_id', '물류 작업']
 ];
 
@@ -9745,9 +9752,9 @@ app.get('/api/admin/inventory/find-product-location', authenticate, requireRole(
 // 데이터 출처(새 테이블 없음, 전부 읽기 전용 집계):
 //  - 상품/구분/현수량/단가/유통기한/코드: products_with (+ product_variants_with: 옵션·SKU·바코드)
 //  - 일자별 판매(출고)수량: orders_with.items(결제완료~배송완료 상태만, 취소/미결제 제외)
-//      → live_session_id가 있으면 "라이브", 없으면 "온라인"
+//      → 라이브 세션 출처(WITH+ live_session_id_with, 공유 재고라 LIVE+ live_session_id도)가 있으면 "라이브", 없으면 "온라인"
 //    + channel_sales_with(라이브/오프라인 수기 판매, 취소 제외)
-//  - 라이브 회차명: live_sessions_live(+ channels_live 채널명)
+//  - 라이브 회차명: 이 사이트 라이브 테이블 liveTable('live_sessions')(+ liveTable('channels') 채널명) — WITH+는 live_sessions_with/channels_with
 //  - 위치: product_location_assignments_with → warehouse_locations_with → warehouses_with
 //  - Lot·원장: stock_adjustments_with (상세 조회에서만, 상품 1개 단위)
 // 부하 관리: 기간은 최대 92일로 제한하고 주문/채널판매는 created_at(인덱스) 범위로만 조회한다.
@@ -9810,7 +9817,7 @@ async function wmsFetchAll(buildQuery, maxRows = 6000) {
 async function wmsCollectSales(range, productIdSet) {
   const events = [];
   const [orders, chSales] = await Promise.all([wmsFetchAll(() => supabase.from('orders_with')
-    .select('id, created_at, status, items, live_session_id')
+    .select(`id, created_at, status, items, live_session_id, ${LIVE_ORDER_COL.session}`)
     .in('status', WMS_REPORT_SALE_STATUSES)
     .gte('created_at', range.fromIso).lte('created_at', range.toIso)
     .order('created_at', { ascending: true }), 20000),
@@ -9825,7 +9832,7 @@ async function wmsCollectSales(range, productIdSet) {
       if (productIdSet && !productIdSet.has(it.product_id)) return;
       const qty = parseInt(it.quantity, 10) || 0;
       if (qty <= 0) return;
-      events.push({ product_id: it.product_id, variant_id: it.variant_id || null, day, qty, channel: o.live_session_id ? 'live' : 'online', live_id: o.live_session_id || null, price: Number(it.price) || 0 });
+      events.push({ product_id: it.product_id, variant_id: it.variant_id || null, day, qty, channel: (o[LIVE_ORDER_COL.session] || o.live_session_id) ? 'live' : 'online', live_id: o[LIVE_ORDER_COL.session] || o.live_session_id || null, price: Number(it.price) || 0 });
     });
   });
   chSales.forEach(s => {
@@ -9841,11 +9848,11 @@ async function wmsLiveSessionInfo(ids) {
   const uuidIds = ids.filter(id => id && /^[0-9a-f-]{36}$/i.test(id));
   const map = {};
   if (uuidIds.length) {
-    const { data: sessions } = await supabase.from('live_sessions_live').select('id, title, channel_id, started_at, scheduled_at, created_at').in('id', uuidIds);
+    const { data: sessions } = await supabase.from(liveTable('live_sessions')).select('id, title, channel_id, started_at, scheduled_at, created_at').in('id', uuidIds);
     const chIds = [...new Set((sessions || []).map(s => s.channel_id).filter(Boolean))];
     const chMap = {};
     if (chIds.length) {
-      const { data: chs } = await supabase.from('channels_live').select('id, name').in('id', chIds);
+      const { data: chs } = await supabase.from(liveTable('channels')).select('id, name').in('id', chIds);
       (chs || []).forEach(c => { chMap[c.id] = c.name; });
     }
     (sessions || []).forEach(s => {
@@ -11043,7 +11050,10 @@ app.get('/api/orders', authenticate, async (req, res) => {
 // 주문 생성
 app.post('/api/orders', authenticate, async (req, res) => {
   try {
-    const { items, community_id, shipping_address, payment_method, coupon_code, use_mileage } = req.body;
+    const { items, community_id, shipping_address, payment_method, coupon_code, use_mileage, channel_id, live_session_id, live_attribution, reservation_ids } = req.body;
+    // 📺 live_attribution: 라이브 딥링크/QR로 유입된 경우의 출처 정보(유입플랫폼/캠페인/추천인/쿠폰/공유코드) - 전부 선택값.
+    // 기존 coupon_code(일반 쿠폰)와는 별개이며, 라이브 채널 출처 주문에서만 의미를 가진다.
+    const liveAttribution = (live_attribution && typeof live_attribution === 'object') ? live_attribution : {};
 
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
@@ -11073,6 +11083,50 @@ app.post('/api/orders', authenticate, async (req, res) => {
       }
     }
 
+    // 📺 라이브 채널 출처 - 커뮤니티와 달리 가입 여부와 무관하게(비가입 시청자도 구매 가능) 채널이 이 사이트의
+    // 라이브 채널(liveTable('channels'))로 실제 존재하고 활성 상태인지만 확인한다. 팬 활동점수 적립 여부는 주문 성공 후
+    // recordChannelOrderAttribution/awardFanActivity에서 별도로 처리된다.
+    // isLiveChannelOrder가 참이면 아래에서 단가를 라이브 채널가(채널가격정책 channel='live')로 다시 계산한다.
+    const ORDER_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    let isLiveChannelOrder = false;
+    if (channel_id) {
+      if (!ORDER_UUID_RE.test(String(channel_id))) {
+        return res.status(400).json({ error: 'Bad Request', message: '유효하지 않은 채널입니다', timestamp: new Date().toISOString() });
+      }
+      const { data: channelExists } = await supabase.from(liveTable('channels')).select('id').eq('id', channel_id).eq('status', 'active').maybeSingle();
+      if (!channelExists) {
+        return res.status(400).json({ error: 'Bad Request', message: '유효하지 않은 채널입니다', timestamp: new Date().toISOString() });
+      }
+      isLiveChannelOrder = true;
+    }
+    // 라이브 세션 출처 - 이 사이트의 세션이어야 하고, 채널을 함께 보냈다면 그 채널의 세션이어야 한다
+    if (live_session_id) {
+      if (!ORDER_UUID_RE.test(String(live_session_id))) {
+        return res.status(400).json({ error: 'Bad Request', message: '유효하지 않은 라이브 세션입니다', timestamp: new Date().toISOString() });
+      }
+      const { data: sessionRow } = await supabase.from(liveTable('live_sessions')).select('id, channel_id').eq('id', live_session_id).maybeSingle();
+      if (!sessionRow || (channel_id && sessionRow.channel_id !== channel_id)) {
+        return res.status(400).json({ error: 'Bad Request', message: '유효하지 않은 라이브 세션입니다', timestamp: new Date().toISOString() });
+      }
+    }
+
+    // 🎁 크리에이터 제휴 커미션 - live_attribution.referrer_code가 이 사이트의 활성 크리에이터 추천코드와 일치하면
+    // 주문에 크리에이터를 함께 기록해(LIVE_ORDER_COL.creator) 이후 기간별 정산 생성 시 집계 대상이 되게 한다.
+    // 코드가 없거나 등록되지 않은/비활성 코드면 그냥 무시(주문 자체는 막지 않음). 셀프 리퍼럴은 귀속하지 않는다.
+    let creatorId = null;
+    if (liveAttribution.referrer_code) {
+      const { data: refCode } = await supabase.from(liveTable('live_creator_referral_codes'))
+        .select(`creator_id, status, creators_with:${liveTable('live_creators')}(status, user_id)`)
+        .eq('code', String(liveAttribution.referrer_code)).eq('status', 'active').maybeSingle();
+      if (refCode && refCode.creators_with && refCode.creators_with.status === 'active') {
+        if (refCode.creators_with.user_id && refCode.creators_with.user_id === req.user.id) {
+          console.warn(`[creator-referral] self-referral blocked: user ${req.user.id} used own referral code`);
+        } else {
+          creatorId = refCode.creator_id;
+        }
+      }
+    }
+
     // 재고 검증 - 상품별로 옵션(사이즈/색상 등)이 있으면 반드시 옵션을 선택해야 하고, 그 옵션의 재고를 확인한다.
     // (여기서는 "충분히 있어 보이는지" 사전 확인만 하고, 실제 차감은 주문 생성 성공 뒤 원자적으로 처리한다 - 동시 주문 대비)
     // product_id가 UUID 형식이 아니면(예: 잘못된 클라이언트 요청) DB 조회 자체가 500 에러로 죽으므로,
@@ -11082,13 +11136,36 @@ app.post('/api/orders', authenticate, async (req, res) => {
     const productIds = requestedProductIds.filter(id => UUID_RE.test(id));
     const productMap = {};
     const variantsByProduct = {};
+    let liveChannelPriceByProductId = {};
+    const liveFlashSalePriceByProductId = {};
     if (productIds.length > 0) {
       const { data: orderProducts, error: prodErr } = await supabase
         .from('products_with')
-        .select('id, name, price, discount_price, quantity_price_options, category, stock, status')
+        .select('id, name, price, discount_price, quantity_price_options, category, stock, status, cost_price')
         .in('id', productIds);
       if (prodErr) throw prodErr;
       (orderProducts || []).forEach(p => { productMap[p.id] = p; });
+
+      // 📺 라이브 채널 주문이면 라이브 채널가(product_channel_prices_with 고정가 > 원가+채널가격정책)를 구한다.
+      // 적용 가능한 라이브 채널가가 없으면 null → 아래에서 일반 가격 규칙(computeChannelUnitPrice)을 그대로 쓴다.
+      // cost_price는 서버 내부 계산에만 쓰고 저장/응답 어디에도 넣지 않는다(verifiedItems에는 단가만).
+      if (isLiveChannelOrder) {
+        liveChannelPriceByProductId = await resolveLiveChannelPrices((orderProducts || []).map(p => ({
+          id: p.id, cost_price: p.cost_price, category: p.category, fallbackPrice: null
+        })));
+      }
+      // 📺 라이브 타임세일 가격은 결제 시점에 서버가 다시 검증한다 - live_session_id + product_id 조합으로 지금 유효한
+      // (취소되지 않았고 ends_at이 지나지 않은) 행만 인정한다. 타이머 만료/관리자 취소 뒤 주문엔 할인가가 절대 붙지 않는다.
+      if (live_session_id && productIds.length > 0) {
+        const { data: activeLiveFlashSales } = await supabase
+          .from(liveTable('live_flash_sales'))
+          .select('product_id, discount_price, ends_at, cancelled_at')
+          .eq('live_session_id', live_session_id)
+          .in('product_id', productIds)
+          .is('cancelled_at', null)
+          .gt('ends_at', new Date().toISOString());
+        (activeLiveFlashSales || []).forEach(fs => { liveFlashSalePriceByProductId[fs.product_id] = Number(fs.discount_price) || 0; });
+      }
 
       const { data: allVariants, error: varErr } = await supabase
         .from('product_variants_with')
@@ -11151,10 +11228,20 @@ app.post('/api/orders', authenticate, async (req, res) => {
       const useWholesale = isWholesaleBuyer && priceCtx.mode === 'wholesale';
       let unitPrice = computeChannelUnitPrice(product, priceCtx);
       let priceAdjustment = 0;
+      // 📺 라이브 가격: 1) 이 세션에서 진행 중인 라이브 타임세일가가 가장 우선, 2) 라이브 채널 주문이면 라이브 채널가
+      // (적용 가능한 채널가가 없으면 위 일반 가격 그대로). 라이브 가격이 붙은 줄에는 수량별 묶음가를 쓰지 않는다.
+      let usedLivePrice = null;
+      if (Object.prototype.hasOwnProperty.call(liveFlashSalePriceByProductId, item.product_id)) {
+        unitPrice = liveFlashSalePriceByProductId[item.product_id];
+        usedLivePrice = 'live_flash_sale';
+      } else if (isLiveChannelOrder && liveChannelPriceByProductId[item.product_id] !== null && liveChannelPriceByProductId[item.product_id] !== undefined) {
+        unitPrice = Number(liveChannelPriceByProductId[item.product_id]) || 0;
+        usedLivePrice = 'live';
+      }
       // ⚡ 진행중 한정수량 초특가가 더 싸면 초특가 가격 (초특가 적용 시 수량별 묶음가는 쓰지 않는다)
       const flashDeal = flashDealMap[item.product_id];
       let usedFlashDealId = null;
-      if (flashDeal && Number(flashDeal.deal_price) < unitPrice) { unitPrice = Number(flashDeal.deal_price); usedFlashDealId = flashDeal.id; }
+      if (flashDeal && Number(flashDeal.deal_price) < unitPrice) { unitPrice = Number(flashDeal.deal_price); usedFlashDealId = flashDeal.id; usedLivePrice = null; }
       let variantLabel = '';
 
       if (variants.length > 0) {
@@ -11176,7 +11263,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
 
       // 구매수량별 가격 옵션: 수량이 등록된 묶음 수량과 정확히 같으면 묶음 총액, 아니면 단가 x 수량 (도매가에는 미적용)
       // (공동체가는 묶음 총액도 같은 비율로 가감 - priceCtx)
-      const line = computeProductLineTotal(product, qty, { unitPrice, priceAdjustment, allowTier: !useWholesale && !usedFlashDealId, priceCtx });
+      const line = computeProductLineTotal(product, qty, { unitPrice, priceAdjustment, allowTier: !useWholesale && !usedFlashDealId && !usedLivePrice, priceCtx });
       const verifiedItem = {
         product_id: item.product_id,
         variant_id: item.variant_id || null,
@@ -11190,7 +11277,10 @@ app.post('/api/orders', authenticate, async (req, res) => {
         verifiedItem.quantity_tier = line.tier;
       }
       // 어떤 채널 가격으로 계산됐는지 기록 (정산·CS 확인용) - 기본가 주문은 기존 형식 그대로
-      if (priceCtx.mode !== 'default' && !usedFlashDealId) {
+      if (usedLivePrice) {
+        verifiedItem.price_channel = usedLivePrice;
+        verifiedItem.base_unit_price = effectivePriceOf(product);
+      } else if (priceCtx.mode !== 'default' && !usedFlashDealId) {
         verifiedItem.price_channel = priceCtx.mode;
         verifiedItem.base_unit_price = effectivePriceOf(product);
         if (priceCtx.mode === 'community') verifiedItem.price_adjust_bp = priceCtx.bp;
@@ -11274,6 +11364,14 @@ app.post('/api/orders', authenticate, async (req, res) => {
         order_number: orderNumber,
         user_id: req.user.id,
         community_id: community_id || null,
+        // 📺 라이브 출처(사이트별 컬럼 - LIVE_ORDER_COL 참고) + 딥링크 유입 출처 기록
+        [LIVE_ORDER_COL.channel]: channel_id || null,
+        [LIVE_ORDER_COL.session]: live_session_id || null,
+        [LIVE_ORDER_COL.creator]: creatorId,
+        attribution_source_platform: liveAttribution.source_platform ? String(liveAttribution.source_platform).slice(0, 100) : null,
+        attribution_campaign: liveAttribution.campaign ? String(liveAttribution.campaign).slice(0, 200) : null,
+        attribution_referrer_code: liveAttribution.referrer_code ? String(liveAttribution.referrer_code).slice(0, 100) : null,
+        attribution_coupon_code: liveAttribution.coupon_code ? String(liveAttribution.coupon_code).slice(0, 100) : null,
         items: verifiedItems,
         total_price: totalPrice,
         final_price: finalPrice,
@@ -11314,12 +11412,70 @@ app.post('/api/orders', authenticate, async (req, res) => {
     }
     if (Object.keys(flashClaims).length) invalidateFlashDealCache();
 
+    // 📺 라이브 세션 한정재고 강제 - live_session_id가 함께 전달된 주문인데 그 상품에 유효한 reservation_id가 없으면
+    // (예: 예약 없이 바로 이 API를 직접 호출) 세션 재고 풀에서도 직접 원자적으로 "예약"을 시도해, 방송에서 "OO개 한정"으로
+    // 안내한 세션별 한정수량을 초과 판매하지 않게 한다. reserved→sold 확정은 실재고 차감·쿠폰 처리까지 전부 성공한 뒤에 한다
+    // (그래야 도중에 실패하면 이 예약만 release하면 된다).
+    const sessionInventoryReserves = []; // { inventoryId, qty }
+    const releaseSessionInventoryReserves = async () => {
+      for (const r of sessionInventoryReserves) {
+        try { await supabase.rpc(liveRpc('release_live_session_inventory'), { p_inventory_id: r.inventoryId, p_qty: r.qty }); } catch (e) { /* 최선 노력 */ }
+      }
+    };
+    if (live_session_id) {
+      // reservation_ids로 이미 선점된 수량은 상품별로 합산해 커버리지로 인정한다 (본인 소유의, 이 세션의,
+      // 아직 유효한(cart/checkout, 미만료) 예약만 - confirmLiveSessionReservations와 동일한 검증 기준)
+      const coveredQtyByProduct = {};
+      const validReservationIds = Array.isArray(reservation_ids) ? reservation_ids.filter(id => ORDER_UUID_RE.test(String(id))) : [];
+      if (validReservationIds.length > 0) {
+        const { data: coveringReservations } = await supabase.from(liveTable('live_session_reservations'))
+          .select('product_id, quantity, status, expires_at, user_id, live_session_id')
+          .in('id', validReservationIds);
+        for (const r of (coveringReservations || [])) {
+          if (r.user_id !== req.user.id) continue;
+          if (r.live_session_id !== live_session_id) continue;
+          if (!['cart', 'checkout'].includes(r.status)) continue;
+          if (r.expires_at && new Date(r.expires_at) < new Date()) continue;
+          coveredQtyByProduct[r.product_id] = (coveredQtyByProduct[r.product_id] || 0) + (Number(r.quantity) || 0);
+        }
+      }
+      // 상품별 요청 수량 합산 (세션 재고 풀은 옵션 구분 없이 상품 단위로만 운영된다)
+      const requestedQtyByProduct = {};
+      for (const it of verifiedItems) {
+        if (!it.product_id) continue;
+        requestedQtyByProduct[it.product_id] = (requestedQtyByProduct[it.product_id] || 0) + it.quantity;
+      }
+      let sessionReserveError = null;
+      for (const [productId, requestedQty] of Object.entries(requestedQtyByProduct)) {
+        const uncoveredQty = requestedQty - (coveredQtyByProduct[productId] || 0);
+        if (uncoveredQty <= 0) continue;
+        const { data: inv } = await supabase.from(liveTable('live_session_inventory'))
+          .select('id').eq('live_session_id', live_session_id).eq('product_id', productId).maybeSingle();
+        if (!inv) continue; // 이 상품은 세션 한정재고 풀 대상이 아님 - 실재고만으로 정상 판매
+        const { data: reservedInv } = await supabase.rpc(liveRpc('reserve_live_session_inventory'), { p_inventory_id: inv.id, p_qty: uncoveredQty });
+        if (!reservedInv || !reservedInv.id) {
+          const productName = (verifiedItems.find(i => i.product_id === productId) || {}).name || productId;
+          sessionReserveError = `이 방송에 배정된 한정 재고가 부족합니다: ${productName}`;
+          break;
+        }
+        sessionInventoryReserves.push({ inventoryId: inv.id, qty: uncoveredQty });
+      }
+      if (sessionReserveError) {
+        await releaseSessionInventoryReserves();
+        await releaseFlashDealClaims(data.id);
+        await supabase.from('orders_with').delete().eq('id', data.id);
+        return res.status(409).json({ error: 'Conflict', message: sessionReserveError, timestamp: new Date().toISOString() });
+      }
+    }
+
     // 재고 원자적 차감 -사전 검증을 통과했더라도 그 사이 다른 주문이 먼저 재고를 가져갔을 수 있으므로
     // DB 함수(adjust_stock_with)로 다시 한번 원자적으로 확인하며 차감한다. 도중에 하나라도 부족하면
     // 이미 차감된 항목들은 원복(보상)하고 방금 만든 주문도 삭제해 재고 불일치가 남지 않도록 한다.
     // 채널별 재고 분리 할당(옵트인) - product_channel_stock_with에 이 상품/옵션의 'online' 채널 행이
     // 있으면 그 배정 한도 안에서만 팔리고(물리 재고가 남아있어도 그 채널에서는 품절 처리),
     // 행이 없으면 기존과 완전히 동일하게(공유 풀) 동작한다. 미팅 요청사항 격차분석 보고서 5번 항목.
+    // 📺 라이브 채널 주문은 'live' 채널 배정 재고(product_channel_stock_with, 공유 재고)에서, 일반 주문은 'online'에서 차감한다
+    const orderChannel = isLiveChannelOrder ? 'live' : 'online';
     const decrementedItems = [];
     let stockError = null;
     for (const item of verifiedItems) {
@@ -11328,16 +11484,16 @@ app.post('/api/orders', authenticate, async (req, res) => {
 
       let channelRowQuery = supabase
         .from('product_channel_stock_with').select('id')
-        .eq('product_id', item.product_id).eq('channel', 'online');
+        .eq('product_id', item.product_id).eq('channel', orderChannel);
       channelRowQuery = item.variant_id ? channelRowQuery.eq('variant_id', item.variant_id) : channelRowQuery.is('variant_id', null);
       const { data: channelRow } = await channelRowQuery.maybeSingle();
       let channelReserved = false;
       if (channelRow) {
         const { data: reserved } = await supabase.rpc('reserve_channel_stock', {
-          p_product_id: item.product_id, p_variant_id: item.variant_id || null, p_channel: 'online', p_qty: qty
+          p_product_id: item.product_id, p_variant_id: item.variant_id || null, p_channel: orderChannel, p_qty: qty
         });
         if (!reserved) {
-          stockError = { item, err: { message: '채널(쇼핑몰) 배정 재고 소진' } };
+          stockError = { item, err: { message: `채널(${isLiveChannelOrder ? '라이브' : '쇼핑몰'}) 배정 재고 소진` } };
           break;
         }
         channelReserved = true;
@@ -11354,7 +11510,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
       });
       if (rpcErr) {
         if (channelReserved) {
-          await supabase.rpc('release_channel_stock', { p_product_id: item.product_id, p_variant_id: item.variant_id || null, p_channel: 'online', p_qty: qty }).catch(() => {});
+          await supabase.rpc('release_channel_stock', { p_product_id: item.product_id, p_variant_id: item.variant_id || null, p_channel: orderChannel, p_qty: qty }).catch(() => {});
         }
         stockError = { item, err: rpcErr };
         break;
@@ -11370,10 +11526,11 @@ app.post('/api/orders', authenticate, async (req, res) => {
             p_product_id: d.product_id, p_variant_id: d.variant_id, p_delta: d.qty, p_reason: '재고 부족으로 인한 주문 실패 - 자동 원복', p_order_id: data.id, p_created_by: req.user.id
           });
           if (d.channelReserved) {
-            await supabase.rpc('release_channel_stock', { p_product_id: d.product_id, p_variant_id: d.variant_id, p_channel: 'online', p_qty: d.qty });
+            await supabase.rpc('release_channel_stock', { p_product_id: d.product_id, p_variant_id: d.variant_id, p_channel: orderChannel, p_qty: d.qty });
           }
         } catch (compensateErr) { /* 재고 원복은 최선을 다해 시도하되, 실패해도 요청 처리를 막지 않는다 */ }
       }
+      await releaseSessionInventoryReserves();
       await releaseFlashDealClaims(data.id);
       await supabase.from('orders_with').delete().eq('id', data.id);
       return res.status(409).json({
@@ -11412,9 +11569,10 @@ app.post('/api/orders', authenticate, async (req, res) => {
             await supabase.rpc('adjust_stock_with', {
               p_product_id: d.product_id, p_variant_id: d.variant_id, p_delta: d.qty, p_reason: '쿠폰 소진으로 인한 주문 실패 - 자동 원복', p_order_id: data.id, p_created_by: req.user.id
             });
-            await supabase.rpc('release_channel_stock', { p_product_id: d.product_id, p_variant_id: d.variant_id, p_channel: 'online', p_qty: d.qty });
+            await supabase.rpc('release_channel_stock', { p_product_id: d.product_id, p_variant_id: d.variant_id, p_channel: orderChannel, p_qty: d.qty });
           } catch (compensateErr) { /* 재고 원복은 최선을 다해 시도하되, 실패해도 요청 처리를 막지 않는다 */ }
         }
+        await releaseSessionInventoryReserves();
         await releaseFlashDealClaims(data.id);
         await supabase.from('orders_with').delete().eq('id', data.id);
         return res.status(409).json({
@@ -11451,9 +11609,10 @@ app.post('/api/orders', authenticate, async (req, res) => {
             await supabase.rpc('adjust_stock_with', {
               p_product_id: d.product_id, p_variant_id: d.variant_id, p_delta: d.qty, p_reason: '쿠폰 1인당 사용한도 초과로 인한 주문 실패 - 자동 원복', p_order_id: data.id, p_created_by: req.user.id
             });
-            await supabase.rpc('release_channel_stock', { p_product_id: d.product_id, p_variant_id: d.variant_id, p_channel: 'online', p_qty: d.qty });
+            await supabase.rpc('release_channel_stock', { p_product_id: d.product_id, p_variant_id: d.variant_id, p_channel: orderChannel, p_qty: d.qty });
           } catch (compensateErr) { /* 재고 원복은 최선을 다해 시도하되, 실패해도 요청 처리를 막지 않는다 */ }
         }
+        await releaseSessionInventoryReserves();
         await releaseFlashDealClaims(data.id);
         await supabase.from('orders_with').delete().eq('id', data.id);
         return res.status(409).json({
@@ -11482,6 +11641,41 @@ app.post('/api/orders', authenticate, async (req, res) => {
 
     // 추천인 프로그램: 이 주문이 회원의 첫 주문이고 대기 중인 추천 관계가 있으면 추천인·피추천인 양쪽에 마일리지 지급 (실패해도 주문 자체는 막지 않음)
     await rewardReferralIfEligible(req.user.id, data.id);
+
+    // 📺 라이브 세션 한정재고 확정 (reserved→sold) - 실재고 차감·쿠폰 처리까지 전부 성공했으므로 이제 확정한다.
+    // 실패해도 주문 자체는 이미 정상 처리됐으므로 막지 않고 로그로 남겨 관리자가 수동 대사할 수 있게 한다.
+    for (const r of sessionInventoryReserves) {
+      try {
+        await supabase.rpc(liveRpc('confirm_live_session_inventory'), { p_inventory_id: r.inventoryId, p_qty: r.qty });
+        await supabase.from(liveTable('live_session_inventory_log')).insert([{
+          inventory_id: r.inventoryId, change_type: 'confirm', delta_reserved: 0, delta_sold: r.qty,
+          actor_user_id: req.user.id, note: `예약 없이 직접 주문 - 세션 한정재고 직접 확정 (주문번호 ${orderNumber})`
+        }]);
+      } catch (confirmErr) {
+        console.error('라이브 세션 한정재고 확정 중 오류 (실재고/주문 자체는 정상 처리됨):', confirmErr.message);
+      }
+    }
+
+    // 📺 라이브 채널 출처 주문이면 정산 원장 기록 + 팬 활동점수 적립 (실패해도 주문 자체는 막지 않음)
+    if (channel_id) {
+      await recordChannelOrderAttribution(data.id, orderNumber, finalPrice, channel_id, req.user.id, liveAttribution).catch(() => {});
+    }
+    // 📺 세션별 재고예약(장바구니/결제진행 단계)을 이 주문으로 확정 + 라이브 구매 캐시백 + 바이럴 공유쿠폰
+    if (Array.isArray(reservation_ids) && reservation_ids.length > 0) {
+      await confirmLiveSessionReservations(reservation_ids.filter(id => ORDER_UUID_RE.test(String(id))), req.user.id, data.id).catch(err => {
+        console.error('라이브 재고예약 확정 중 오류 (주문 자체는 정상 처리됨):', err.message);
+      });
+      if (channel_id) {
+        await awardLiveCashbackBonus(req.user.id, data.id, finalPrice).catch(err => {
+          console.error('라이브 구매 캐시백 지급 오류 (주문 자체는 정상 처리됨):', err.message);
+        });
+      }
+      if (live_session_id && liveAttribution.share_code) {
+        await awardShareViralCouponIfEligible(req.user.id, live_session_id, data.id, liveAttribution.share_code).catch(err => {
+          console.error('바이럴 공유쿠폰 지급 오류 (주문 자체는 정상 처리됨):', err.message);
+        });
+      }
+    }
 
     res.status(201).json({
       success: true,
@@ -11514,7 +11708,7 @@ async function cancelStalePendingOrders() {
   const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
   const { data: staleOrders, error } = await supabase
     .from('orders_with')
-    .select('id, order_number, items, user_id, created_at')
+    .select('id, order_number, items, user_id, created_at, channel_id, live_channel_id_with')
     .eq('status', 'pending')
     .lt('created_at', cutoff);
   if (error) {
@@ -11540,7 +11734,8 @@ async function cancelStalePendingOrders() {
             p_created_by: null,
             p_scan_source: 'auto_cancel_pending'
           });
-          await supabase.rpc('release_channel_stock', { p_product_id: item.product_id, p_variant_id: item.variant_id || null, p_channel: 'online', p_qty: qty });
+          // 라이브 채널 주문(WITH+ live_channel_id_with / LIVE+ channel_id)이면 'live' 채널 배정분을 되돌린다
+          await supabase.rpc('release_channel_stock', { p_product_id: item.product_id, p_variant_id: item.variant_id || null, p_channel: (order.channel_id || order.live_channel_id_with) ? 'live' : 'online', p_qty: qty });
           if (item.variant_id) affectedProductIds.add(item.product_id);
         } catch (stockErr) {
           console.error(`Error restoring stock for stale order ${order.order_number}:`, stockErr);
@@ -11575,6 +11770,73 @@ async function cancelStalePendingOrders() {
 // 매시간 1회 자동 스캔 (대상이 없으면 즉시 빈 결과로 반환)
 cron.schedule('0 * * * *', () => {
   cancelStalePendingOrders().catch(err => console.error('Stale pending order cancel cron error:', err));
+});
+
+// 📺 라이브 주문 30분 미결제 자동취소 - 라이브 방송 중 한정 재고를 실재고에서 즉시 차감해두는 특성상 결제 대기시간을
+// 짧게 잡는다(방송이 끝나면 다른 시청자에게 재고를 풀어줘야 하므로). orders_with는 WITH+/LIVE+ 공유라, 이 사이트의
+// 라이브 출처 컬럼(LIVE_ORDER_COL.channel/session)이 있는 주문만 대상으로 한다(일반몰 주문의 24시간 정책과 분리,
+// 다른 사이트의 라이브 주문은 건드리지 않음). 세션 한정재고(sold_qty)는 확정 전(pending) 단계가 아니라 주문 시점에
+// 이미 확정돼 있어 여기서는 실재고 + 'live' 채널 배정분만 되돌린다(LIVE+와 동일).
+async function cancelStaleLiveSessionPendingOrders() {
+  const cutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+  const { data: staleOrders, error } = await supabase
+    .from('orders_with')
+    .select(`id, order_number, items, user_id, created_at, ${LIVE_ORDER_COL.channel}, ${LIVE_ORDER_COL.session}`)
+    .eq('status', 'pending')
+    .lt('created_at', cutoff)
+    .or(`${LIVE_ORDER_COL.channel}.not.is.null,${LIVE_ORDER_COL.session}.not.is.null`);
+  if (error) {
+    console.error('Error fetching stale live pending orders:', error);
+    return { cancelled: 0 };
+  }
+  let cancelledCount = 0;
+  for (const order of staleOrders || []) {
+    try {
+      const items = Array.isArray(order.items) ? order.items : [];
+      const affectedProductIds = new Set();
+      for (const item of items) {
+        if (!item.product_id) continue;
+        const qty = Number(item.quantity) || 1;
+        try {
+          await supabase.rpc('adjust_stock_with', {
+            p_product_id: item.product_id,
+            p_variant_id: item.variant_id || null,
+            p_delta: qty,
+            p_reason: `라이브 30분 미결제 주문 자동 취소에 따른 재고 복구 (주문번호 ${order.order_number})`,
+            p_order_id: order.id,
+            p_created_by: null,
+            p_scan_source: 'auto_cancel_pending'
+          });
+          await supabase.rpc('release_channel_stock', { p_product_id: item.product_id, p_variant_id: item.variant_id || null, p_channel: order[LIVE_ORDER_COL.channel] ? 'live' : 'online', p_qty: qty });
+          if (item.variant_id) affectedProductIds.add(item.product_id);
+        } catch (stockErr) {
+          console.error(`Error restoring stock for stale live order ${order.order_number}:`, stockErr);
+        }
+      }
+      for (const pid of affectedProductIds) {
+        await syncProductStockFromVariants(pid).catch(() => {});
+      }
+      const { error: updateErr } = await supabase
+        .from('orders_with')
+        .update({ status: 'cancelled' })
+        .eq('id', order.id)
+        .eq('status', 'pending'); // 그 사이 결제가 완료됐을 수 있으므로 여전히 pending일 때만 취소
+      if (updateErr) {
+        console.error(`Error cancelling stale live order ${order.order_number}:`, updateErr);
+        continue;
+      }
+      await releaseFlashDealClaims(order.id).catch(() => {}); // ⚡ 초특가 점유 수량 반환
+      cancelledCount++;
+    } catch (orderErr) {
+      console.error(`Error processing stale live pending order ${order.order_number}:`, orderErr);
+    }
+  }
+  return { cancelled: cancelledCount };
+}
+
+// 10분마다 스캔 (30분 컷오프)
+cron.schedule('*/10 * * * *', () => {
+  cancelStaleLiveSessionPendingOrders().catch(err => console.error('Live stale pending order cancel cron error:', err));
 });
 
 // 관리자용 전체 주문 조회 (상태 필터 가능, 주문자 이메일 포함)
@@ -18702,7 +18964,7 @@ app.patch('/api/admin/return-requests/:id', authenticate, requireRole(['admin', 
     if (status === 'completed' && existingRequest.status !== 'completed' && (existingRequest.request_type === 'cancel' || existingRequest.request_type === 'return')) {
       const { data: order } = await supabase
         .from('orders_with')
-        .select('id, items, status')
+        .select('id, items, status, channel_id, live_channel_id_with')
         .eq('id', existingRequest.order_id)
         .maybeSingle();
       if (order) {
@@ -18720,7 +18982,8 @@ app.patch('/api/admin/return-requests/:id', authenticate, requireRole(['admin', 
               p_created_by: req.user.id,
               p_scan_source: 'order_restore'
             });
-            await supabase.rpc('release_channel_stock', { p_product_id: item.product_id, p_variant_id: item.variant_id || null, p_channel: 'online', p_qty: qty });
+            // 라이브 채널 주문이면 'live' 채널 배정분을 되돌린다 (WITH+ live_channel_id_with / LIVE+ channel_id)
+            await supabase.rpc('release_channel_stock', { p_product_id: item.product_id, p_variant_id: item.variant_id || null, p_channel: (order.channel_id || order.live_channel_id_with) ? 'live' : 'online', p_qty: qty });
           } catch (restoreErr) { /* 재고 복구는 최선을 다해 시도하되, 하나가 실패해도 전체 처리를 막지 않는다 */ }
           if (item.variant_id) await syncProductStockFromVariants(item.product_id);
         }
@@ -19044,6 +19307,17 @@ app.get('/live', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'live.html'));
 });
 
+// 📺 고객용 채널 시청 페이지 - 딥링크/QR로 진입, 실시간 방송/상품핀/재고 확인 후 예약→주문까지 이어진다
+app.get('/live/:slug', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'live-channel.html'));
+});
+
+// 📺 호스트용 방송 진행 화면 - 페이지 자체는 정적 파일이고, 실제 권한 확인은 클라이언트에서 /api/me로 admin/super_admin
+// 여부를 확인한 뒤 진행하며, 이 화면이 호출하는 모든 API는 /api/admin/live/... 엔드포인트가 requireRole로 막고 있다.
+app.get('/admin/live-host/:channelId', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'live-host-control.html'));
+});
+
 // ============================================
 // 📖 사용설명서 (관리자 전용) — 본문은 public 밖(private/manual-content.html)에 두고
 // 관리자(admin/super_admin) 인증을 통과한 요청에만 내려준다. /manual.html 은 내용 없는 껍데기 화면.
@@ -19067,6 +19341,471 @@ STATIC_INFO_PAGES.forEach(slug => {
   app.get('/' + slug, (req, res) => {
     res.sendFile(path.join(__dirname, 'public', slug + '.html'));
   });
+});
+
+// ============================================
+// 🎁 크리에이터 제휴 커미션(어필리에이트 라이브) - 매출견인기능 격차분석 2-8
+// - 위 "분양조직 현금 정산"과 완전히 동일한 구조(추천코드/링크로 유입된 주문 귀속 -> 기간별 정산 생성 ->
+//   지급대기 -> 지급완료)를 그대로 본떴다. 다만 이 항목은 보고서가 명시했듯 실제 크리에이터 섭외·계약·
+//   세무처리 등 "코드 밖의" 운영 준비가 함께 필요한 항목이라, 여기서는 그 운영이 시작될 수 있도록
+//   코드 레벨의 뼈대(추천코드 발급, 주문 귀속, 정산 계산/지급기록)까지만 완성해둔다 - 실제 대량 송금
+//   자동화(위 오픈뱅킹/정산대행 연동)까지 확장할지는 운영 준비가 끝난 뒤 별도로 결정할 일이다.
+// ============================================
+
+// 크리에이터 목록 (수수료율 등 마진율급 민감정보 포함 - 대표자 스텝업 필요, provider 목록과 동일한 기준)
+app.get('/api/admin/creators', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_creators')).select('*').order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], count: data?.length || 0, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching creators:', err);
+    res.status(500).json({ error: 'Failed to fetch creators', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 크리에이터 등록 - 플랫폼 회원일 필요는 없다(user_id는 선택값). 실제 계약이 확정된 뒤 등록하는 것을 전제로 한다.
+app.post('/api/admin/creators', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+  try {
+    const { display_name, commission_rate, user_id, bank_name, bank_account, account_holder } = req.body || {};
+    if (!display_name || !String(display_name).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: 'display_name은 필수입니다', timestamp: new Date().toISOString() });
+    }
+    let rate = 10;
+    if (commission_rate !== undefined && commission_rate !== null && commission_rate !== '') {
+      rate = Number(commission_rate);
+      if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+        return res.status(400).json({ error: 'Bad Request', message: 'commission_rate는 0~100 사이의 숫자여야 합니다', timestamp: new Date().toISOString() });
+      }
+    }
+    const { data, error } = await supabase.from(liveTable('live_creators')).insert([{
+      display_name: String(display_name).trim(), commission_rate: rate, user_id: user_id || null,
+      bank_name: bank_name || null, bank_account: bank_account || null, account_holder: account_holder || null,
+      created_by: req.user.id
+    }]).select().single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating creator:', err);
+    res.status(500).json({ error: 'Failed to create creator', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 크리에이터 정보 수정(수수료율/상태/세무처리방식/계좌) - provider 수수료율 변경과 동일하게 requireOwnerStepUp(부트스트랩 예외 없음) 필수
+app.patch('/api/admin/creators/:id', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUp, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: existing } = await supabase.from(liveTable('live_creators')).select('id').eq('id', id).maybeSingle();
+    if (!existing) return res.status(404).json({ error: 'Not Found', message: '크리에이터를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const updates = {};
+    if (req.body.display_name !== undefined) {
+      if (!String(req.body.display_name).trim()) return res.status(400).json({ error: 'Bad Request', message: 'display_name은 비울 수 없습니다', timestamp: new Date().toISOString() });
+      updates.display_name = String(req.body.display_name).trim();
+    }
+    if (req.body.commission_rate !== undefined) {
+      const rate = Number(req.body.commission_rate);
+      if (!Number.isFinite(rate) || rate < 0 || rate > 100) {
+        return res.status(400).json({ error: 'Bad Request', message: 'commission_rate는 0~100 사이의 숫자여야 합니다', timestamp: new Date().toISOString() });
+      }
+      updates.commission_rate = rate;
+    }
+    if (req.body.status !== undefined) {
+      if (!['active', 'inactive'].includes(req.body.status)) {
+        return res.status(400).json({ error: 'Bad Request', message: "status는 'active' 또는 'inactive'여야 합니다", timestamp: new Date().toISOString() });
+      }
+      updates.status = req.body.status;
+    }
+    if (req.body.settlement_tax_method !== undefined) {
+      if (!SETTLEMENT_TAX_METHODS.includes(req.body.settlement_tax_method)) {
+        return res.status(400).json({ error: 'Bad Request', message: `settlement_tax_method는 ${SETTLEMENT_TAX_METHODS.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+      }
+      updates.settlement_tax_method = req.body.settlement_tax_method;
+    }
+    ['bank_name', 'bank_account', 'account_holder'].forEach(k => {
+      if (req.body[k] !== undefined) updates[k] = req.body[k] || null;
+    });
+
+    const { data, error } = await supabase.from(liveTable('live_creators')).update(updates).eq('id', id).select().single();
+    if (error) throw error;
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating creator:', err);
+    res.status(500).json({ error: 'Failed to update creator', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 크리에이터 추천코드 발급 - 코드를 직접 지정하지 않으면 자동 생성(퀴즈 쿠폰 코드 생성과 동일한 비혼동 문자셋)
+async function generateUniqueCreatorReferralCode() {
+  const charset = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  for (let attempt = 0; attempt < 50; attempt++) {
+    let suffix = '';
+    for (let i = 0; i < 6; i++) suffix += charset[Math.floor(Math.random() * charset.length)];
+    const code = `CR${suffix}`;
+    const { data: existing } = await supabase.from(liveTable('live_creator_referral_codes')).select('id').eq('code', code).maybeSingle();
+    if (!existing) return code;
+  }
+  return `CR${Date.now().toString(36).toUpperCase()}`;
+}
+
+app.post('/api/admin/creators/:id/referral-codes', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+  try {
+    const { data: creator } = await supabase.from(liveTable('live_creators')).select('id').eq('id', req.params.id).maybeSingle();
+    if (!creator) return res.status(404).json({ error: 'Not Found', message: '크리에이터를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    let code = req.body?.code ? String(req.body.code).trim().toUpperCase() : null;
+    if (code) {
+      const { data: existing } = await supabase.from(liveTable('live_creator_referral_codes')).select('id').eq('code', code).maybeSingle();
+      if (existing) return res.status(409).json({ error: 'Conflict', message: '이미 사용 중인 코드입니다', timestamp: new Date().toISOString() });
+    } else {
+      code = await generateUniqueCreatorReferralCode();
+    }
+
+    const { data, error } = await supabase.from(liveTable('live_creator_referral_codes')).insert([{
+      creator_id: req.params.id, code, created_by: req.user.id
+    }]).select().single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating creator referral code:', err);
+    res.status(500).json({ error: 'Failed to create referral code', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/creators/:id/referral-codes', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_creator_referral_codes'))
+      .select('*').eq('creator_id', req.params.id).order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], count: data?.length || 0, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching creator referral codes:', err);
+    res.status(500).json({ error: 'Failed to fetch referral codes', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 코드 활성/비활성 전환 - 삭제하지 않고 비활성화만 지원한다(이미 이 코드로 유입된 과거 주문 기록은 그대로 보존).
+app.patch('/api/admin/creators/referral-codes/:codeId', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+  try {
+    if (!['active', 'inactive'].includes(req.body?.status)) {
+      return res.status(400).json({ error: 'Bad Request', message: "status는 'active' 또는 'inactive'여야 합니다", timestamp: new Date().toISOString() });
+    }
+    const { data, error } = await supabase.from(liveTable('live_creator_referral_codes'))
+      .update({ status: req.body.status }).eq('id', req.params.codeId).select().single();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '추천코드를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating creator referral code:', err);
+    res.status(500).json({ error: 'Failed to update referral code', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🏆 크리에이터(채널) 등급/랭킹 시스템 (경쟁사 기능 격차 백로그 3번) - 그립/아마존 "TOP 판매자" 배지와 동일한 컨셉.
+// ============================================
+// orders_with.channel_id 매출 집계를 기준으로 "전체 기간 누적 매출"로 등급(브론즈~플래티넘)을 매기고,
+// "최근 30일 매출" TOP 3 채널에는 별도로 "이달의 TOP 판매자" 배지를 추가로 부여한다. 완전히 읽기 시점
+// 집계(이 프로젝트의 "스케줄러 없이 읽는 시점에 처리" 원칙)이며, 짧은 캐시(5분)로 페이지뷰마다 전체
+// 주문을 다시 스캔하지 않게 방어한다.
+const DEFAULT_CHANNEL_TIER_THRESHOLDS = { silver: 3000000, gold: 10000000, platinum: 50000000 };
+const CHANNEL_TIER_LABELS = { bronze: '브론즈', silver: '실버', gold: '골드', platinum: '플래티넘' };
+const CHANNEL_TIER_EMOJIS = { bronze: '🥉', silver: '🥈', gold: '🥇', platinum: '💎' };
+let channelRankingCache = null;
+let channelRankingCacheAt = 0;
+const CHANNEL_RANKING_CACHE_TTL_MS = 5 * 60 * 1000;
+
+async function getChannelTierThresholds() {
+  try {
+    const { data } = await supabase.from('platform_settings').select('value').eq('key', liveSettingKey('channel_tier_thresholds')).maybeSingle();
+    const v = data && data.value && typeof data.value === 'object' ? data.value : {};
+    return {
+      silver: Number.isFinite(Number(v.silver)) ? Number(v.silver) : DEFAULT_CHANNEL_TIER_THRESHOLDS.silver,
+      gold: Number.isFinite(Number(v.gold)) ? Number(v.gold) : DEFAULT_CHANNEL_TIER_THRESHOLDS.gold,
+      platinum: Number.isFinite(Number(v.platinum)) ? Number(v.platinum) : DEFAULT_CHANNEL_TIER_THRESHOLDS.platinum
+    };
+  } catch (err) {
+    console.error('Error fetching channel tier thresholds:', err);
+    return DEFAULT_CHANNEL_TIER_THRESHOLDS;
+  }
+}
+
+function tierForRevenue(revenue, thresholds) {
+  if (revenue >= thresholds.platinum) return 'platinum';
+  if (revenue >= thresholds.gold) return 'gold';
+  if (revenue >= thresholds.silver) return 'silver';
+  return 'bronze';
+}
+
+// 전체 채널의 (전체기간 누적매출, 최근30일 매출)을 한 번에 집계한다.
+async function computeChannelRankings() {
+  const now = Date.now();
+  if (channelRankingCache && (now - channelRankingCacheAt) < CHANNEL_RANKING_CACHE_TTL_MS) {
+    return channelRankingCache;
+  }
+  const thresholds = await getChannelTierThresholds();
+  const { data: orders, error } = await supabase
+    .from('orders_with')
+    .select(`${LIVE_ORDER_COL.channel}, final_price, status, created_at`)
+    .not(LIVE_ORDER_COL.channel, 'is', null)
+    .not('status', 'in', '(cancelled,refunded)');
+  if (error) throw error;
+
+  const thirtyDaysAgoMs = now - 30 * 24 * 60 * 60 * 1000;
+  const agg = {}; // channelId -> { allTimeRevenue, last30Revenue }
+  (orders || []).forEach(o => {
+    const chId = o[LIVE_ORDER_COL.channel]; // 사이트별 라이브 채널 컬럼 (WITH+ live_channel_id_with / LIVE+ channel_id)
+    if (!chId) return;
+    if (!agg[chId]) agg[chId] = { allTimeRevenue: 0, last30Revenue: 0 };
+    const price = Number(o.final_price || 0);
+    agg[chId].allTimeRevenue += price;
+    if (new Date(o.created_at).getTime() >= thirtyDaysAgoMs) agg[chId].last30Revenue += price;
+  });
+
+  const rows = Object.keys(agg).map(channelId => ({
+    channel_id: channelId,
+    all_time_revenue: agg[channelId].allTimeRevenue,
+    last_30d_revenue: agg[channelId].last30Revenue,
+    tier: tierForRevenue(agg[channelId].allTimeRevenue, thresholds)
+  }));
+  rows.sort((a, b) => b.last_30d_revenue - a.last_30d_revenue);
+  rows.forEach((r, i) => { r.top3_rank = (i < 3 && r.last_30d_revenue > 0) ? i + 1 : null; });
+
+  const result = { thresholds, rows, computed_at: new Date().toISOString() };
+  channelRankingCache = result;
+  channelRankingCacheAt = now;
+  return result;
+}
+
+async function getChannelRankInfo(channelId) {
+  const { rows } = await computeChannelRankings();
+  const row = rows.find(r => r.channel_id === channelId);
+  if (!row) {
+    return { tier: 'bronze', tier_label: CHANNEL_TIER_LABELS.bronze, tier_emoji: CHANNEL_TIER_EMOJIS.bronze, top3_rank: null, all_time_revenue: 0, last_30d_revenue: 0 };
+  }
+  return {
+    tier: row.tier, tier_label: CHANNEL_TIER_LABELS[row.tier], tier_emoji: CHANNEL_TIER_EMOJIS[row.tier],
+    top3_rank: row.top3_rank, all_time_revenue: row.all_time_revenue, last_30d_revenue: row.last_30d_revenue
+  };
+}
+
+// 공개: 이 채널의 등급/랭킹 정보 (시청 화면에 배지로 노출하기 위함, 로그인 불필요)
+app.get('/api/live/channels/:slug/rank', async (req, res) => {
+  try {
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id').eq('slug', req.params.slug).maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const rank = await getChannelRankInfo(channel.id);
+    res.json({ success: true, data: rank, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching channel rank:', err);
+    res.status(500).json({ error: 'Failed to fetch channel rank', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 전체 채널 등급/랭킹 목록 + 등급 기준 조회
+app.get('/api/admin/live/channel-rankings', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { thresholds, rows, computed_at } = await computeChannelRankings();
+    const channelIds = rows.map(r => r.channel_id);
+    const nameMap = {};
+    if (channelIds.length > 0) {
+      const { data: channels } = await supabase.from(liveTable('channels')).select('id, name, slug').in('id', channelIds);
+      (channels || []).forEach(c => { nameMap[c.id] = c; });
+    }
+    const enriched = rows.map(r => ({
+      ...r,
+      name: nameMap[r.channel_id] ? nameMap[r.channel_id].name : '(알 수 없음)',
+      slug: nameMap[r.channel_id] ? nameMap[r.channel_id].slug : null,
+      tier_label: CHANNEL_TIER_LABELS[r.tier], tier_emoji: CHANNEL_TIER_EMOJIS[r.tier]
+    })).sort((a, b) => b.all_time_revenue - a.all_time_revenue);
+    res.json({ success: true, data: { thresholds, rankings: enriched, computed_at }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching channel rankings:', err);
+    res.status(500).json({ error: 'Failed to fetch channel rankings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 등급 기준 금액 저장
+app.patch('/api/admin/settings/channel-tier-thresholds', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const s = Number(req.body?.silver), g = Number(req.body?.gold), p = Number(req.body?.platinum);
+    if (![s, g, p].every(n => Number.isFinite(n) && n >= 0)) {
+      return res.status(400).json({ error: 'Bad Request', message: '모든 기준 금액은 0 이상 숫자여야 합니다', timestamp: new Date().toISOString() });
+    }
+    if (!(s < g && g < p)) {
+      return res.status(400).json({ error: 'Bad Request', message: '실버 < 골드 < 플래티넘 순서로 커져야 합니다', timestamp: new Date().toISOString() });
+    }
+    const value = { silver: s, gold: g, platinum: p };
+    const { error } = await supabase.from('platform_settings').upsert({
+      key: liveSettingKey('channel_tier_thresholds'), value, updated_at: new Date().toISOString(), updated_by: req.user.id
+    }, { onConflict: 'key' });
+    if (error) throw error;
+    channelRankingCache = null; // 기준이 바뀌었으니 캐시 무효화
+    res.json({ success: true, data: value, message: '저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating channel tier thresholds:', err);
+    res.status(500).json({ error: 'Failed to update channel tier thresholds', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 특정 기간의 크리에이터별 매출 집계 (orders_with.creator_id 기준, 취소/환불 제외) - 위 분양조직 집계와 완전히 동일한 패턴
+async function computeCreatorRevenueForPeriod(startDate, endDate) {
+  let ordersQuery = supabase
+    .from('orders_with')
+    .select(`id, ${LIVE_ORDER_COL.creator}, final_price, status, created_at`)
+    .not(LIVE_ORDER_COL.creator, 'is', null)
+    .not('status', 'in', '(cancelled,refunded)');
+  if (startDate) ordersQuery = ordersQuery.gte('created_at', startDate);
+  if (endDate) {
+    const endExclusive = /^\d{4}-\d{2}-\d{2}$/.test(endDate)
+      ? new Date(new Date(endDate + 'T00:00:00Z').getTime() + 24 * 60 * 60 * 1000).toISOString()
+      : endDate;
+    ordersQuery = ordersQuery.lt('created_at', endExclusive);
+  }
+  const { data: orders, error } = await ordersQuery;
+  if (error) throw error;
+
+  const agg = {}; // creatorId -> { revenue, orderCount }
+  (orders || []).forEach(o => {
+    const crId = o[LIVE_ORDER_COL.creator]; // 사이트별 크리에이터 컬럼 (WITH+ live_creator_id_with / LIVE+ creator_id)
+    if (!crId) return;
+    if (!agg[crId]) agg[crId] = { revenue: 0, orderCount: 0 };
+    agg[crId].revenue += Number(o.final_price || 0);
+    agg[crId].orderCount += 1;
+  });
+  return agg;
+}
+
+// 기간을 지정해 크리에이터별 정산 내역 생성(또는 재계산). 이미 'paid' 상태인 건은 건드리지 않는다. 관리자 전용.
+app.post('/api/admin/creator-settlements/generate', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+  try {
+    const { startDate, endDate } = req.body || {};
+    if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Bad Request', message: 'startDate, endDate는 필수입니다 (예: 2026-08-01)', timestamp: new Date().toISOString() });
+    }
+
+    const agg = await computeCreatorRevenueForPeriod(startDate, endDate);
+    const creatorIds = Object.keys(agg);
+    if (creatorIds.length === 0) {
+      return res.json({ success: true, data: { created: 0, updated: 0, skippedPaid: 0, skippedNoBankAccount: [], rows: [] }, timestamp: new Date().toISOString() });
+    }
+
+    const { data: creators, error: creatorErr } = await supabase
+      .from(liveTable('live_creators')).select('id, display_name, commission_rate, bank_name, bank_account, account_holder').in('id', creatorIds);
+    if (creatorErr) throw creatorErr;
+    const rateMap = {}, nameMap = {}, bankMap = {};
+    (creators || []).forEach(c => {
+      rateMap[c.id] = c.commission_rate != null ? Number(c.commission_rate) : 10;
+      nameMap[c.id] = c.display_name;
+      bankMap[c.id] = { bank_name: c.bank_name || null, bank_account: c.bank_account || null, account_holder: c.account_holder || null };
+    });
+
+    const { data: existingRows, error: existErr } = await supabase
+      .from(liveTable('live_creator_settlements')).select('id, creator_id, status')
+      .eq('period_start', startDate).eq('period_end', endDate).in('creator_id', creatorIds);
+    if (existErr) throw existErr;
+    const existingByCreator = {};
+    (existingRows || []).forEach(r => { existingByCreator[r.creator_id] = r; });
+
+    let created = 0, updated = 0, skippedPaid = 0;
+    const skippedNoBankAccount = [];
+    const resultRows = [];
+
+    for (const creatorId of creatorIds) {
+      const bank = bankMap[creatorId] || {};
+      if (!bank.bank_account) skippedNoBankAccount.push({ creator_id: creatorId, creator_name: nameMap[creatorId] || '(이름 없음)' });
+
+      const grossRevenue = agg[creatorId].revenue;
+      const orderCount = agg[creatorId].orderCount;
+      const commissionRate = rateMap[creatorId] != null ? rateMap[creatorId] : 10;
+      const commissionAmount = Math.round(grossRevenue * commissionRate / 100);
+
+      const existing = existingByCreator[creatorId];
+      if (existing && existing.status === 'paid') { skippedPaid++; continue; }
+
+      if (existing) {
+        const { data, error } = await supabase.from(liveTable('live_creator_settlements')).update({
+          order_count: orderCount, gross_revenue: grossRevenue, commission_rate: commissionRate,
+          commission_amount: commissionAmount, updated_at: new Date().toISOString(),
+          bank_name: bank.bank_name, bank_account: bank.bank_account, account_holder: bank.account_holder
+        }).eq('id', existing.id).select().single();
+        if (error) throw error;
+        updated++; resultRows.push(data);
+      } else {
+        const { data, error } = await supabase.from(liveTable('live_creator_settlements')).insert([{
+          creator_id: creatorId, period_start: startDate, period_end: endDate,
+          order_count: orderCount, gross_revenue: grossRevenue, commission_rate: commissionRate,
+          commission_amount: commissionAmount, status: 'pending', created_by: req.user.id,
+          bank_name: bank.bank_name, bank_account: bank.bank_account, account_holder: bank.account_holder
+        }]).select().single();
+        if (error) throw error;
+        created++; resultRows.push(data);
+      }
+    }
+
+    res.json({ success: true, data: { created, updated, skippedPaid, skippedNoBankAccount, rows: resultRows }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error generating creator settlements:', err);
+    res.status(500).json({ error: 'Failed to generate creator settlements', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/creator-settlements', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+  try {
+    const { status, creatorId } = req.query;
+    let query = supabase.from(liveTable('live_creator_settlements')).select('*').order('period_start', { ascending: false });
+    if (creatorId) query = query.eq('creator_id', creatorId);
+    if (status) query = query.eq('status', status);
+
+    const { data: rows, error } = await query;
+    if (error) throw error;
+
+    const creatorIds = [...new Set((rows || []).map(r => r.creator_id))];
+    const { data: creatorRows } = creatorIds.length
+      ? await supabase.from(liveTable('live_creators')).select('id, display_name').in('id', creatorIds)
+      : { data: [] };
+    const nameMap = {};
+    (creatorRows || []).forEach(c => { nameMap[c.id] = c.display_name; });
+
+    const result = (rows || []).map(r => ({ ...r, creator_name: nameMap[r.creator_id] || null }));
+    res.json({ success: true, data: result, count: result.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching creator settlements:', err);
+    res.status(500).json({ error: 'Failed to fetch creator settlements', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 정산 상태 변경(지급완료/취소) - 지급완료 시점에 계좌정보 스냅샷 필수 + 세무처리 스냅샷(공급자/분양조직과 동일한 규칙)
+app.patch('/api/admin/creator-settlements/:id/status', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, payout_memo } = req.body || {};
+    if (!['pending', 'paid', 'cancelled'].includes(status)) {
+      return res.status(400).json({ error: 'Bad Request', message: "status는 'pending', 'paid', 'cancelled' 중 하나여야 합니다", timestamp: new Date().toISOString() });
+    }
+    const update = { status };
+    if (payout_memo !== undefined) update.payout_memo = payout_memo || null;
+    if (status === 'paid') {
+      update.paid_at = new Date().toISOString();
+      const { data: existing } = await supabase.from(liveTable('live_creator_settlements')).select('creator_id, commission_amount, bank_account').eq('id', id).maybeSingle();
+      if (!existing) return res.status(404).json({ error: 'Not Found', message: '정산 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+      if (!existing.bank_account) {
+        return res.status(400).json({ error: 'Bad Request', message: '이 정산 건에는 송금할 계좌 정보가 없습니다. 크리에이터 관리에서 계좌를 등록한 뒤, 해당 기간 정산을 다시 생성(재계산)하면 계좌 정보가 반영됩니다.', timestamp: new Date().toISOString() });
+      }
+      const { data: creator } = await supabase.from(liveTable('live_creators')).select('settlement_tax_method').eq('id', existing.creator_id).maybeSingle();
+      Object.assign(update, computeSettlementTaxFields(existing.commission_amount, creator?.settlement_tax_method));
+    } else {
+      update.paid_at = null;
+    }
+
+    const { data, error } = await supabase.from(liveTable('live_creator_settlements')).update(update).eq('id', id).select().single();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '정산 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating creator settlement status:', err);
+    res.status(500).json({ error: 'Failed to update creator settlement status', message: err.message, timestamp: new Date().toISOString() });
+  }
 });
 
 // ============================================
@@ -19395,6 +20134,656 @@ app.post('/api/admin/live/channels/:id/tiers', authenticate, requireRole(['admin
 });
 
 // ============================================
+// LIVE+ 채널-상품 판매 연동 (라이브 세션 · 상품핀 · 주문 출처 추적)
+// ============================================
+// 상품 데이터는 복제하지 않고 기존 products_with을 그대로 참조한다 - 채널은 "무엇을 파는지"만 큐레이션.
+
+// 채널이 판매하는 상품 목록(공개) - 상품 상세는 기존 products_with 그대로, 추천순은 is_featured 우선
+app.get('/api/live/channels/:slug/products', async (req, res) => {
+  try {
+    const { data: channel, error: cErr } = await supabase.from(liveTable('channels'))
+      .select('id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (cErr) throw cErr;
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const { data: links, error: lErr } = await supabase.from(liveTable('channel_products'))
+      .select('is_featured, added_at, products_with(id, name, price, discount_price, images_urls, stock, status, category, cost_price)')
+      .eq('channel_id', channel.id).order('is_featured', { ascending: false }).order('added_at', { ascending: false });
+    if (lErr) throw lErr;
+
+    const rawProducts = (links || [])
+      .filter(l => l.products_with && l.products_with.status === 'active')
+      .map(l => ({ ...l.products_with, is_featured: l.is_featured }));
+
+    // 라이브 채널 가격정책(channel_pricing_policies_with/product_channel_prices_with)을 반영한 최종 판매가를
+    // live_price로 함께 내려준다. 폴백 기준은 discount_price||price(기존 화면이 이미 쓰던 값)로 두어,
+    // 아직 cost_price가 입력되지 않은 상품(현재 거의 전부)에서 기존에 보이던 할인가가 사라지지 않게 한다.
+    // 🔒 cost_price 자체는 응답에서 제거한다 - 계산에만 쓰고 절대 노출하지 않는다.
+    const livePriceById = await resolveLiveChannelPrices(rawProducts.map(p => ({
+      id: p.id, cost_price: p.cost_price, category: p.category,
+      fallbackPrice: (p.discount_price !== null && p.discount_price !== undefined && Number(p.discount_price) > 0) ? p.discount_price : p.price
+    })));
+    const products = rawProducts.map(p => {
+      const { cost_price, ...safe } = p;
+      return { ...safe, live_price: livePriceById[p.id] };
+    });
+
+    res.json({ success: true, data: products, count: products.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching channel products:', err);
+    res.status(500).json({ error: 'Failed to fetch channel products', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/live/channels/:id/products', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { product_id, is_featured } = req.body || {};
+    if (!product_id) return res.status(400).json({ error: 'Bad Request', message: 'product_id는 필수입니다', timestamp: new Date().toISOString() });
+    const { data: product } = await supabase.from('products_with').select('id').eq('id', product_id).maybeSingle();
+    if (!product) return res.status(400).json({ error: 'Bad Request', message: '존재하지 않는 상품입니다', timestamp: new Date().toISOString() });
+
+    const { data, error } = await supabase.from(liveTable('channel_products'))
+      .upsert([{ channel_id: req.params.id, product_id, is_featured: !!is_featured }], { onConflict: 'channel_id,product_id' })
+      .select().single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error attaching product to channel:', err);
+    res.status(500).json({ error: 'Failed to attach product', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.delete('/api/admin/live/channels/:id/products/:productId', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { error } = await supabase.from(liveTable('channel_products'))
+      .delete().eq('channel_id', req.params.id).eq('product_id', req.params.productId);
+    if (error) throw error;
+    res.json({ success: true, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error detaching product from channel:', err);
+    res.status(500).json({ error: 'Failed to detach product', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자용 채널 상품 큐레이션 조회 - 공개 API(GET /api/live/channels/:slug/products)와 달리 채널이
+// draft(비공개) 상태여도 조회 가능해야 관리자가 활성화 전에 미리 상품을 큐레이션할 수 있다.
+app.get('/api/admin/live/channels/:id/products', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: links, error } = await supabase.from(liveTable('channel_products'))
+      .select('product_id, is_featured, added_at, products_with(id, name, price, discount_price, images_urls, stock, status, category, cost_price)')
+      .eq('channel_id', req.params.id).order('is_featured', { ascending: false }).order('added_at', { ascending: false });
+    if (error) throw error;
+
+    // 관리자 큐레이션 화면에도 라이브 채널가(live_price)를 함께 내려준다(원가는 노출하지 않는다).
+    const livePriceById = await resolveLiveChannelPrices((links || []).filter(l => l.products_with).map(l => ({
+      id: l.products_with.id, cost_price: l.products_with.cost_price, category: l.products_with.category,
+      fallbackPrice: (l.products_with.discount_price !== null && l.products_with.discount_price !== undefined && Number(l.products_with.discount_price) > 0) ? l.products_with.discount_price : l.products_with.price
+    })));
+    const data = (links || []).map(l => {
+      if (!l.products_with) return l;
+      const { cost_price, ...safeProduct } = l.products_with;
+      return { ...l, products_with: { ...safeProduct, live_price: livePriceById[l.products_with.id] } };
+    });
+    res.json({ success: true, data, count: data.length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching admin channel products:', err);
+    res.status(500).json({ error: 'Failed to fetch channel products', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 지금 방송 중인 세션(공개) - 시청 화면이 이 값을 주기적으로 조회해 상품핀 변경을 따라간다
+// 시청자가 실제로 볼 영상 소스를 결정한다 - 우선순위: 브라우저 원클릭 방송(WebRTC) > 자체 사이트 재생
+// (Cloudflare Stream) > 유튜브 > 페이스북. 여러 목적지에 동시송출 중이어도 화면에는 대표로 하나만
+// 골라 보여준다(여러 영상을 동시에 트는 건 오히려 혼란스럽다 - host-control 화면에는 전체 목록을 그대로 보여준다).
+async function resolveSessionVideoInfo(session) {
+  if (session.webrtc_active) {
+    return { mode: 'webrtc', room: session.id };
+  }
+  const { data: targets } = await supabase.from(liveTable('live_session_broadcast_targets'))
+    .select('platform, external_broadcast_id, playback_url')
+    .eq('live_session_id', session.id).in('status', ['created', 'live'])
+    .in('platform', ['cloudflare_stream', 'youtube', 'facebook']);
+  if (!targets || targets.length === 0) return { mode: 'none' };
+  const cf = targets.find(t => t.platform === 'cloudflare_stream' && t.playback_url);
+  if (cf) return { mode: 'cloudflare_stream', hls_url: cf.playback_url };
+  const yt = targets.find(t => t.platform === 'youtube' && t.external_broadcast_id);
+  if (yt) return { mode: 'youtube', embed_url: `https://www.youtube.com/embed/${yt.external_broadcast_id}?autoplay=1&mute=1` };
+  const fb = targets.find(t => t.platform === 'facebook' && t.external_broadcast_id);
+  if (fb) return { mode: 'facebook', video_id: fb.external_broadcast_id };
+  return { mode: 'none' };
+}
+
+app.get('/api/live/channels/:slug/sessions/live', async (req, res) => {
+  try {
+    const { data: channel, error: cErr } = await supabase.from(liveTable('channels'))
+      .select('id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (cErr) throw cErr;
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const { data: session, error: sErr } = await supabase.from(liveTable('live_sessions'))
+      .select('id, title, status, started_at, pinned_product_id, webrtc_active, products_with(id, name, price, discount_price, images_urls, stock, category, cost_price)')
+      .eq('channel_id', channel.id).eq('status', 'live').order('started_at', { ascending: false }).maybeSingle();
+    if (sErr) throw sErr;
+    if (!session) return res.json({ success: true, data: null, timestamp: new Date().toISOString() });
+
+    const video = await resolveSessionVideoInfo(session);
+
+    // 상품핀(지금 소개중인 상품)에도 live_price를 함께 내려준다 - product.html/live-channel.html에서
+    // 방금 소개중인 상품 가격을 직접 이 응답에서 읽는 경로가 있어 목록 조회와 동일하게 반영해야 한다.
+    let sessionOut = session;
+    if (session.products_with) {
+      const pinnedProduct = session.products_with;
+      const fallbackPrice = (pinnedProduct.discount_price !== null && pinnedProduct.discount_price !== undefined && Number(pinnedProduct.discount_price) > 0) ? pinnedProduct.discount_price : pinnedProduct.price;
+      const livePriceById = await resolveLiveChannelPrices([{ id: pinnedProduct.id, cost_price: pinnedProduct.cost_price, category: pinnedProduct.category, fallbackPrice }]);
+      const { cost_price, ...safePinned } = pinnedProduct;
+      sessionOut = { ...session, products_with: { ...safePinned, live_price: livePriceById[pinnedProduct.id] } };
+    }
+
+    res.json({
+      success: true,
+      data: { ...sessionOut, video, deep_link: `/live/${req.params.slug}?session=${session.id}` },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching live session:', err);
+    res.status(500).json({ error: 'Failed to fetch live session', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 다시보기(VOD) 쇼핑(공개) - 매출견인기능 격차분석 2-6. LIVE+는 자체 녹화/스트림 저장 인프라가 없으므로
+// 새로운 녹화 파이프라인을 만들지 않고, 이미 있는 OmniCast 동시송출 기록(live_session_broadcast_targets_live)의
+// external_broadcast_id를 재사용한다 - 유튜브는 라이브 방송 종료 후 같은 ID가 그대로 다시보기 VOD ID가 되므로
+// 별도 처리 없이 시청 링크로 바로 쓸 수 있다(페이스북은 페이지ID 없이 만드는 범용 워치 링크라 최선노력 수준).
+// 라이브 중이 아닐 때 이 채널의 가장 최근에 "종료된" 세션 하나를 돌려주고, 그 세션에서 만들어진 다시보기
+// 링크가 있으면 함께 내려준다 - 상품 목록/구매는 이미 있는 평소 상품 API(GET .../products)를 그대로 쓴다.
+app.get('/api/live/channels/:slug/sessions/replay', async (req, res) => {
+  try {
+    const { data: channel, error: cErr } = await supabase.from(liveTable('channels'))
+      .select('id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (cErr) throw cErr;
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const { data: session, error: sErr } = await supabase.from(liveTable('live_sessions'))
+      .select('id, title, started_at, ended_at, pinned_product_id')
+      .eq('channel_id', channel.id).eq('status', 'ended')
+      .order('ended_at', { ascending: false }).limit(1).maybeSingle();
+    if (sErr) throw sErr;
+    if (!session) return res.json({ success: true, data: null, timestamp: new Date().toISOString() });
+
+    const { data: targets } = await supabase.from(liveTable('live_session_broadcast_targets'))
+      .select('platform, external_broadcast_id, playback_url').eq('live_session_id', session.id)
+      .in('platform', ['youtube', 'facebook', 'cloudflare_stream']);
+
+    const replayLinks = (targets || []).map(t => {
+      if (t.platform === 'youtube' && t.external_broadcast_id) return { platform: 'youtube', url: `https://www.youtube.com/watch?v=${t.external_broadcast_id}` };
+      // 페이스북은 페이지ID를 함께 알아야 정확한 영구 링크가 나오는데 여기서는 보관하지 않으므로,
+      // 페이지ID 없이도 대체로 동작하는 범용 워치 링크를 최선노력으로 사용한다(항상 보장되지는 않음).
+      if (t.platform === 'facebook' && t.external_broadcast_id) return { platform: 'facebook', url: `https://www.facebook.com/watch/?v=${t.external_broadcast_id}` };
+      // Cloudflare Stream은 녹화(recording.mode:'automatic')가 켜져 있어 방송이 끝나도 같은 HLS 주소가
+      // 그대로 다시보기 영상으로 이어진다 - 별도 워치 링크가 아니라 우리 사이트 안에서 바로 재생 가능.
+      if (t.platform === 'cloudflare_stream' && t.playback_url) return { platform: 'cloudflare_stream', hls_url: t.playback_url };
+      return null;
+    }).filter(Boolean);
+
+    // 🎬 하이라이트 클립(B8) - AI 영상분석/자동편집 파이프라인 없이, 채팅이 가장 몰린 구간을 "하이라이트
+    // 후보"로 근사한다. 실제 영상을 잘라내지 않고, 다시보기 영상의 해당 시각으로 바로 이동하는 타임스탬프
+    // 링크만 제공한다(유튜브는 ?t=초 로 특정 시각부터 재생 가능) - 격차분석 보고서가 제안한 경량 대체안.
+    let highlights = [];
+    try {
+      const { data: chatRows } = await supabase.from(liveTable('live_session_chat_messages'))
+        .select('created_at').eq('live_session_id', session.id).eq('is_hidden', false);
+      if (chatRows && chatRows.length > 0 && session.started_at) {
+        const startMs = new Date(session.started_at).getTime();
+        const BUCKET_SEC = 20;
+        const buckets = {};
+        chatRows.forEach(r => {
+          const offsetSec = Math.max(0, Math.floor((new Date(r.created_at).getTime() - startMs) / 1000));
+          const bucketIdx = Math.floor(offsetSec / BUCKET_SEC);
+          buckets[bucketIdx] = (buckets[bucketIdx] || 0) + 1;
+        });
+        const HIGHLIGHT_MIN_COUNT = 3; // 최소 이 정도는 몰려야 "하이라이트 후보"로 인정(너무 조용한 방송에서 억지로 만들지 않음)
+        const ranked = Object.entries(buckets)
+          .map(([idx, count]) => ({ offset_seconds: Number(idx) * BUCKET_SEC, message_count: count }))
+          .filter(b => b.message_count >= HIGHLIGHT_MIN_COUNT)
+          .sort((a, b) => b.message_count - a.message_count)
+          .slice(0, 5)
+          .sort((a, b) => a.offset_seconds - b.offset_seconds);
+
+        const youtubeTarget = (targets || []).find(t => t.platform === 'youtube');
+        highlights = ranked.map(h => ({
+          ...h,
+          youtube_url: youtubeTarget ? `https://www.youtube.com/watch?v=${youtubeTarget.external_broadcast_id}&t=${h.offset_seconds}s` : null
+        }));
+      }
+    } catch (hlErr) {
+      console.error('Error computing highlight timestamps:', hlErr);
+    }
+
+    res.json({
+      success: true,
+      data: { ...session, replay_links: replayLinks, highlights, deep_link: `/live/${req.params.slug}?session=${session.id}` },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching replay session:', err);
+    res.status(500).json({ error: 'Failed to fetch replay session', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/live/channels/:id/sessions', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_sessions'))
+      .select('*, products_with(id, name, images_urls)').eq('channel_id', req.params.id).order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], count: (data || []).length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching live sessions:', err);
+    res.status(500).json({ error: 'Failed to fetch sessions', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/live/channels/:id/sessions', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { title, scheduled_at } = req.body || {};
+    if (!title) return res.status(400).json({ error: 'Bad Request', message: 'title은 필수입니다', timestamp: new Date().toISOString() });
+    const { data, error } = await supabase.from(liveTable('live_sessions'))
+      .insert([{ channel_id: req.params.id, title, scheduled_at: scheduled_at || null, status: 'scheduled' }])
+      .select().single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating live session:', err);
+    res.status(500).json({ error: 'Failed to create session', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 세션 상태 전환(시작/종료) 및 상품핀 변경 - 호스트 관제화면의 핵심 엔드포인트.
+// pinned_product_id는 해당 채널에 실제로 등록된 상품인지 확인 후에만 반영한다(엉뚱한 상품 고정 방지).
+app.patch('/api/admin/live/channels/:id/sessions/:sessionId', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const updates = {};
+    if (req.body.status !== undefined) {
+      if (!['scheduled', 'live', 'ended'].includes(req.body.status)) {
+        return res.status(400).json({ error: 'Bad Request', message: '유효하지 않은 status입니다', timestamp: new Date().toISOString() });
+      }
+      updates.status = req.body.status;
+      if (req.body.status === 'live') updates.started_at = new Date().toISOString();
+      // 방송 종료 시 브라우저 방송(WebRTC)도 함께 꺼둔다 - 세션이 끝났는데 webrtc_active만 계속 true로
+      // 남아 시청자 화면에 죽은 영상을 계속 붙잡고 있는 것을 방지.
+      if (req.body.status === 'ended') { updates.ended_at = new Date().toISOString(); updates.webrtc_active = false; }
+    }
+    const willGoLive = req.body.status === 'live';
+    if (req.body.pinned_product_id !== undefined) {
+      if (req.body.pinned_product_id !== null) {
+        const { data: link } = await supabase.from(liveTable('channel_products'))
+          .select('id').eq('channel_id', req.params.id).eq('product_id', req.body.pinned_product_id).maybeSingle();
+        if (!link) return res.status(400).json({ error: 'Bad Request', message: '이 채널에 등록되지 않은 상품은 고정할 수 없습니다', timestamp: new Date().toISOString() });
+      }
+      updates.pinned_product_id = req.body.pinned_product_id;
+    }
+
+    const { data, error } = await supabase.from(liveTable('live_sessions'))
+      .update(updates).eq('id', req.params.sessionId).eq('channel_id', req.params.id).select().single();
+    if (error) throw error;
+
+    // 채널(방송자) 팔로우 + 라이브 시작 알림 - 틱톡/유튜브 매출견인기능 격차분석 2번 항목.
+    // 별도 "팔로우" 테이블을 새로 만들지 않고, 이미 있는 채널 가입(channel_members_live, status='active')을
+    // 그대로 "팔로워"로 재사용한다 - 기존 재입고 알림(triggerRestockNotifications)과 동일한 패턴.
+    if (willGoLive) {
+      notifyChannelMembersLiveStarted(req.params.id, data, getBaseUrl(req)).catch(err => console.error('라이브 시작 알림 발송 오류:', err.message));
+    }
+
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating live session:', err);
+    res.status(500).json({ error: 'Failed to update session', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 📩 카카오 알림톡(AlimTalk) - 알리고(Aligo) API 연동
+// ============================================
+// 형님이 카카오 비즈니스 채널(발신프로필)과 알리고 계정을 만들고 아래 설정(관리자 화면 → 라이브 방송
+// 진행 화면의 "카카오 알림톡 설정")에 API키/USERID/발신프로필키/발신번호/템플릿코드를 등록하면 동작한다.
+// 알림톡은 카카오 사전 심사를 통과한 "템플릿"으로만 보낼 수 있어서 자유 텍스트를 그대로 못 보낸다 -
+// tpl_code_live_start에 등록한 템플릿 코드를 쓰고, 그 템플릿 심사 시 등록한 문구/변수 형식과 최대한
+// 비슷하게 message를 구성해야 실제로 발송이 통과된다.
+// 알림톡이 설정되어 있지 않거나 개별 발송이 실패해도 방송 시작 자체나 기존 인앱 알림에는 절대 영향을
+// 주지 않는다 - 완전히 별개의 best-effort 경로다.
+async function getKakaoAlimtalkConfig() {
+  const { data } = await supabase.from(liveTable('kakao_alimtalk_configs')).select('*').order('created_at', { ascending: true }).limit(1).maybeSingle();
+  return data || null;
+}
+
+async function sendKakaoAlimtalk({ phone, recvname, subject, message, failoverMessage, testMode }) {
+  const cfg = await getKakaoAlimtalkConfig();
+  if (!cfg || !cfg.enabled) throw new Error('카카오 알림톡이 아직 설정/활성화되지 않았습니다');
+  const apiKey = decryptSecret(cfg.api_key);
+  if (!apiKey || !cfg.user_id || !cfg.sender_key || !cfg.sender_phone || !cfg.tpl_code_live_start) {
+    throw new Error('카카오 알림톡 설정이 불완전합니다 (API키/USERID/발신프로필키/발신번호/템플릿코드를 모두 등록해주세요)');
+  }
+  const digitsPhone = String(phone || '').replace(/[^0-9]/g, '');
+  if (!digitsPhone) throw new Error('수신자 전화번호가 없습니다');
+
+  const body = new URLSearchParams({
+    apikey: apiKey, userid: cfg.user_id, senderkey: cfg.sender_key, tpl_code: cfg.tpl_code_live_start,
+    sender: cfg.sender_phone, receiver_1: digitsPhone, subject_1: subject, message_1: message,
+    testMode: testMode ? 'Y' : 'N'
+  });
+  if (recvname) body.set('recvname_1', recvname);
+  // failover: 알림톡이 실패(카카오톡 미설치/알림톡 차단 등)하면 문자(SMS/LMS)로 대체 발송한다
+  if (failoverMessage) {
+    body.set('failover', 'Y');
+    body.set('fsubject_1', subject);
+    body.set('fmessage_1', failoverMessage);
+  }
+
+  const resp = await fetch('https://kakaoapi.aligo.in/akv10/alimtalk/send/', {
+    method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString(),
+    signal: AbortSignal.timeout(15000)
+  });
+  const json = await resp.json().catch(() => null);
+  if (!resp.ok || !json || Number(json.code) !== 0) {
+    throw new Error(`알림톡 발송 실패: ${json?.message || resp.status}`);
+  }
+  return json;
+}
+
+async function notifyChannelMembersLiveStarted(channelId, session, baseUrl) {
+  const { data: members } = await supabase.from(liveTable('channel_members')).select('user_id').eq('channel_id', channelId).eq('status', 'active');
+  if (!members || members.length === 0) return;
+  const { data: channel } = await supabase.from(liveTable('channels')).select('name, slug').eq('id', channelId).maybeSingle();
+  if (!channel) return;
+  const notifRows = members.map(m => ({
+    user_id: m.user_id, type: 'live_started', title: '🔴 라이브 시작',
+    message: `가입하신 "${channel.name}" 채널이 방금 라이브를 시작했습니다${session && session.title ? ` - ${session.title}` : ''}`,
+    link: `/live/${channel.slug}`
+  }));
+  await supabase.from('notifications_with').insert(notifRows);
+
+  // 📩 카카오 알림톡 - 단골(채널 가입자) 중 연락처를 등록하고 마케팅 수신에 동의한 회원에게만 보낸다.
+  try {
+    const cfg = await getKakaoAlimtalkConfig();
+    if (cfg && cfg.enabled) {
+      const userIds = members.map(m => m.user_id);
+      const { data: recipients } = await supabase.from('profiles').select('id, full_name, phone, marketing_consent')
+        .in('id', userIds).eq('marketing_consent', true).not('phone', 'is', null);
+      const liveUrl = `${baseUrl || process.env.SITE_URL || ''}/live/${channel.slug}`;
+      const subject = '라이브 시작 알림';
+      for (const r of (recipients || [])) {
+        const message = `[${channel.name}] 지금 라이브 방송이 시작되었어요!\n${session && session.title ? session.title : ''}\n\n지금 바로 보러 가기\n${liveUrl}`;
+        await sendKakaoAlimtalk({
+          phone: r.phone, recvname: r.full_name || undefined, subject, message,
+          failoverMessage: `[${channel.name}] 라이브 시작! ${liveUrl}`
+        }).catch(err => console.error(`알림톡 발송 실패 (user ${r.id}):`, err.message));
+      }
+    }
+  } catch (err) {
+    console.error('카카오 알림톡 일괄발송 처리 오류:', err.message);
+  }
+}
+
+// ============================================
+// 📅 방송 예약 알림 (경쟁사 기능 격차 백로그 2번) - 네이버쇼핑라이브 "방송 예정" 알림과 동일한 컨셉.
+// ============================================
+// 이 프로젝트는 지금까지 "스케줄러/지속연결 없이 읽는 시점에 처리" 원칙을 지켜왔지만, 장바구니 이탈
+// 리마인더(runCartReminderScan)·재구매 알림 배치가 이미 node-cron 인프로세스 스케줄러를 쓰고 있으므로
+// (완전히 새로운 인프라가 아니라 기존에 검증된 패턴) 동일하게 node-cron으로 주기 스캔한다.
+// live_sessions_live.scheduled_at이 "이제부터 N분 이내"로 들어오면(관리자가 설정한 minutes_before),
+// 아직 알림을 보낸 적 없는(reminder_sent_at IS NULL) 예정 세션을 찾아 채널 단골 전원에게 인앱 알림 +
+// (설정되어 있으면) 카카오 알림톡을 보낸다. 한 세션당 정확히 한 번만 발송된다(reminder_sent_at로 방어).
+const DEFAULT_LIVE_REMINDER_SETTINGS = { enabled: false, minutes_before: 30 };
+let liveReminderSettingsCache = null;
+let liveReminderSettingsCacheAt = 0;
+const LIVE_REMINDER_SETTINGS_CACHE_TTL_MS = 30 * 1000;
+
+function normalizeLiveReminderSettings(value) {
+  const v = value && typeof value === 'object' ? value : {};
+  return {
+    enabled: !!v.enabled,
+    minutes_before: Number.isFinite(Number(v.minutes_before)) ? Math.min(1440, Math.max(5, Math.floor(Number(v.minutes_before)))) : DEFAULT_LIVE_REMINDER_SETTINGS.minutes_before
+  };
+}
+
+async function getLiveReminderSettings() {
+  const now = Date.now();
+  if (liveReminderSettingsCache && (now - liveReminderSettingsCacheAt) < LIVE_REMINDER_SETTINGS_CACHE_TTL_MS) {
+    return liveReminderSettingsCache;
+  }
+  try {
+    const { data, error } = await supabase.from('platform_settings').select('value').eq('key', liveSettingKey('live_reminder_settings')).maybeSingle();
+    const settings = normalizeLiveReminderSettings(error || !data ? null : data.value);
+    liveReminderSettingsCache = settings;
+    liveReminderSettingsCacheAt = now;
+    return settings;
+  } catch (err) {
+    console.error('Error fetching live reminder settings:', err);
+    return liveReminderSettingsCache || DEFAULT_LIVE_REMINDER_SETTINGS;
+  }
+}
+
+// "방송 예정" 알림 버전 - notifyChannelMembersLiveStarted와 거의 같은 형태지만 문구가 "시작했습니다"가
+// 아니라 "곧 시작합니다"이고, 실행 주체가 요청(req)이 아니라 cron이라 baseUrl을 SITE_URL로만 구한다.
+async function notifyChannelMembersLiveReminder(channelId, session, channel) {
+  const { data: members } = await supabase.from(liveTable('channel_members')).select('user_id').eq('channel_id', channelId).eq('status', 'active');
+  if (!members || members.length === 0) return 0;
+
+  const minutesLeft = Math.max(0, Math.round((new Date(session.scheduled_at).getTime() - Date.now()) / 60000));
+  const notifRows = members.map(m => ({
+    user_id: m.user_id, type: 'live_reminder', title: '📅 방송 예정 알림',
+    message: `가입하신 "${channel.name}" 채널이 잠시 후(약 ${minutesLeft}분 뒤) 라이브를 시작합니다${session.title ? ` - ${session.title}` : ''}`,
+    link: `/live/${channel.slug}`
+  }));
+  await supabase.from('notifications_with').insert(notifRows);
+
+  try {
+    const cfg = await getKakaoAlimtalkConfig();
+    if (cfg && cfg.enabled) {
+      const userIds = members.map(m => m.user_id);
+      const { data: recipients } = await supabase.from('profiles').select('id, full_name, phone, marketing_consent')
+        .in('id', userIds).eq('marketing_consent', true).not('phone', 'is', null);
+      const liveUrl = `${process.env.SITE_URL || ''}/live/${channel.slug}`;
+      const subject = '방송 예정 알림';
+      for (const r of (recipients || [])) {
+        const message = `[${channel.name}] 곧 라이브 방송이 시작돼요!\n${session.title || ''}\n약 ${minutesLeft}분 뒤 시작 예정\n\n미리 알림 받고 놓치지 마세요\n${liveUrl}`;
+        await sendKakaoAlimtalk({
+          phone: r.phone, recvname: r.full_name || undefined, subject, message,
+          failoverMessage: `[${channel.name}] 곧 라이브 시작! ${liveUrl}`
+        }).catch(err => console.error(`방송예정 알림톡 발송 실패 (user ${r.id}):`, err.message));
+      }
+    }
+  } catch (err) {
+    console.error('방송예정 카카오 알림톡 일괄발송 처리 오류:', err.message);
+  }
+  return members.length;
+}
+
+// 관리자 수동 실행(run-now)과 node-cron 정기 스캔 양쪽에서 호출된다 (cart reminder와 동일한 패턴).
+async function runLiveSessionReminderScan(opts = {}) {
+  const result = { scanned: 0, notified_sessions: 0, notified_members: 0 };
+  const settings = await getLiveReminderSettings();
+  if (!settings.enabled && !opts.force) return result;
+
+  const windowEnd = new Date(Date.now() + settings.minutes_before * 60 * 1000).toISOString();
+  const { data: sessions, error } = await supabase
+    .from(liveTable('live_sessions'))
+    .select('id, channel_id, title, scheduled_at')
+    .eq('status', 'scheduled')
+    .is('reminder_sent_at', null)
+    .not('scheduled_at', 'is', null)
+    .lte('scheduled_at', windowEnd);
+  if (error) { console.error('Error scanning live session reminders:', error); return result; }
+
+  for (const session of sessions || []) {
+    result.scanned++;
+    const { data: channel } = await supabase.from(liveTable('channels')).select('name, slug').eq('id', session.channel_id).maybeSingle();
+    if (!channel) continue;
+    try {
+      const notifiedCount = await notifyChannelMembersLiveReminder(session.channel_id, session, channel);
+      result.notified_sessions++;
+      result.notified_members += notifiedCount;
+    } catch (err) {
+      console.error(`Error sending live reminder for session ${session.id}:`, err.message);
+    }
+    // 발송 성공/실패와 무관하게 세션당 딱 한 번만 시도하도록 항상 표시(무한 재시도로 도배되는 것을 방지) -
+    // 장바구니 리마인더와 달리 "방송 시작 임박"은 재발송할 의미가 없는 1회성 알림이기 때문.
+    await supabase.from(liveTable('live_sessions')).update({ reminder_sent_at: new Date().toISOString() }).eq('id', session.id);
+  }
+  return result;
+}
+
+// 5분마다 자동 스캔 (설정에서 꺼져있으면 runLiveSessionReminderScan 내부에서 즉시 빈 결과로 반환)
+cron.schedule('*/5 * * * *', () => {
+  runLiveSessionReminderScan().catch(err => console.error('Live session reminder cron error:', err));
+});
+
+// 공개: 방송 예약 알림 기능 활성화 여부만 (다른 공개 설정 엔드포인트와 동일하게 최소 정보만 노출)
+app.get('/api/settings/live-reminder', async (req, res) => {
+  try {
+    const settings = await getLiveReminderSettings();
+    res.json({ success: true, data: { enabled: settings.enabled, minutes_before: settings.minutes_before }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch live reminder settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 방송 예약 알림 설정 + 지금 대기 중인(알림 발송 대상) 예정 세션 개수 조회
+app.get('/api/admin/settings/live-reminder', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const settings = await getLiveReminderSettings();
+    const windowEnd = new Date(Date.now() + settings.minutes_before * 60 * 1000).toISOString();
+    const { count, error: countErr } = await supabase
+      .from(liveTable('live_sessions'))
+      .select('id', { count: 'exact', head: true })
+      .eq('status', 'scheduled')
+      .is('reminder_sent_at', null)
+      .not('scheduled_at', 'is', null)
+      .lte('scheduled_at', windowEnd);
+    if (countErr) throw countErr;
+    res.json({ success: true, data: settings, pending_count: count || 0, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching live reminder settings:', err);
+    res.status(500).json({ error: 'Failed to fetch live reminder settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.patch('/api/admin/settings/live-reminder', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const settings = normalizeLiveReminderSettings(req.body);
+    const { error } = await supabase.from('platform_settings').upsert({
+      key: liveSettingKey('live_reminder_settings'), value: settings, updated_at: new Date().toISOString(), updated_by: req.user.id
+    }, { onConflict: 'key' });
+    if (error) throw error;
+    liveReminderSettingsCache = settings;
+    liveReminderSettingsCacheAt = Date.now();
+    res.json({ success: true, data: settings, message: '저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating live reminder settings:', err);
+    res.status(500).json({ error: 'Failed to update live reminder settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 지금 즉시 스캔 실행 (설정이 꺼져있어도 강제 실행 - 테스트/수동 발송 목적)
+app.post('/api/admin/live-reminder/run-now', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const result = await runLiveSessionReminderScan({ force: true });
+    res.json({ success: true, data: result, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error running live reminder scan:', err);
+    res.status(500).json({ error: 'Failed to run live reminder scan', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 카카오 알림톡 설정 조회 - api_key 원문은 절대 응답에 포함하지 않는다(has_api_key만 알려줌, pg_configs와 동일 패턴)
+app.get('/api/admin/live/kakao-alimtalk/config', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const cfg = await getKakaoAlimtalkConfig();
+    res.json({
+      success: true,
+      data: cfg ? {
+        has_api_key: !!cfg.api_key, user_id: cfg.user_id || null, sender_key: cfg.sender_key || null,
+        sender_phone: cfg.sender_phone || null, tpl_code_live_start: cfg.tpl_code_live_start || null,
+        enabled: cfg.enabled, last_tested_at: cfg.last_tested_at, last_test_status: cfg.last_test_status, last_test_message: cfg.last_test_message
+      } : { has_api_key: false, user_id: null, sender_key: null, sender_phone: null, tpl_code_live_start: null, enabled: false },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch kakao alimtalk config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.patch('/api/admin/live/kakao-alimtalk/config', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const existing = await getKakaoAlimtalkConfig();
+    const update = { updated_at: new Date().toISOString() };
+    if (typeof req.body.api_key === 'string' && req.body.api_key.trim()) update.api_key = encryptSecret(req.body.api_key.trim());
+    if (typeof req.body.user_id === 'string') update.user_id = req.body.user_id.trim() || null;
+    if (typeof req.body.sender_key === 'string') update.sender_key = req.body.sender_key.trim() || null;
+    if (typeof req.body.sender_phone === 'string') update.sender_phone = req.body.sender_phone.trim() || null;
+    if (typeof req.body.tpl_code_live_start === 'string') update.tpl_code_live_start = req.body.tpl_code_live_start.trim() || null;
+    if (typeof req.body.enabled === 'boolean') update.enabled = req.body.enabled;
+
+    let data, error;
+    if (existing) {
+      ({ data, error } = await supabase.from(liveTable('kakao_alimtalk_configs')).update(update).eq('id', existing.id).select().single());
+    } else {
+      ({ data, error } = await supabase.from(liveTable('kakao_alimtalk_configs')).insert([update]).select().single());
+    }
+    if (error) throw error;
+    res.json({ success: true, data: { has_api_key: !!data.api_key, user_id: data.user_id, sender_key: data.sender_key, sender_phone: data.sender_phone, tpl_code_live_start: data.tpl_code_live_start, enabled: data.enabled }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update kakao alimtalk config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 내 계정(profiles.phone)으로 테스트 알림톡을 보내본다 - 실제 방송을 켜지 않고도 설정이 맞는지 확인 가능
+app.post('/api/admin/live/kakao-alimtalk/test', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const phone = (req.body && req.body.phone) || null;
+    let targetPhone = phone;
+    let recvname;
+    if (!targetPhone) {
+      const { data: me } = await supabase.from('profiles').select('phone, full_name').eq('id', req.user.id).maybeSingle();
+      targetPhone = me && me.phone;
+      recvname = me && me.full_name;
+    }
+    if (!targetPhone) return res.status(400).json({ error: 'Bad Request', message: '테스트로 보낼 전화번호가 없습니다 (내 프로필에 연락처를 등록하거나 phone을 직접 넘겨주세요)', timestamp: new Date().toISOString() });
+
+    const liveUrl = `${getBaseUrl(req)}/live/test`;
+    await sendKakaoAlimtalk({
+      phone: targetPhone, recvname,
+      subject: '라이브 시작 알림', message: `[테스트 채널] 지금 라이브 방송이 시작되었어요!\n테스트 발송입니다\n\n지금 바로 보러 가기\n${liveUrl}`,
+      failoverMessage: `[테스트 채널] 라이브 시작! ${liveUrl}`
+    });
+    const existing = await getKakaoAlimtalkConfig();
+    if (existing) await supabase.from(liveTable('kakao_alimtalk_configs')).update({ last_tested_at: new Date().toISOString(), last_test_status: 'success', last_test_message: null }).eq('id', existing.id);
+    res.json({ success: true, message: '테스트 알림톡을 발송했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    const existing = await getKakaoAlimtalkConfig().catch(() => null);
+    if (existing) await supabase.from(liveTable('kakao_alimtalk_configs')).update({ last_tested_at: new Date().toISOString(), last_test_status: 'failed', last_test_message: err.message }).eq('id', existing.id);
+    res.status(400).json({ error: 'Test Send Failed', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 주문에 채널 출처를 기록하고 정산 원장에 반영한다. POST /api/orders 성공 이후 fire-and-forget으로 호출되며,
+// 실패해도 이미 성사된 주문 자체를 되돌리지 않는다(주문 흐름의 안정성이 정산 기록보다 우선).
+async function recordChannelOrderAttribution(orderId, orderNumber, finalPrice, channelId, userId, attribution) {
+  const attr = attribution || {};
+  await supabase.from(liveTable('channel_ledger')).insert([{
+    channel_id: channelId, order_ref: orderNumber, party_role: 'channel', amount: finalPrice, status: 'pending',
+    source_platform: attr.source_platform || null, campaign: attr.campaign || null,
+    referrer_code: attr.referrer_code || null, coupon_code: attr.coupon_code || null
+  }]);
+  // 구매자가 이 채널의 팬(가입자)이면 구매 활동점수도 함께 적립 - 미가입자의 구매는 채널 매출로는
+  // 잡히지만 팬 활동점수는 쌓이지 않는다(가입은 명시적 행동이어야 한다는 원칙, 위 awardFanActivity와 동일).
+  // ref_id(orderId)를 반드시 함께 넘겨야 한다 - 넘기지 않으면 ref_id가 null로 저장되어, 사용자가 직접
+  // POST /fan-activity를 호출할 때 저장되는 ref_id=order_id와 값이 달라져 (channel_id,user_id,action_type,ref_id)
+  // 유니크 인덱스가 중복 지급을 잡아내지 못하고 이중 적립되는 버그가 있었다.
+  await awardFanActivity(channelId, userId, 'purchase', orderId).catch(() => {});
+
+}
+
+// ============================================
 // LIVE+ 채널 업종별 자격/등록정보 관리 - 관리자 전용
 // ============================================
 // 이 엔드포인트들은 자격의 법적 유효성을 판단하지 않는다. 형님(운영자)이 실제 법적 검토를 마친 뒤
@@ -19544,6 +20933,2225 @@ app.delete('/api/admin/live/channels/:id/licenses/:licenseId', authenticate, req
   } catch (err) {
     console.error('Error deleting channel license:', err);
     res.status(500).json({ error: 'Failed to delete license', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// LIVE+ 세션별 재고예약 (라이브 배정재고 · 장바구니/결제진행 예약 · 만료 · 확정 · 취소/복원)
+// ============================================
+// 동시주문 방지는 Postgres 함수(reserve/confirm/release_live_session_inventory) 내부의 단일
+// UPDATE...WHERE로 원자적으로 처리한다. 만료는 스케줄러 없이 "조회/예약 시점에 지난 예약을 정리"하는
+// 지연 방식(lazy sweep)으로 처리해 클라우드 재시작 등으로 스케줄이 유실될 걱정이 없게 했다.
+const LIVE_RESERVATION_TTL_MS = { cart: 15 * 60 * 1000, checkout: 10 * 60 * 1000 };
+
+function withAvailableQty(inv) {
+  if (!inv) return inv;
+  const available_qty = Math.max(inv.allocated_qty - inv.safety_stock - inv.reserved_qty - inv.sold_qty, 0);
+  return { ...inv, available_qty };
+}
+
+// 만료 시각이 지난(cart/checkout 상태 그대로 남아있는) 예약들을 찾아 재고를 되돌리고 상태를 expired로 바꾼다.
+async function expireStaleLiveReservations(liveSessionId, productId) {
+  const { data: stale } = await supabase.from(liveTable('live_session_reservations'))
+    .select('*').eq('live_session_id', liveSessionId).eq('product_id', productId)
+    .in('status', ['cart', 'checkout']).lt('expires_at', new Date().toISOString());
+  if (!stale || stale.length === 0) return;
+  const { data: inv } = await supabase.from(liveTable('live_session_inventory'))
+    .select('id').eq('live_session_id', liveSessionId).eq('product_id', productId).maybeSingle();
+  for (const r of stale) {
+    if (inv) {
+      await supabase.rpc(liveRpc('release_live_session_inventory'), { p_inventory_id: inv.id, p_qty: r.quantity });
+      await supabase.from(liveTable('live_session_inventory_log')).insert([{
+        inventory_id: inv.id, reservation_id: r.id, change_type: 'expire', delta_reserved: -r.quantity, note: '예약 시간 만료로 자동 해제'
+      }]);
+    }
+    await supabase.from(liveTable('live_session_reservations')).update({ status: 'expired', updated_at: new Date().toISOString() }).eq('id', r.id);
+  }
+}
+
+// 주문 생성이 성공한 뒤 호출된다 - 이미 reserved 상태로 재고를 선점해둔 예약을 sold로 확정한다.
+// 소유자가 아니거나 이미 처리/만료된 예약 ID가 섞여 들어와도(악의적 조작 포함) 조용히 건너뛴다 -
+// 재고 확정은 반드시 "실제로 이 사용자가 이 세션에서 잡아둔, 아직 유효한 예약"에 대해서만 일어나야 한다.
+async function confirmLiveSessionReservations(reservationIds, userId, orderId) {
+  for (const reservationId of reservationIds) {
+    const { data: reservation } = await supabase.from(liveTable('live_session_reservations')).select('*').eq('id', reservationId).maybeSingle();
+    if (!reservation || reservation.user_id !== userId) continue;
+    if (!['cart', 'checkout'].includes(reservation.status)) continue;
+    if (reservation.expires_at && new Date(reservation.expires_at) < new Date()) continue;
+
+    const { data: inv } = await supabase.from(liveTable('live_session_inventory'))
+      .select('id').eq('live_session_id', reservation.live_session_id).eq('product_id', reservation.product_id).maybeSingle();
+    if (!inv) continue;
+
+    await supabase.rpc(liveRpc('confirm_live_session_inventory'), { p_inventory_id: inv.id, p_qty: reservation.quantity });
+    await supabase.from(liveTable('live_session_reservations'))
+      .update({ status: 'confirmed', order_id: orderId, updated_at: new Date().toISOString() }).eq('id', reservationId);
+    await supabase.from(liveTable('live_session_inventory_log')).insert([{
+      inventory_id: inv.id, reservation_id: reservationId, change_type: 'confirm',
+      delta_reserved: -reservation.quantity, delta_sold: reservation.quantity, actor_user_id: userId, note: `주문 확정 - ${orderId}`
+    }]);
+  }
+}
+
+// 라이브 세션에 상품별 재고 풀을 배정/재배정한다. 채널에 이미 등록된 상품만 배정 가능.
+// 주의: products_with.stock(전체 재고)과는 별개의 "이 세션에 얼마나 내주기로 했는지"를 관리하는 풀이며,
+// 전체 재고와의 정합성(더 많이 배정하지 않기)은 운영자 책임 - 자동으로 상호 검증하지 않는다.
+app.post('/api/admin/live/channels/:id/sessions/:sessionId/inventory', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { product_id, allocated_qty, safety_stock } = req.body || {};
+    const allocQty = parseInt(allocated_qty, 10);
+    const safety = safety_stock !== undefined ? parseInt(safety_stock, 10) : 0;
+    if (!product_id) return res.status(400).json({ error: 'Bad Request', message: 'product_id는 필수입니다', timestamp: new Date().toISOString() });
+    if (!Number.isInteger(allocQty) || allocQty < 0) return res.status(400).json({ error: 'Bad Request', message: 'allocated_qty는 0 이상의 정수여야 합니다', timestamp: new Date().toISOString() });
+    if (!Number.isInteger(safety) || safety < 0) return res.status(400).json({ error: 'Bad Request', message: 'safety_stock는 0 이상의 정수여야 합니다', timestamp: new Date().toISOString() });
+
+    const { data: link } = await supabase.from(liveTable('channel_products')).select('id').eq('channel_id', req.params.id).eq('product_id', product_id).maybeSingle();
+    if (!link) return res.status(400).json({ error: 'Bad Request', message: '이 채널에 등록되지 않은 상품에는 재고를 배정할 수 없습니다', timestamp: new Date().toISOString() });
+
+    const { data: existing } = await supabase.from(liveTable('live_session_inventory'))
+      .select('*').eq('live_session_id', req.params.sessionId).eq('product_id', product_id).maybeSingle();
+
+    const { data, error } = await supabase.from(liveTable('live_session_inventory'))
+      .upsert([{ live_session_id: req.params.sessionId, product_id, allocated_qty: allocQty, safety_stock: safety }], { onConflict: 'live_session_id,product_id' })
+      .select().single();
+    if (error) throw error;
+
+    await supabase.from(liveTable('live_session_inventory_log')).insert([{
+      inventory_id: data.id, change_type: 'allocate',
+      delta_allocated: allocQty - (existing?.allocated_qty || 0), actor_user_id: req.user.id,
+      note: existing ? `재배정: 배정재고 ${existing.allocated_qty}→${allocQty}, 안전재고 ${existing.safety_stock}→${safety}` : `최초 배정: ${allocQty}개, 안전재고 ${safety}개`
+    }]);
+
+    res.status(201).json({ success: true, data: withAvailableQty(data), timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error allocating live session inventory:', err);
+    res.status(500).json({ error: 'Failed to allocate inventory', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/live/channels/:id/sessions/:sessionId/inventory', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_session_inventory'))
+      .select('*, products_with(id, name, images_urls)').eq('live_session_id', req.params.sessionId).order('created_at', { ascending: true });
+    if (error) throw error;
+    res.json({ success: true, data: (data || []).map(withAvailableQty), count: (data || []).length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching live session inventory:', err);
+    res.status(500).json({ error: 'Failed to fetch inventory', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공개 가용재고 조회 - 시청 화면에서 "N개 남음" 표시용. 관리자 내부 수치(sold_qty 등)는 노출하지 않는다.
+app.get('/api/live/channels/:slug/sessions/:sessionId/inventory', async (req, res) => {
+  try {
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const { data: rows, error } = await supabase.from(liveTable('live_session_inventory'))
+      .select('product_id, allocated_qty, safety_stock, reserved_qty, sold_qty').eq('live_session_id', req.params.sessionId);
+    if (error) throw error;
+    for (const r of (rows || [])) await expireStaleLiveReservations(req.params.sessionId, r.product_id);
+    const { data: freshRows } = await supabase.from(liveTable('live_session_inventory'))
+      .select('product_id, allocated_qty, safety_stock, reserved_qty, sold_qty').eq('live_session_id', req.params.sessionId);
+    const data = (freshRows || []).map(r => ({ product_id: r.product_id, available_qty: withAvailableQty(r).available_qty }));
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching public live session inventory:', err);
+    res.status(500).json({ error: 'Failed to fetch inventory', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 타임세일 / 카운트다운 (매출견인기능 격차분석 2-2) — 방송 중 관리자가 "지금부터 N분간 이 상품 할인" 버튼을
+// 누르면 이 상품의 결제 단가가 일시적으로 낮아지고, 시청 화면에는 남은 시간이 카운트다운으로 표시된다.
+// 만료(ends_at 경과) 또는 취소(cancelled_at)되면 즉시 원래 라이브 채널가로 돌아간다 - 이미 있는 채널가격정책
+// 엔진(product_channel_prices_with, channel='live')을 대체하는 게 아니라 "그 위에 시간 한정으로 얹는" 개념.
+// ============================================
+async function cancelActiveFlashSale(sessionId, productId) {
+  await supabase.from(liveTable('live_flash_sales'))
+    .update({ cancelled_at: new Date().toISOString() })
+    .eq('live_session_id', sessionId).eq('product_id', productId)
+    .is('cancelled_at', null).gt('ends_at', new Date().toISOString());
+}
+
+// 관리자: 타임세일 시작 - 같은 상품에 이미 진행 중인 타임세일이 있으면 먼저 종료시키고 새로 시작한다(조건 변경 가능하게).
+app.post('/api/admin/live/channels/:id/sessions/:sessionId/flash-sales', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { product_id, discount_price, discount_percent, duration_minutes } = req.body || {};
+    if (!product_id) {
+      return res.status(400).json({ error: 'Bad Request', message: 'product_id는 필수입니다', timestamp: new Date().toISOString() });
+    }
+    const minutes = Number(duration_minutes) || 10;
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 180) {
+      return res.status(400).json({ error: 'Bad Request', message: 'duration_minutes는 1~180 사이여야 합니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id, status').eq('id', req.params.sessionId).eq('channel_id', req.params.id).maybeSingle();
+    if (!session) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const { data: link } = await supabase.from(liveTable('channel_products')).select('id').eq('channel_id', req.params.id).eq('product_id', product_id).maybeSingle();
+    if (!link) return res.status(400).json({ error: 'Bad Request', message: '이 채널에 등록되지 않은 상품입니다', timestamp: new Date().toISOString() });
+
+    const { data: product } = await supabase.from('products_with').select('id, price, discount_price, cost_price, category').eq('id', product_id).maybeSingle();
+    if (!product) return res.status(404).json({ error: 'Not Found', message: '상품을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    // 기준가(원래 라이브 채널가)를 먼저 구해서, discount_percent로 넘어온 경우 이 값 기준으로 할인가를 계산한다.
+    const basePrice = (await resolveLiveChannelPrices([{ id: product.id, cost_price: product.cost_price, category: product.category, fallbackPrice: effectivePriceOf(product) }]))[product.id];
+
+    let discountPrice;
+    if (discount_price !== undefined && discount_price !== null && discount_price !== '') {
+      discountPrice = Number(discount_price);
+    } else if (discount_percent !== undefined && discount_percent !== null && discount_percent !== '') {
+      const pct = Number(discount_percent);
+      if (!Number.isFinite(pct) || pct <= 0 || pct >= 100) {
+        return res.status(400).json({ error: 'Bad Request', message: 'discount_percent는 0~100 사이여야 합니다', timestamp: new Date().toISOString() });
+      }
+      discountPrice = Math.round(basePrice * (1 - pct / 100));
+    } else {
+      return res.status(400).json({ error: 'Bad Request', message: 'discount_price 또는 discount_percent 중 하나는 필요합니다', timestamp: new Date().toISOString() });
+    }
+    if (!Number.isFinite(discountPrice) || discountPrice < 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '할인가가 올바르지 않습니다', timestamp: new Date().toISOString() });
+    }
+    if (discountPrice >= basePrice) {
+      return res.status(400).json({ error: 'Bad Request', message: `할인가(${discountPrice})는 현재 판매가(${basePrice})보다 낮아야 합니다`, timestamp: new Date().toISOString() });
+    }
+
+    await cancelActiveFlashSale(req.params.sessionId, product_id);
+
+    const startsAt = new Date();
+    const endsAt = new Date(startsAt.getTime() + minutes * 60 * 1000);
+    const { data, error } = await supabase.from(liveTable('live_flash_sales')).insert([{
+      live_session_id: req.params.sessionId,
+      product_id,
+      discount_price: discountPrice,
+      original_price: basePrice,
+      starts_at: startsAt.toISOString(),
+      ends_at: endsAt.toISOString(),
+      created_by: req.user.id
+    }]).select().single();
+    if (error) throw error;
+
+    res.status(201).json({ success: true, data, message: `${minutes}분간 타임세일을 시작했습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error starting flash sale:', err);
+    res.status(500).json({ error: 'Failed to start flash sale', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 이 세션의 타임세일 이력 조회 (현재 진행중 + 과거분 전부)
+app.get('/api/admin/live/channels/:id/sessions/:sessionId/flash-sales', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_flash_sales'))
+      .select('*, products_with(id, name, images_urls)')
+      .eq('live_session_id', req.params.sessionId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    const now = new Date().toISOString();
+    const data2 = (data || []).map(f => ({ ...f, is_active: !f.cancelled_at && f.ends_at > now }));
+    res.json({ success: true, data: data2, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching flash sales:', err);
+    res.status(500).json({ error: 'Failed to fetch flash sales', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 타임세일 조기 종료
+app.patch('/api/admin/live/channels/:id/sessions/:sessionId/flash-sales/:flashSaleId/cancel', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_flash_sales'))
+      .update({ cancelled_at: new Date().toISOString() })
+      .eq('id', req.params.flashSaleId).eq('live_session_id', req.params.sessionId)
+      .select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '타임세일을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, message: '타임세일을 종료했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error cancelling flash sale:', err);
+    res.status(500).json({ error: 'Failed to cancel flash sale', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공개: 현재 진행 중인 타임세일만 - 시청화면 카운트다운 표시용 (3~5초 폴링 예상). 관리자 내부 컬럼은 노출하지 않는다.
+app.get('/api/live/channels/:slug/sessions/:sessionId/flash-sales', async (req, res) => {
+  try {
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const now = new Date().toISOString();
+    const { data, error } = await supabase.from(liveTable('live_flash_sales'))
+      .select('id, product_id, discount_price, original_price, ends_at, products_with(id, name, images_urls)')
+      .eq('live_session_id', req.params.sessionId)
+      .is('cancelled_at', null)
+      .gt('ends_at', now)
+      .lte('starts_at', now);
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching public flash sales:', err);
+    res.status(500).json({ error: 'Failed to fetch flash sales', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 장바구니(cart) 또는 결제진행(checkout) 단계로 재고를 예약한다. 이미 가입된 팬이 아니어도 예약은 누구나 할 수 있다
+// (구매 자체는 비회원도 가능한 정책과 동일 선상) - 팬 활동점수는 실제 결제 확정 시에만 반영된다.
+app.post('/api/live/channels/:slug/sessions/:sessionId/reservations', authenticate, async (req, res) => {
+  try {
+    const { product_id, quantity, stage } = req.body || {};
+    const qty = parseInt(quantity, 10);
+    const reservationStage = stage === 'checkout' ? 'checkout' : 'cart';
+    if (!product_id || !Number.isInteger(qty) || qty <= 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'product_id와 1 이상의 정수 quantity가 필요합니다', timestamp: new Date().toISOString() });
+    }
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id, status').eq('id', req.params.sessionId).eq('channel_id', channel.id).maybeSingle();
+    if (!session) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    // 세션별 재고예약은 "지금 방송 중인 세션"에 한해서만 새로 만들 수 있다 - scheduled(아직 시작 전)나
+    // ended(이미 종료됨) 세션의 오래된 딥링크로 들어와도 예약이 되어버리는 걸 막는 최소한의 방어.
+    // (이미 만들어진 예약을 결제까지 완료하는 것은 세션이 그 사이 종료돼도 막지 않는다 - 방송 중에 정당하게
+    // 확보한 예약을 방송 종료 타이밍 때문에 취소시키는 건 나쁜 UX이므로 별개로 취급)
+    if (session.status !== 'live') {
+      return res.status(409).json({ error: 'Conflict', message: '현재 방송 중인 세션이 아니므로 재고를 예약할 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    await expireStaleLiveReservations(req.params.sessionId, product_id);
+
+    const { data: inv } = await supabase.from(liveTable('live_session_inventory'))
+      .select('*').eq('live_session_id', req.params.sessionId).eq('product_id', product_id).maybeSingle();
+    if (!inv) return res.status(400).json({ error: 'Bad Request', message: '이 세션에 배정된 재고가 없습니다', timestamp: new Date().toISOString() });
+
+    // 매점(사재기) 방지: 계정 하나가 이 세션+상품에 대해 cart/checkout 상태로 보유할 수 있는 예약 수량에
+    // 상한을 둔다 (배정재고의 30%, 최소 1개). 여러 번에 걸쳐 나눠서 예약해도 합산 기준으로 막는다.
+    const perUserReservationCap = Math.max(1, Math.ceil(inv.allocated_qty * 0.3));
+    const { data: existingUserReservations } = await supabase.from(liveTable('live_session_reservations'))
+      .select('quantity').eq('live_session_id', req.params.sessionId).eq('product_id', product_id)
+      .eq('user_id', req.user.id).in('status', ['cart', 'checkout']);
+    const alreadyHeldQty = (existingUserReservations || []).reduce((sum, r) => sum + (Number(r.quantity) || 0), 0);
+    if (alreadyHeldQty + qty > perUserReservationCap) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: `계정당 이 상품은 최대 ${perUserReservationCap}개까지만 예약할 수 있습니다 (현재 보유 ${alreadyHeldQty}개)`,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    const { data: reserved } = await supabase.rpc(liveRpc('reserve_live_session_inventory'), { p_inventory_id: inv.id, p_qty: qty });
+
+    // PostgREST가 SQL NULL을 "필드가 전부 null인 객체"로 내려줄 가능성까지 방어적으로 함께 확인한다 -
+    // id가 없다는 것은 곧 WHERE 조건(가용재고 충분)을 만족하는 행이 없었다는 뜻(재고 부족).
+    if (!reserved || !reserved.id) return res.status(409).json({ error: 'Conflict', message: '재고가 부족합니다', timestamp: new Date().toISOString() });
+
+    const expiresAt = new Date(Date.now() + LIVE_RESERVATION_TTL_MS[reservationStage]).toISOString();
+    const { data: reservation, error: rErr } = await supabase.from(liveTable('live_session_reservations')).insert([{
+      live_session_id: req.params.sessionId, product_id, user_id: req.user.id, quantity: qty, status: reservationStage, expires_at: expiresAt
+    }]).select().single();
+    if (rErr) throw rErr;
+
+    await supabase.from(liveTable('live_session_inventory_log')).insert([{
+      inventory_id: inv.id, reservation_id: reservation.id, change_type: 'reserve', delta_reserved: qty, actor_user_id: req.user.id,
+      note: `${reservationStage === 'checkout' ? '결제진행' : '장바구니'} 예약`
+    }]);
+    // 🔴 홈 "지금 이 순간" 피드: 라이브에서 담은 것도 일반 장바구니 담기와 같은 활동 이벤트(activity_events_with)로 남긴다
+    recordCartAddEvents(req.user.id, [], [{ product_id, quantity: qty }]).catch(() => {});
+
+    res.status(201).json({ success: true, data: { ...reservation, available_qty: withAvailableQty(reserved).available_qty }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating live session reservation:', err);
+    res.status(500).json({ error: 'Failed to create reservation', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 예약 단계 전환(cart→checkout, 만료시간 연장) 또는 취소. 본인 예약만 조작 가능.
+app.patch('/api/live/channels/:slug/sessions/:sessionId/reservations/:reservationId', authenticate, async (req, res) => {
+  try {
+    const { data: reservation } = await supabase.from(liveTable('live_session_reservations'))
+      .select('*').eq('id', req.params.reservationId).eq('live_session_id', req.params.sessionId).maybeSingle();
+    if (!reservation) return res.status(404).json({ error: 'Not Found', message: '예약을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (reservation.user_id !== req.user.id) return res.status(403).json({ error: 'Forbidden', message: '본인의 예약만 변경할 수 있습니다', timestamp: new Date().toISOString() });
+    if (!['cart', 'checkout'].includes(reservation.status)) {
+      return res.status(409).json({ error: 'Conflict', message: `이미 ${reservation.status} 상태인 예약은 변경할 수 없습니다`, timestamp: new Date().toISOString() });
+    }
+
+    const { data: inv } = await supabase.from(liveTable('live_session_inventory'))
+      .select('*').eq('live_session_id', reservation.live_session_id).eq('product_id', reservation.product_id).maybeSingle();
+
+    if (req.body?.action === 'cancel') {
+      if (inv) {
+        await supabase.rpc(liveRpc('release_live_session_inventory'), { p_inventory_id: inv.id, p_qty: reservation.quantity });
+        await supabase.from(liveTable('live_session_inventory_log')).insert([{
+          inventory_id: inv.id, reservation_id: reservation.id, change_type: 'cancel', delta_reserved: -reservation.quantity, actor_user_id: req.user.id, note: '구매자 취소'
+        }]);
+      }
+      const { data, error } = await supabase.from(liveTable('live_session_reservations'))
+        .update({ status: 'cancelled', updated_at: new Date().toISOString() }).eq('id', reservation.id).select().single();
+      if (error) throw error;
+      return res.json({ success: true, data, timestamp: new Date().toISOString() });
+    }
+
+    const nextStage = req.body?.stage === 'checkout' ? 'checkout' : (req.body?.stage === 'cart' ? 'cart' : null);
+    if (!nextStage) return res.status(400).json({ error: 'Bad Request', message: "action:'cancel' 또는 stage:'cart'|'checkout'가 필요합니다", timestamp: new Date().toISOString() });
+
+    // stage 전환마다(cart↔checkout) TTL이 매번 새로 연장되는 것을 이용해 무제한으로 재고를 붙잡아두는 것을
+    // 막기 위해, 최초 예약 생성 시각(created_at) 기준 절대 만료시각을 둔다 - 아무리 전환을 반복해도 이
+    // 절대 만료시각을 넘어서 연장될 수는 없다(카운터 컬럼을 새로 추가하는 대신 이미 있는 created_at으로 계산).
+    const LIVE_RESERVATION_ABSOLUTE_MAX_MS = 20 * 60 * 1000;
+    const absoluteExpiryAt = new Date(new Date(reservation.created_at).getTime() + LIVE_RESERVATION_ABSOLUTE_MAX_MS);
+    const proposedExpiryAt = new Date(Date.now() + LIVE_RESERVATION_TTL_MS[nextStage]);
+    const expiresAt = (proposedExpiryAt > absoluteExpiryAt ? absoluteExpiryAt : proposedExpiryAt).toISOString();
+    const { data, error } = await supabase.from(liveTable('live_session_reservations'))
+      .update({ status: nextStage, expires_at: expiresAt, updated_at: new Date().toISOString() }).eq('id', reservation.id).select().single();
+    if (error) throw error;
+
+    if (inv) {
+      await supabase.from(liveTable('live_session_inventory_log')).insert([{
+        inventory_id: inv.id, reservation_id: reservation.id, change_type: 'extend', actor_user_id: req.user.id, note: `${reservation.status}→${nextStage} 전환, 만료시각 연장`
+      }]);
+    }
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating live session reservation:', err);
+    res.status(500).json({ error: 'Failed to update reservation', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// LIVE+ 딥링크·QR 출처 추적
+// ============================================
+// 채널·세션·상품(고정핀)·호스트는 서버가 채워주고, 유입플랫폼/캠페인/추천인/쿠폰은 호출하는 쪽(공유 버튼,
+// QR 생성기)이 쿼리스트링으로 지정한다. 이렇게 만들어진 링크를 그대로 주문 생성 시 live_attribution으로
+// 되돌려보내면 orders_with·channel_ledger_live까지 출처가 그대로 보존된다.
+app.get('/api/live/channels/:slug/sessions/:sessionId/deep-link', async (req, res) => {
+  try {
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id, slug, owner_user_id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id, pinned_product_id').eq('id', req.params.sessionId).eq('channel_id', channel.id).maybeSingle();
+    if (!session) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const params = new URLSearchParams();
+    params.set('session', session.id);
+    if (session.pinned_product_id) params.set('product', session.pinned_product_id);
+    if (channel.owner_user_id) params.set('host', channel.owner_user_id);
+    ['platform', 'campaign', 'ref', 'coupon'].forEach(k => { if (req.query[k]) params.set(k, String(req.query[k])); });
+
+    res.json({ success: true, data: { deep_link: `/live/${channel.slug}?${params.toString()}` }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error building live deep link:', err);
+    res.status(500).json({ error: 'Failed to build deep link', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 🎁 바이럴 공유쿠폰(소문내면 할인) - 회원: 이 세션에서 나만의 공유링크(코드)를 가져오거나 새로 만든다.
+// 이미 만든 적이 있으면 새로 만들지 않고 그대로 재사용한다(계속 눌러도 같은 링크가 나옴).
+app.get('/api/live/channels/:slug/sessions/:sessionId/share-coupon-link', authenticate, async (req, res) => {
+  try {
+    const settings = await getLiveShareCouponSettings();
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id, slug, owner_user_id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id, pinned_product_id').eq('id', req.params.sessionId).eq('channel_id', channel.id).maybeSingle();
+    if (!session) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const shareCode = await getOrCreateShareLink(session.id, channel.id, req.user.id);
+    const params = new URLSearchParams();
+    params.set('session', session.id);
+    if (session.pinned_product_id) params.set('product', session.pinned_product_id);
+    if (channel.owner_user_id) params.set('host', channel.owner_user_id);
+    params.set('share', shareCode);
+
+    res.json({
+      success: true,
+      data: { share_code: shareCode, deep_link: `/live/${channel.slug}?${params.toString()}`, discount_percent: settings.discount_percent },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error creating share coupon link:', err);
+    res.status(500).json({ error: 'Failed to create share coupon link', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// LIVE+ 세션별 실시간 채팅
+// ============================================
+// 방송을 보며 대화한다는 목적에 맞게 폴링(3초 간격, 클라이언트 쪽) 기반으로 단순하게 구현한다 - 이 프로젝트
+// 전체가 지금까지 지켜온 "스케줄러/지속연결 없이 읽는 시점에 처리" 원칙과 동일 (클라우드 샌드박스가 지속
+// 프로세스에 취약했던 전례 때문에 WebSocket/Realtime 구독 대신 REST 폴링을 선택).
+const LIVE_CHAT_RATE_LIMIT_MS = 2000; // 같은 사용자가 이 시간 안에 다시 보내면 거부(도배 방지)
+
+// 채팅에는 실명을 그대로 노출하지 않는다 - 상품평 공개 API(/api/reviews/recent)가 애초에 작성자 이름을
+// 아예 내려주지 않는 것과 같은 이유(개인정보 보호). 채팅은 누가 말했는지 구분은 되어야 하므로 완전히
+// 숨기는 대신 가운데를 마스킹한다 (예: "홍길동" → "홍*동", "이몽" → "이*").
+function maskChatDisplayName(name) {
+  const trimmed = (name || '').trim();
+  if (!trimmed) return '방문자';
+  if (trimmed.length === 1) return trimmed + '*';
+  if (trimmed.length === 2) return trimmed[0] + '*';
+  return trimmed[0] + '*'.repeat(trimmed.length - 2) + trimmed[trimmed.length - 1];
+}
+
+// 채팅 메시지 목록(공개) - 방송이 끝난 뒤에도 지나간 채팅 로그는 볼 수 있다(예약과 동일하게 "읽기"는 항상 허용,
+// "새로 보내기"만 라이브 중으로 제한). after(ISO 시각)를 넘기면 그 이후에 새로 달린 메시지만 돌려준다(폴링용).
+app.get('/api/live/channels/:slug/sessions/:sessionId/chat', optionalAuth, async (req, res) => {
+  try {
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id').eq('id', req.params.sessionId).eq('channel_id', channel.id).maybeSingle();
+    if (!session) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    // 세 가지 조회 모드를 하나의 엔드포인트가 담당한다:
+    // - after: 폴링용. 이 시각 이후 새로 달린 메시지를 시간순으로(오래된 것부터) 가져온다.
+    // - before: "이전 메시지 더 보기"용 페이지네이션. 이 시각보다 오래된 메시지를 최신순으로 limit개
+    //   가져온 뒤(무한정 위로 스크롤해도 한 번에 조금씩만 불러오도록) 화면에 표시할 때는 시간순으로 뒤집는다.
+    // - 파라미터 없음: 최초 로드. 가장 최근 limit개.
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 100);
+    let query = supabase.from(liveTable('live_session_chat_messages'))
+      .select(`id, message, created_at, user_id, message_type, profiles!${liveTable('live_session_chat_messages')}_user_id_fkey(full_name, email)`)
+      .eq('live_session_id', req.params.sessionId).eq('is_hidden', false);
+
+    let mode;
+    if (req.query.after) {
+      mode = 'after';
+      query = query.gt('created_at', req.query.after).order('created_at', { ascending: true }).limit(200);
+    } else if (req.query.before) {
+      mode = 'before';
+      query = query.lt('created_at', req.query.before).order('created_at', { ascending: false }).limit(limit);
+    } else {
+      mode = 'initial';
+      query = query.order('created_at', { ascending: false }).limit(limit);
+    }
+    const { data, error } = await query;
+    if (error) throw error;
+
+    let rows = data || [];
+    const hasMore = mode !== 'after' && rows.length === limit; // 정확한 총 개수 대신 "요청한 만큼 꽉 찼다"는 근사치로 판단
+    if (mode !== 'after') rows = rows.reverse(); // before/initial은 최신순으로 가져온 뒤 시간순으로 뒤집어서 반환한다
+
+    // 🎤 라이트 멀티호스트(B8) - 이 세션에 지금 활동 중인 게스트의 user_id 집합을 미리 가져와서
+    // 각 메시지가 게스트가 보낸 것인지 표시한다 (채팅 배지용)
+    const userIdsInPage = [...new Set(rows.map(r => r.user_id).filter(Boolean))];
+    let guestUserIds = new Set();
+    if (userIdsInPage.length > 0) {
+      const { data: activeGuests } = await supabase.from(liveTable('live_session_guests'))
+        .select('user_id').eq('live_session_id', req.params.sessionId).eq('status', 'active').in('user_id', userIdsInPage);
+      guestUserIds = new Set((activeGuests || []).map(g => g.user_id));
+    }
+
+    const messages = rows.map(r => ({
+      id: r.id,
+      message: r.message,
+      created_at: r.created_at,
+      is_mine: req.user ? r.user_id === req.user.id : false, // 비로그인 조회에서는 항상 false
+      display_name: maskChatDisplayName(r.profiles ? (r.profiles.full_name || r.profiles.email) : null),
+      message_type: r.message_type || 'normal',
+      is_guest: guestUserIds.has(r.user_id)
+    }));
+
+    res.json({ success: true, data: messages, count: messages.length, has_more: hasMore, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching live chat messages:', err);
+    res.status(500).json({ error: 'Failed to fetch chat messages', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 채팅 메시지 전송(로그인 필요) - 재고예약과 동일하게 "지금 방송 중"일 때만 새로 보낼 수 있다.
+app.post('/api/live/channels/:slug/sessions/:sessionId/chat', authenticate, liveChatLimiter, async (req, res) => {
+
+  try {
+    const message = String(req.body?.message || '').trim();
+    if (!message) return res.status(400).json({ error: 'Bad Request', message: '메시지를 입력해주세요', timestamp: new Date().toISOString() });
+    if (message.length > 200) return res.status(400).json({ error: 'Bad Request', message: '메시지는 200자를 넘을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id, status').eq('id', req.params.sessionId).eq('channel_id', channel.id).maybeSingle();
+    if (!session) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (session.status !== 'live') {
+      return res.status(409).json({ error: 'Conflict', message: '현재 방송 중인 세션이 아니므로 채팅을 보낼 수 없습니다', timestamp: new Date().toISOString() });
+    }
+
+    // 도배 방지 - 같은 사용자가 이 세션에 방금 보낸 메시지가 있으면 거부
+    const { data: lastMsg } = await supabase.from(liveTable('live_session_chat_messages'))
+      .select('created_at').eq('live_session_id', req.params.sessionId).eq('user_id', req.user.id)
+      .order('created_at', { ascending: false }).limit(1).maybeSingle();
+    if (lastMsg && Date.now() - new Date(lastMsg.created_at).getTime() < LIVE_CHAT_RATE_LIMIT_MS) {
+      return res.status(429).json({ error: 'Too Many Requests', message: '메시지를 너무 빠르게 보내고 있어요. 잠시 후 다시 시도해주세요', timestamp: new Date().toISOString() });
+    }
+
+    const { data: profile } = await supabase.from('profiles').select('full_name, email').eq('id', req.user.id).maybeSingle();
+    const { data: inserted, error: insErr } = await supabase.from(liveTable('live_session_chat_messages'))
+      .insert([{ live_session_id: req.params.sessionId, channel_id: channel.id, user_id: req.user.id, message }])
+      .select('id, message, created_at').single();
+    if (insErr) throw insErr;
+
+    // ⚡ 실시간 퀴즈(매출견인기능 격차분석 2-4) - 이 세션에 지금 열려있는 퀴즈가 있고 이 메시지가 정답이면
+    // 자동으로 라이브 전용 쿠폰을 발급한다. 채팅 메시지 자체는 항상 정상적으로 저장(다른 사용자도 그대로 봄)하고,
+    // 그 위에 "정답이었다"는 결과만 이 응답에 추가로 실어 보낸다 - 채팅 자체가 실패하는 일은 없어야 하므로
+      // 퀴즈 판정 중 오류가 나도 채팅 전송 자체는 이미 성공 처리된 뒤이다.
+    let quizResult = null;
+    try {
+      quizResult = await tryAwardQuizWin(req.params.sessionId, req.user.id, message, inserted.id);
+    } catch (quizErr) {
+      console.error('Error evaluating quiz answer:', quizErr);
+    }
+
+    // 🎤 라이트 멀티호스트(B8) - 이 메시지를 보낸 사람이 지금 이 세션의 활동 중인 게스트인지 확인해 배지 표시용으로 실어보낸다
+    let isGuest = false;
+    try {
+      const { data: guestRow } = await supabase.from(liveTable('live_session_guests'))
+        .select('id').eq('live_session_id', req.params.sessionId).eq('user_id', req.user.id).eq('status', 'active').maybeSingle();
+      isGuest = !!guestRow;
+    } catch (guestErr) {
+      console.error('Error checking live guest status:', guestErr);
+    }
+
+    res.status(201).json({
+      success: true,
+      data: { id: inserted.id, message: inserted.message, created_at: inserted.created_at, is_mine: true, display_name: maskChatDisplayName(profile ? (profile.full_name || profile.email) : null), message_type: quizResult ? 'quiz_correct' : 'normal', quiz_result: quizResult, is_guest: isGuest },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error posting live chat message:', err);
+    res.status(500).json({ error: 'Failed to post chat message', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🎁 실시간 가상 선물/후원 (경쟁사 기능 격차분석 #6) — 새 PG/결제 연동 없이 기존 마일리지 시스템을
+// "선물 재화"로 재사용한다. 시청자가 마일리지로 선물을 보내면 즉시 방송 채널 소유자에게 마일리지가
+// 적립되고, 채팅창에 message_type:'gift' 메시지로 노출돼 기존 채팅 폴링 인프라를 그대로 재사용한다.
+// ============================================
+const DEFAULT_GIFT_CATALOG = [
+  { key: 'heart', emoji: '❤️', label: '하트', cost: 100 },
+  { key: 'rose', emoji: '🌹', label: '장미', cost: 500 },
+  { key: 'coffee', emoji: '☕', label: '커피 한잔', cost: 1000 },
+  { key: 'diamond', emoji: '💎', label: '다이아', cost: 5000 },
+  { key: 'crown', emoji: '👑', label: '왕관', cost: 10000 }
+];
+let giftCatalogCache = null;
+let giftCatalogCacheAt = 0;
+const GIFT_CATALOG_CACHE_TTL_MS = 60 * 1000;
+
+function normalizeGiftCatalog(value) {
+  if (!Array.isArray(value) || value.length === 0) return DEFAULT_GIFT_CATALOG;
+  const out = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const key = String(item.key || '').trim();
+    const emoji = String(item.emoji || '').trim();
+    const label = String(item.label || '').trim();
+    const cost = Number(item.cost);
+    if (!key || !emoji || !label || !Number.isFinite(cost) || cost <= 0) continue;
+    out.push({ key, emoji, label, cost: Math.round(cost) });
+  }
+  return out.length > 0 ? out : DEFAULT_GIFT_CATALOG;
+}
+
+async function getGiftCatalog() {
+  const now = Date.now();
+  if (giftCatalogCache && (now - giftCatalogCacheAt) < GIFT_CATALOG_CACHE_TTL_MS) return giftCatalogCache;
+  try {
+    const { data } = await supabase.from('platform_settings').select('value').eq('key', liveSettingKey('live_gift_catalog')).maybeSingle();
+    giftCatalogCache = normalizeGiftCatalog(data ? data.value : null);
+  } catch (err) {
+    console.error('선물 카탈로그 조회 오류:', err.message);
+    giftCatalogCache = DEFAULT_GIFT_CATALOG;
+  }
+  giftCatalogCacheAt = now;
+  return giftCatalogCache;
+}
+
+app.get('/api/settings/live-gift-catalog', async (req, res) => {
+  try {
+    const catalog = await getGiftCatalog();
+    res.json({ success: true, data: catalog, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load gift catalog', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.patch('/api/admin/settings/live-gift-catalog', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const catalog = normalizeGiftCatalog(req.body.catalog);
+    const { error } = await supabase.from('platform_settings').upsert({ key: liveSettingKey('live_gift_catalog'), value: catalog, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+    if (error) throw error;
+    giftCatalogCache = catalog;
+    giftCatalogCacheAt = Date.now();
+    res.json({ success: true, data: catalog, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update gift catalog', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/live/channels/:slug/sessions/:sessionId/gifts', authenticate, async (req, res) => {
+  try {
+    const { giftKey } = req.body;
+    if (!giftKey) return res.status(400).json({ error: 'giftKey is required', timestamp: new Date().toISOString() });
+
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id, owner_user_id, name').eq('slug', req.params.slug).maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Channel not found', timestamp: new Date().toISOString() });
+
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id, status, channel_id').eq('id', req.params.sessionId).maybeSingle();
+    if (!session || session.channel_id !== channel.id) return res.status(404).json({ error: 'Session not found', timestamp: new Date().toISOString() });
+    if (session.status !== 'live') return res.status(400).json({ error: '방송 중에만 선물을 보낼 수 있습니다.', timestamp: new Date().toISOString() });
+
+    const catalog = await getGiftCatalog();
+    const gift = catalog.find(g => g.key === giftKey);
+    if (!gift) return res.status(400).json({ error: '존재하지 않는 선물입니다.', timestamp: new Date().toISOString() });
+
+    const balance = await getUserMileageBalance(req.user.id);
+    if (balance < gift.cost) {
+      return res.status(400).json({ error: `마일리지가 부족합니다. (보유: ${balance.toLocaleString('ko-KR')}, 필요: ${gift.cost.toLocaleString('ko-KR')})`, timestamp: new Date().toISOString() });
+    }
+
+    const { data: profile } = await supabase.from('profiles').select('full_name, email').eq('id', req.user.id).maybeSingle(); // (LIVE+ 원본의 'profiles_with'는 없는 테이블이라 이름이 항상 가려지던 버그 수정)
+    const displayName = maskChatDisplayName(profile ? (profile.full_name || profile.email) : null);
+
+    await creditMileageAdjustment(req.user.id, -gift.cost, 'live_gift_sent', session.id);
+    if (channel.owner_user_id) {
+      await creditMileageAdjustment(channel.owner_user_id, gift.cost, 'live_gift_received', session.id);
+    }
+
+    const { data: chatMsg, error: chatErr } = await supabase.from(liveTable('live_session_chat_messages')).insert({
+      live_session_id: session.id,
+      channel_id: channel.id,
+      user_id: req.user.id,
+      message: `${gift.emoji} ${displayName}님이 ${gift.label}(을)를 선물했습니다!`,
+      message_type: 'gift'
+    }).select().single();
+    if (chatErr) console.error('선물 채팅 메시지 삽입 오류:', chatErr.message);
+
+    const { error: giftErr } = await supabase.from(liveTable('live_gifts')).insert({
+      session_id: session.id,
+      channel_id: channel.id,
+      sender_id: req.user.id,
+      gift_key: gift.key,
+      emoji: gift.emoji,
+      label: gift.label,
+      cost: gift.cost,
+      chat_message_id: chatMsg ? chatMsg.id : null
+    });
+    if (giftErr) console.error('live_gifts_live 삽입 오류:', giftErr.message);
+
+    res.status(201).json({
+      success: true,
+      data: { gift, chat_message: chatMsg || null, remaining_balance: balance - gift.cost },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('선물 전송 오류:', err);
+    res.status(500).json({ error: 'Failed to send gift', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/live/channels/:id/sessions/:sessionId/gifts', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: gifts, error } = await supabase.from(liveTable('live_gifts'))
+      .select('id, gift_key, emoji, label, cost, sender_id, created_at')
+      .eq('session_id', req.params.sessionId)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    const totalCost = (gifts || []).reduce((sum, g) => sum + Number(g.cost || 0), 0);
+    res.json({
+      success: true,
+      data: { total_count: (gifts || []).length, total_cost: totalCost, recent: (gifts || []).slice(0, 50) },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load gift summary', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🎟️ 선착순 다운로드 쿠폰함 (경쟁사 기능 격차분석 #7 "쿠폰 묶음/타임특가 다운로드함") — 기존 쿠폰은 조건만
+// 맞으면 체크아웃에서 자동 적용되지만, 그 방식으로는 "한정수량 특가 쿠폰을 지금 놓치면 끝"이라는 라이브
+// 방송 특유의 긴장감을 만들 수 없다. 그래서 coupons 테이블에 claim_limit(발급 예정 수량)을 추가해, 방송
+// 중에만 "쿠폰함"에서 먼저 다운로드해야 사용 가능한 공개 쿠폰을 만들 수 있게 했다. 이미 라이브 세션 전용
+// 쿠폰(live_session_id)은 방송이 끝나면 자동 만료되므로(evaluateCouponEligibility 참고) 자연스럽게
+// "이번 방송에서만" 조건도 같이 충족된다.
+// ============================================
+
+// 회원/비회원 공통: 지금 이 라이브 세션에서 다운로드 가능한 선착순 쿠폰 목록.
+// 로그인한 회원이면 본인이 이미 받은 항목에 already_claimed 표시를 같이 내려준다.
+app.get('/api/live/channels/:slug/sessions/:sessionId/coupon-drops', async (req, res) => {
+  try {
+    const { data: coupons, error } = await supabase.from('coupons')
+      .select('id, code, label, discount_type, discount_value, max_discount_amount, min_order_amount, claim_limit, claimed_count, valid_until')
+      .eq('live_session_id', req.params.sessionId)
+      .eq('is_active', true)
+      .not('claim_limit', 'is', null)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    let claimedIds = new Set();
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const { data: { user } } = await supabase.auth.getUser(authHeader.substring(7));
+        if (user && coupons.length > 0) {
+          const { data: claims } = await supabase.from(liveTable('coupon_claims')).select('coupon_id').eq('user_id', user.id).in('coupon_id', coupons.map(c => c.id));
+          claimedIds = new Set((claims || []).map(c => c.coupon_id));
+        }
+      } catch (authErr) { /* 토큰이 없거나 유효하지 않아도 목록 자체는 비로그인 상태로 계속 보여준다 */ }
+    }
+
+    const data = coupons.map(c => ({
+      id: c.id,
+      label: c.label,
+      discount_type: c.discount_type,
+      discount_value: c.discount_value,
+      max_discount_amount: c.max_discount_amount,
+      min_order_amount: c.min_order_amount,
+      claim_limit: c.claim_limit,
+      claimed_count: c.claimed_count,
+      remaining: Math.max(0, c.claim_limit - c.claimed_count),
+      valid_until: c.valid_until,
+      already_claimed: claimedIds.has(c.id)
+      // code는 노출하지 않음 - 다운로드(claim) 이후에도 체크아웃은 findBestCouponForUser 자동적용으로 처리되므로 프론트가 코드를 알 필요가 없다
+    }));
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('쿠폰 다운로드함 목록 조회 오류:', err);
+    res.status(500).json({ error: 'Failed to load coupon drops', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 회원: 선착순 쿠폰 다운로드(받기). 동시 요청은 claim_public_coupon RPC의 행 잠금으로 안전하게 처리된다.
+app.post('/api/live/coupon-drops/:couponId/claim', authenticate, async (req, res) => {
+  try {
+    // coupons 테이블은 WITH+/LIVE+ 공유라, 이 사이트 라이브 세션에서 뿌린 쿠폰만 다운로드할 수 있게 확인한다
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(req.params.couponId)) {
+      return res.status(404).json({ error: 'Not Found', message: '쿠폰을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    const { data: dropCoupon } = await supabase.from('coupons').select('id, live_session_id').eq('id', req.params.couponId).maybeSingle();
+    const { data: dropSession } = dropCoupon && dropCoupon.live_session_id
+      ? await supabase.from(liveTable('live_sessions')).select('id').eq('id', dropCoupon.live_session_id).maybeSingle()
+      : { data: null };
+    if (!dropCoupon || !dropSession) {
+      return res.status(404).json({ error: 'Not Found', message: '쿠폰을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    }
+    const { data: result, error } = await supabase.rpc(liveRpc('claim_public_coupon'), { p_coupon_id: req.params.couponId, p_user_id: req.user.id });
+    if (error) throw error;
+    if (!result.claimed) {
+      return res.status(result.sold_out || result.already_claimed ? 409 : 400).json({ error: 'Bad Request', message: result.reason, timestamp: new Date().toISOString() });
+    }
+    res.status(201).json({ success: true, data: result, message: '쿠폰을 다운로드했습니다! 결제 시 자동으로 적용됩니다.', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('쿠폰 다운로드 오류:', err);
+    res.status(500).json({ error: 'Failed to claim coupon', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 이 라이브 세션에 선착순 다운로드 쿠폰 발급 (방송이 끝나면 evaluateCouponEligibility가 자동으로 무효화한다)
+app.post('/api/admin/live/channels/:id/sessions/:sessionId/coupon-drops', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { label, discount_type, discount_value, max_discount_amount, min_order_amount, claim_limit, valid_minutes } = req.body;
+    if (!label || !discount_type || !discount_value || !claim_limit) {
+      return res.status(400).json({ error: 'Bad Request', message: 'label, discount_type, discount_value, claim_limit은 필수입니다', timestamp: new Date().toISOString() });
+    }
+    if (!['percent', 'fixed'].includes(discount_type)) {
+      return res.status(400).json({ error: 'Bad Request', message: "discount_type은 'percent' 또는 'fixed'여야 합니다", timestamp: new Date().toISOString() });
+    }
+    // 이 채널의, 이 사이트(liveTable) 라이브 세션에만 발급한다
+    const { data: dropSession } = await supabase.from(liveTable('live_sessions')).select('id').eq('id', req.params.sessionId).eq('channel_id', req.params.id).maybeSingle();
+    if (!dropSession) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let code = 'DROP' + Array.from({ length: 6 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+    const validUntil = valid_minutes ? new Date(Date.now() + Number(valid_minutes) * 60000).toISOString() : null;
+
+    const { data, error } = await supabase.from('coupons').insert([{
+      code,
+      label,
+      discount_type,
+      discount_value: Number(discount_value),
+      max_discount_amount: max_discount_amount ? Number(max_discount_amount) : null,
+      min_order_amount: min_order_amount ? Number(min_order_amount) : 0,
+      per_user_limit: 1,
+      claim_limit: Number(claim_limit),
+      claimed_count: 0,
+      valid_from: new Date().toISOString(),
+      valid_until: validUntil,
+      live_session_id: req.params.sessionId,
+      source: 'live_coupon_drop',
+      is_active: true,
+      created_by: req.user.id
+    }]).select().single();
+    if (error) throw error;
+    res.status(201).json({ success: true, data, message: '선착순 쿠폰이 발급되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('선착순 쿠폰 발급 오류:', err);
+    res.status(500).json({ error: 'Failed to create coupon drop', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 이 라이브 세션의 선착순 쿠폰 목록 (진행 현황 모니터링용)
+app.get('/api/admin/live/channels/:id/sessions/:sessionId/coupon-drops', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('coupons')
+      .select('id, label, discount_type, discount_value, claim_limit, claimed_count, valid_until, is_active, created_at')
+      .eq('live_session_id', req.params.sessionId)
+      .not('claim_limit', 'is', null)
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to load coupon drops', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 선착순 쿠폰 조기 마감(수량이 남아도 강제로 더 이상 못 받게)
+app.patch('/api/admin/live/channels/:id/sessions/:sessionId/coupon-drops/:couponId/cancel', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('coupons').update({ is_active: false, updated_at: new Date().toISOString() }).eq('id', req.params.couponId).eq('live_session_id', req.params.sessionId).select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '쿠폰을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to cancel coupon drop', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// ⚡ 실시간 퀴즈/투표 (매출견인기능 격차분석 2-4) — 방송 중 관리자가 문제를 내고 정답을 서버에만 저장해두면,
+// 채팅으로 정답을 맞춘 첫 N명에게 자동으로 라이브 전용 쿠폰(2-3에서 구현한 것과 동일한 세션 한정 쿠폰)이
+// 발급된다. 확률형 럭키드로우/스핀휠 대신 "정답을 맞히는" 실력·참여 기반 방식을 택한 이유는, 격차분석
+// 보고서가 지적한 대로 국내에서 확률형 경품 추첨은 사행성 규제 대상이 될 수 있기 때문이다.
+// ============================================
+function normalizeQuizAnswer(s) {
+  return String(s || '').trim().toLowerCase().replace(/\s+/g, '');
+}
+
+async function generateUniqueCouponCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  function randomCode() {
+    let code = 'QZ';
+    for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    return code;
+  }
+  let candidate = randomCode();
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const { data: exists } = await supabase.from('coupons').select('id').eq('code', candidate).maybeSingle();
+    if (!exists) return candidate;
+    candidate = randomCode();
+  }
+  return randomCode() + Date.now().toString(36).toUpperCase();
+}
+
+// 이 세션에 지금 열려있는 퀴즈가 있고, message가 정답이며, 이 사용자가 아직 이 퀴즈를 맞히지 않았고,
+// 정답자 한도(winner_limit)가 아직 남아있으면 쿠폰을 발급하고 당첨 기록을 남긴다. 그 외에는 null을 반환한다
+// (오답이거나, 이미 맞혔거나, 정원이 찼거나, 열린 퀴즈 자체가 없는 경우 모두 조용히 null - 일반 채팅과 동일하게 처리).
+async function tryAwardQuizWin(sessionId, userId, message, chatMessageId) {
+  const { data: quiz } = await supabase.from(liveTable('live_quizzes'))
+    .select('*').eq('live_session_id', sessionId).eq('status', 'open')
+    .order('created_at', { ascending: false }).limit(1).maybeSingle();
+  if (!quiz) return null;
+  if (normalizeQuizAnswer(message) !== normalizeQuizAnswer(quiz.correct_answer)) return null;
+
+  // 적대적 검증에서 실측된 레이스컨디션(정원 3명 설정에 10명 동시 요청 → 9명 당첨, 3배 초과) 수정.
+  // "정원 확인 후 insert"를 애플리케이션 레이어에서 하면 두 단계 사이에 락이 없어 동시 요청에 취약하므로,
+  // DB 함수(award_quiz_win RPC)가 live_quizzes_live 행에 FOR UPDATE 락을 걸어 동시 요청을 직렬화하고
+  // 그 락을 쥔 채로 정원 재확인 + 당첨자 insert까지 하나의 트랜잭션에서 원자적으로 처리한다.
+  const { data: rpcResult, error: rpcErr } = await supabase.rpc(liveRpc('award_quiz_win'), {
+    p_quiz_id: quiz.id, p_user_id: userId, p_chat_message_id: chatMessageId
+  });
+  if (rpcErr) throw rpcErr;
+  if (!rpcResult || !rpcResult.success) return null;
+
+  const winnerId = rpcResult.winner_id;
+  const winnerCountAfter = rpcResult.winner_count;
+
+  const couponCode = await generateUniqueCouponCode();
+  const { data: coupon, error: couponErr } = await supabase.from('coupons').insert([{
+    code: couponCode,
+    label: `퀴즈 정답 축하 쿠폰 (${quiz.reward_discount_type === 'percent' ? quiz.reward_discount_value + '%' : Number(quiz.reward_discount_value).toLocaleString('ko-KR') + '원'} 할인)`,
+    discount_type: quiz.reward_discount_type,
+    discount_value: quiz.reward_discount_value,
+    per_user_limit: 1,
+    live_session_id: sessionId,
+    target_user_ids: [userId], // 정답자 본인만 사용 (코드가 채팅 등으로 퍼져도 다른 사람은 못 씀)
+    source: 'live_quiz_reward',
+    is_active: true,
+    created_by: quiz.created_by
+  }]).select().single();
+  if (couponErr) {
+    // 쿠폰 생성 실패 - RPC가 이미 예약한 당첨 슬롯을 되돌린다(락 밖에서 실패했으므로 수동 롤백).
+    await supabase.from(liveTable('live_quiz_winners')).delete().eq('id', winnerId);
+    if (winnerCountAfter >= quiz.winner_limit) {
+      await supabase.from(liveTable('live_quizzes')).update({ status: 'open', closed_at: null }).eq('id', quiz.id);
+    }
+    throw couponErr;
+  }
+
+  const { error: updateErr } = await supabase.from(liveTable('live_quiz_winners')).update({ coupon_code: couponCode }).eq('id', winnerId);
+  if (updateErr) {
+    await supabase.from('coupons').delete().eq('code', couponCode);
+    await supabase.from(liveTable('live_quiz_winners')).delete().eq('id', winnerId);
+    if (winnerCountAfter >= quiz.winner_limit) {
+      await supabase.from(liveTable('live_quizzes')).update({ status: 'open', closed_at: null }).eq('id', quiz.id);
+    }
+    throw updateErr;
+  }
+
+  await supabase.from(liveTable('live_session_chat_messages')).update({ message_type: 'quiz_correct' }).eq('id', chatMessageId);
+
+  return {
+    correct: true,
+    quiz_id: quiz.id,
+    question: quiz.question,
+    coupon_code: couponCode,
+    discount_type: quiz.reward_discount_type,
+    discount_value: quiz.reward_discount_value
+  };
+}
+
+// 관리자: 퀴즈 시작 - 이 세션에 이미 열려있는 퀴즈가 있으면 먼저 자동으로 종료시키고 새로 시작한다(타임세일과 동일한 정책).
+app.post('/api/admin/live/channels/:id/sessions/:sessionId/quizzes', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { question, correct_answer, winner_limit, reward_discount_type, reward_discount_value } = req.body || {};
+    if (!question || !String(question).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: 'question은 필수입니다', timestamp: new Date().toISOString() });
+    }
+    if (!correct_answer || !String(correct_answer).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: 'correct_answer는 필수입니다', timestamp: new Date().toISOString() });
+    }
+    const winnerLimit = Number(winner_limit) || 3;
+    if (!Number.isFinite(winnerLimit) || winnerLimit < 1 || winnerLimit > 50) {
+      return res.status(400).json({ error: 'Bad Request', message: 'winner_limit은 1~50 사이여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const discountType = ['percent', 'fixed'].includes(reward_discount_type) ? reward_discount_type : 'percent';
+    const discountValue = Number(reward_discount_value) || 10;
+    if (!Number.isFinite(discountValue) || discountValue <= 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'reward_discount_value가 올바르지 않습니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id').eq('id', req.params.sessionId).eq('channel_id', req.params.id).maybeSingle();
+    if (!session) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    // 기존에 열려있던 퀴즈가 있으면 먼저 종료
+    await supabase.from(liveTable('live_quizzes')).update({ status: 'closed', closed_at: new Date().toISOString() })
+      .eq('live_session_id', req.params.sessionId).eq('status', 'open');
+
+    const { data, error } = await supabase.from(liveTable('live_quizzes')).insert([{
+      live_session_id: req.params.sessionId,
+      question: String(question).trim(),
+      correct_answer: String(correct_answer).trim(),
+      winner_limit: winnerLimit,
+      reward_discount_type: discountType,
+      reward_discount_value: discountValue,
+      created_by: req.user.id
+    }]).select().single();
+    if (error) throw error;
+
+    res.status(201).json({ success: true, data, message: '퀴즈를 시작했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error starting quiz:', err);
+    res.status(500).json({ error: 'Failed to start quiz', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 이 세션의 퀴즈 이력 조회 (진행중+과거 전부, 당첨자 수 포함) - 정답은 관리자 화면에서만 노출된다
+app.get('/api/admin/live/channels/:id/sessions/:sessionId/quizzes', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_quizzes'))
+      .select('*').eq('live_session_id', req.params.sessionId).order('created_at', { ascending: false });
+    if (error) throw error;
+    const quizzes = data || [];
+    const quizIds = quizzes.map(q => q.id);
+    let winnerCounts = {};
+    if (quizIds.length > 0) {
+      const { data: winners } = await supabase.from(liveTable('live_quiz_winners')).select('quiz_id').in('quiz_id', quizIds);
+      (winners || []).forEach(w => { winnerCounts[w.quiz_id] = (winnerCounts[w.quiz_id] || 0) + 1; });
+    }
+    res.json({ success: true, data: quizzes.map(q => ({ ...q, winner_count: winnerCounts[q.id] || 0 })), timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching quizzes:', err);
+    res.status(500).json({ error: 'Failed to fetch quizzes', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 퀴즈 조기 종료
+app.patch('/api/admin/live/channels/:id/sessions/:sessionId/quizzes/:quizId/close', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_quizzes'))
+      .update({ status: 'closed', closed_at: new Date().toISOString() })
+      .eq('id', req.params.quizId).eq('live_session_id', req.params.sessionId).eq('status', 'open')
+      .select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '진행 중인 퀴즈를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, message: '퀴즈를 종료했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error closing quiz:', err);
+    res.status(500).json({ error: 'Failed to close quiz', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공개: 지금 열려있는 퀴즈의 질문만 노출 (정답/생성자 등 내부 정보는 절대 포함하지 않음) - 시청화면 폴링용
+app.get('/api/live/channels/:slug/sessions/:sessionId/quiz/active', async (req, res) => {
+  try {
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const { data: quiz } = await supabase.from(liveTable('live_quizzes'))
+      .select('id, question, winner_limit, created_at').eq('live_session_id', req.params.sessionId).eq('status', 'open')
+      .order('created_at', { ascending: false }).limit(1).maybeSingle();
+    if (!quiz) return res.json({ success: true, data: null, timestamp: new Date().toISOString() });
+    const { count: winnerCount } = await supabase.from(liveTable('live_quiz_winners'))
+      .select('id', { count: 'exact', head: true }).eq('quiz_id', quiz.id);
+    res.json({ success: true, data: { ...quiz, winner_count: winnerCount || 0 }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching active quiz:', err);
+    res.status(500).json({ error: 'Failed to fetch active quiz', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🔨 실시간 경매(카운트다운 비딩) - 경쟁사 기능 격차 백로그 5번, Whatnot 방식.
+// ============================================
+// 퀴즈(live_quizzes_live)와 동일한 "세션당 열려있는 건 하나만" 정책 + "락으로 동시성 직렬화" 정책을 쓴다.
+// 입찰(place_auction_bid RPC)과 종료확정(claim_auction_finalization RPC)은 각각 행 락(FOR UPDATE)으로
+// 원자적으로 처리해, 동시 입찰이나 여러 시청자가 동시에 폴링해 마감을 마주치는 상황에서도 안전하다
+// (퀴즈 정답 처리 때 실측된 레이스컨디션 버그를 애초에 방지하도록 설계).
+// 낙찰자에게는 "원가 - 낙찰가"만큼 깎아주는 1인 전용 fixed 할인쿠폰을 발급한다(퀴즈 당첨 쿠폰과 동일한
+// issueCouponForBatch 재사용) - 낙찰가 그대로 결제하려면 그 상품만 담아 쿠폰을 적용해야 한다.
+async function finalizeAuctionIfEnded(auction) {
+  if (!auction || auction.status !== 'open' || new Date(auction.ends_at).getTime() > Date.now()) return auction;
+
+  const { data: claim } = await supabase.rpc(liveRpc('claim_auction_finalization'), { p_auction_id: auction.id });
+  if (!claim || !claim.claimed) {
+    // 다른 요청이 먼저 확정을 가져갔거나(claimed:false), 이미 확정됨 - 최신 상태를 다시 읽어서 반환
+    const { data: latest } = await supabase.from(liveTable('live_auctions')).select('*').eq('id', auction.id).maybeSingle();
+    return latest || auction;
+  }
+
+  let winnerCouponCode = null;
+  if (claim.current_bidder_id) {
+    try {
+      let normalPrice = Number(claim.current_price);
+      if (claim.product_id) {
+        // WITH+ 결제 기준가(할인가가 있으면 할인가 - effectivePriceOf)에서 낙찰가를 뺀 만큼 깎아줘야 실제 결제액이 낙찰가가 된다
+        const { data: product } = await supabase.from('products_with').select('price, discount_price').eq('id', claim.product_id).maybeSingle();
+        if (product && effectivePriceOf(product) > 0) normalPrice = effectivePriceOf(product);
+      }
+      const discountValue = Math.max(0, normalPrice - Number(claim.current_price));
+      const template = {
+        label: `🔨 실시간 경매 낙찰가 쿠폰 (${Number(claim.current_price).toLocaleString('ko-KR')}원)`,
+        discount_type: 'fixed', discount_value: discountValue, per_user_limit: 1, valid_days: 1
+      };
+      const coupon = await issueCouponForBatch([claim.current_bidder_id], template, 'live_auction_win', {
+        codePrefix: 'AUCTION', notifyTitle: '🔨 경매 낙찰을 축하합니다!',
+        notifyMessage: `${Number(claim.current_price).toLocaleString('ko-KR')}원에 낙찰되었습니다! 24시간 안에 쿠폰을 사용해 결제를 완료해주세요(마이페이지에서 쿠폰 확인).`
+      });
+      winnerCouponCode = coupon ? coupon.code : null;
+    } catch (err) {
+      console.error('경매 낙찰 쿠폰 발급 오류:', err.message);
+    }
+  }
+
+  const { data: updated, error } = await supabase.from(liveTable('live_auctions')).update({
+    status: 'ended', winner_id: claim.current_bidder_id || null, winner_coupon_code: winnerCouponCode, ended_at: new Date().toISOString()
+  }).eq('id', auction.id).select().maybeSingle();
+  if (error) { console.error('경매 종료 확정 오류:', error.message); return auction; }
+  return updated;
+}
+
+// 관리자: 경매 시작 (기존에 열려있던 경매가 있으면 먼저 강제 취소)
+app.post('/api/admin/live/channels/:id/sessions/:sessionId/auctions', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { product_id, title, starting_price, bid_increment, duration_seconds, soft_close_seconds } = req.body || {};
+    if (!title || !String(title).trim()) {
+      return res.status(400).json({ error: 'Bad Request', message: 'title은 필수입니다', timestamp: new Date().toISOString() });
+    }
+    const startingPrice = Number(starting_price);
+    if (!Number.isFinite(startingPrice) || startingPrice < 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'starting_price가 올바르지 않습니다', timestamp: new Date().toISOString() });
+    }
+    const bidIncrement = Number(bid_increment) > 0 ? Number(bid_increment) : 1000;
+    const durationSeconds = Number(duration_seconds) > 0 ? Math.min(3600, Number(duration_seconds)) : 60;
+    const softCloseSeconds = Number(soft_close_seconds) >= 0 ? Math.min(60, Number(soft_close_seconds)) : 10;
+
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id').eq('id', req.params.sessionId).eq('channel_id', req.params.id).maybeSingle();
+    if (!session) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    // 기존에 열려있던 경매가 있으면 먼저 취소(낙찰자 없이 종료 - 타임세일/퀴즈와 동일한 정책)
+    await supabase.from(liveTable('live_auctions')).update({ status: 'cancelled', ended_at: new Date().toISOString() })
+      .eq('session_id', req.params.sessionId).eq('status', 'open');
+
+    const { data, error } = await supabase.from(liveTable('live_auctions')).insert([{
+      session_id: req.params.sessionId, product_id: product_id || null, title: String(title).trim(),
+      starting_price: startingPrice, bid_increment: bidIncrement, current_price: startingPrice,
+      ends_at: new Date(Date.now() + durationSeconds * 1000).toISOString(), soft_close_seconds: softCloseSeconds,
+      created_by: req.user.id
+    }]).select().single();
+    if (error) throw error;
+
+    res.status(201).json({ success: true, data, message: '경매를 시작했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error starting auction:', err);
+    res.status(500).json({ error: 'Failed to start auction', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 이 세션의 경매 이력 조회 (진행중이면 먼저 종료시각 지났는지 확인해 필요 시 확정 처리)
+app.get('/api/admin/live/channels/:id/sessions/:sessionId/auctions', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_auctions'))
+      .select('*').eq('session_id', req.params.sessionId).order('created_at', { ascending: false });
+    if (error) throw error;
+    const auctions = await Promise.all((data || []).map(a => finalizeAuctionIfEnded(a)));
+    res.json({ success: true, data: auctions, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching auctions:', err);
+    res.status(500).json({ error: 'Failed to fetch auctions', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 경매 조기 취소(입찰이 있었어도 강제 무효화 - 낙찰쿠폰 발급 없이 종료)
+app.patch('/api/admin/live/channels/:id/sessions/:sessionId/auctions/:auctionId/cancel', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_auctions'))
+      .update({ status: 'cancelled', ended_at: new Date().toISOString() })
+      .eq('id', req.params.auctionId).eq('session_id', req.params.sessionId).eq('status', 'open')
+      .select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '진행 중인 경매를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, message: '경매를 취소했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error cancelling auction:', err);
+    res.status(500).json({ error: 'Failed to cancel auction', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공개: 지금 이 세션의 경매 상태(진행중인 것 또는 방금 끝난 것 1건) - 시청화면 폴링용. 종료시각이 지났는데
+// 아직 'open'이면 여기서 lazy하게 확정 처리한다(이 프로젝트의 "읽는 시점에 처리" 원칙).
+app.get('/api/live/channels/:slug/sessions/:sessionId/auction/active', async (req, res) => {
+  try {
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    let { data: auction } = await supabase.from(liveTable('live_auctions'))
+      .select('id, product_id, title, starting_price, bid_increment, current_price, current_bidder_id, bid_count, status, ends_at, soft_close_seconds, winner_id, ended_at')
+      .eq('session_id', req.params.sessionId).in('status', ['open', 'finalizing'])
+      .order('created_at', { ascending: false }).limit(1).maybeSingle();
+    if (!auction) {
+      // 진행 중인 게 없으면, 방금 끝난 것(5분 이내)을 대신 보여줘서 "낙찰!" 결과를 놓치지 않게 한다
+      const fiveMinAgo = new Date(Date.now() - 5 * 60 * 1000).toISOString();
+      const { data: recentlyEnded } = await supabase.from(liveTable('live_auctions'))
+        .select('id, product_id, title, starting_price, bid_increment, current_price, current_bidder_id, bid_count, status, ends_at, soft_close_seconds, winner_id, ended_at')
+        .eq('session_id', req.params.sessionId).eq('status', 'ended').gte('ended_at', fiveMinAgo)
+        .order('ended_at', { ascending: false }).limit(1).maybeSingle();
+      return res.json({ success: true, data: recentlyEnded || null, timestamp: new Date().toISOString() });
+    }
+
+    auction = await finalizeAuctionIfEnded(auction);
+    const { winner_coupon_code, created_by, ...safeAuction } = auction; // 낙찰쿠폰 코드는 본인 조회 API에서만 노출(전체공개 폴링엔 숨김)
+    res.json({ success: true, data: safeAuction, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching active auction:', err);
+    res.status(500).json({ error: 'Failed to fetch active auction', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 회원: 입찰하기
+app.post('/api/live/channels/:slug/sessions/:sessionId/auction/:auctionId/bid', authenticate, async (req, res) => {
+  try {
+    const amount = Number(req.body?.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'amount가 올바르지 않습니다', timestamp: new Date().toISOString() });
+    }
+    const { data: auction } = await supabase.from(liveTable('live_auctions')).select('id').eq('id', req.params.auctionId).eq('session_id', req.params.sessionId).maybeSingle();
+    if (!auction) return res.status(404).json({ error: 'Not Found', message: '경매를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const { data: result, error } = await supabase.rpc(liveRpc('place_auction_bid'), { p_auction_id: req.params.auctionId, p_user_id: req.user.id, p_amount: amount });
+    if (error) throw error;
+    if (!result.success) {
+      const reasonMessages = {
+        not_open: '이미 종료된 경매입니다', ended: '입찰 마감 시각이 지났습니다',
+        already_highest: '이미 최고 입찰자입니다', bid_too_low: `최소 ${Number(result.min_next).toLocaleString('ko-KR')}원 이상 입찰해주세요`,
+        not_found: '경매를 찾을 수 없습니다'
+      };
+      return res.status(400).json({ error: 'Bad Request', message: reasonMessages[result.reason] || '입찰에 실패했습니다', data: result, timestamp: new Date().toISOString() });
+    }
+    res.json({ success: true, data: result, message: result.extended ? '입찰 완료! 막판 입찰로 마감시각이 연장되었습니다' : '입찰이 완료되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error placing auction bid:', err);
+    res.status(500).json({ error: 'Failed to place bid', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 회원: 내가 이 경매의 낙찰자인 경우에만 낙찰쿠폰 코드를 확인 (본인 인증 필요 - 위 공개 폴링 API는 절대 노출하지 않음)
+app.get('/api/live/channels/:slug/sessions/:sessionId/auction/:auctionId/my-result', authenticate, async (req, res) => {
+  try {
+    const { data: auction } = await supabase.from(liveTable('live_auctions')).select('*').eq('id', req.params.auctionId).eq('session_id', req.params.sessionId).maybeSingle();
+    if (!auction) return res.status(404).json({ error: 'Not Found', message: '경매를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (auction.status !== 'ended' || auction.winner_id !== req.user.id) {
+      return res.json({ success: true, data: { is_winner: false }, timestamp: new Date().toISOString() });
+    }
+    res.json({ success: true, data: { is_winner: true, winning_price: auction.current_price, coupon_code: auction.winner_coupon_code }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching auction result:', err);
+    res.status(500).json({ error: 'Failed to fetch auction result', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🎤 라이트 멀티호스트 - 게스트 초대 (매출견인기능 격차분석 2-9, B8)
+// 실제 WebRTC 다자간 동시 송출은 별도 영상 인프라가 필요한 장기 과제라, 격차분석 보고서 자체가 제안한
+// 경량 대체안을 구현한다: 관리자가 게스트 초대코드를 발급 → 게스트가 자기 계정으로 코드를 입력해 연결하면
+// 그 세션 채팅에 "게스트" 배지가 붙고, 게스트 전용 고정상품이 시청화면에 함께 노출된다.
+// (영상 송출 자체는 방송자가 별도 화면공유/합성 등으로 알아서 처리하는 것을 전제 - 이 기능은 그 위에서
+//  "누가 게스트인지" 표시와 "게스트가 소개하는 상품" 노출만 돕는다.)
+// ============================================
+async function generateUniqueGuestInviteCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  function randomCode() {
+    let code = 'GT';
+    for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+    return code;
+  }
+  let candidate = randomCode();
+  for (let attempt = 0; attempt < 50; attempt++) {
+    const { data: exists } = await supabase.from(liveTable('live_session_guests')).select('id').eq('invite_code', candidate).maybeSingle();
+    if (!exists) return candidate;
+    candidate = randomCode();
+  }
+  return randomCode() + Date.now().toString(36).toUpperCase();
+}
+
+// 관리자: 이 세션에 게스트 초대코드 발급 (선택적으로 게스트 전용 고정상품 지정)
+app.post('/api/admin/live/channels/:id/sessions/:sessionId/guests', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const guestName = String(req.body?.guest_name || '').trim();
+    if (!guestName) return res.status(400).json({ error: 'Bad Request', message: 'guest_name은 필수입니다', timestamp: new Date().toISOString() });
+    const pinnedProductId = req.body?.pinned_product_id || null;
+
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id').eq('id', req.params.sessionId).eq('channel_id', req.params.id).maybeSingle();
+    if (!session) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    if (pinnedProductId) {
+      const { data: product } = await supabase.from('products_with').select('id').eq('id', pinnedProductId).maybeSingle();
+      if (!product) return res.status(400).json({ error: 'Bad Request', message: '존재하지 않는 상품입니다', timestamp: new Date().toISOString() });
+    }
+
+    const inviteCode = await generateUniqueGuestInviteCode();
+    const { data, error } = await supabase.from(liveTable('live_session_guests')).insert([{
+      live_session_id: req.params.sessionId,
+      guest_name: guestName,
+      invite_code: inviteCode,
+      pinned_product_id: pinnedProductId,
+      created_by: req.user.id
+    }]).select().single();
+    if (error) throw error;
+
+    res.status(201).json({ success: true, data, message: '게스트 초대코드를 발급했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating live guest invite:', err);
+    res.status(500).json({ error: 'Failed to create guest invite', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 이 세션의 게스트 목록 (상품명 조인)
+app.get('/api/admin/live/channels/:id/sessions/:sessionId/guests', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_session_guests'))
+      .select('*, products_with(name)').eq('live_session_id', req.params.sessionId).order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({
+      success: true,
+      data: (data || []).map(g => ({ ...g, pinned_product_name: g.products_with ? g.products_with.name : null, products_with: undefined })),
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching live guests:', err);
+    res.status(500).json({ error: 'Failed to fetch guests', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 게스트 퇴장 처리(배지/고정상품 노출 종료). 초대코드 자체를 지우지는 않고 상태만 종료로 바꾼다.
+app.patch('/api/admin/live/channels/:id/sessions/:sessionId/guests/:guestId/end', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_session_guests'))
+      .update({ status: 'ended', ended_at: new Date().toISOString() })
+      .eq('id', req.params.guestId).eq('live_session_id', req.params.sessionId).neq('status', 'ended')
+      .select().maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '게스트를 찾을 수 없거나 이미 종료되었습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, message: '게스트를 퇴장 처리했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error ending live guest:', err);
+    res.status(500).json({ error: 'Failed to end guest', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 로그인 사용자: 게스트 초대코드 입력(연결). 대기 중(pending)인 코드만 연결 가능 - 이미 연결됐거나
+// 종료된 코드는 재사용할 수 없다(방송당 게스트 한 명이 코드를 한 번만 쓰도록).
+app.post('/api/live/guests/redeem', authenticate, async (req, res) => {
+  try {
+    const inviteCode = String(req.body?.invite_code || '').trim().toUpperCase();
+    if (!inviteCode) return res.status(400).json({ error: 'Bad Request', message: 'invite_code가 필요합니다', timestamp: new Date().toISOString() });
+
+    const { data: guest } = await supabase.from(liveTable('live_session_guests'))
+      .select('id, live_session_id, status').eq('invite_code', inviteCode).maybeSingle();
+    if (!guest) return res.status(404).json({ error: 'Not Found', message: '유효하지 않은 초대코드입니다', timestamp: new Date().toISOString() });
+    if (guest.status !== 'pending') {
+      return res.status(409).json({ error: 'Conflict', message: '이미 사용되었거나 종료된 초대코드입니다', timestamp: new Date().toISOString() });
+    }
+
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id, channel_id, status').eq('id', guest.live_session_id).maybeSingle();
+    const { data: channel } = session ? await supabase.from(liveTable('channels')).select('slug').eq('id', session.channel_id).maybeSingle() : { data: null };
+
+    const { data: updated, error } = await supabase.from(liveTable('live_session_guests'))
+      .update({ status: 'active', activated_at: new Date().toISOString(), user_id: req.user.id })
+      .eq('id', guest.id).eq('status', 'pending')
+      .select().maybeSingle();
+    if (error) throw error;
+    if (!updated) return res.status(409).json({ error: 'Conflict', message: '이미 사용되었거나 종료된 초대코드입니다', timestamp: new Date().toISOString() });
+
+    res.json({
+      success: true,
+      data: { ...updated, session_status: session ? session.status : null, channel_slug: channel ? channel.slug : null },
+      message: '게스트로 연결되었습니다',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error redeeming live guest invite:', err);
+    res.status(500).json({ error: 'Failed to redeem guest invite', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공개: 이 세션에 지금 활동 중인 게스트 목록(배지/고정상품 표시용) - 민감정보 없음
+app.get('/api/live/channels/:slug/sessions/:sessionId/guests', async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_session_guests'))
+      .select('id, guest_name, pinned_product_id, user_id, products_with(name, price)')
+      .eq('live_session_id', req.params.sessionId).eq('status', 'active');
+    if (error) throw error;
+    res.json({
+      success: true,
+      data: (data || []).map(g => ({
+        guest_name: g.guest_name,
+        user_id: g.user_id,
+        pinned_product: g.products_with ? { id: g.pinned_product_id, name: g.products_with.name, price: g.products_with.price } : null
+      })),
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching active live guests:', err);
+    res.status(500).json({ error: 'Failed to fetch guests', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 👀 실시간 시청자 수 · 최근 구매 알림 - 틱톡/유튜브 매출견인기능 격차분석 1번 항목(사회적 증명)
+// 로그인 여부와 무관하게(비로그인 시청자도 카운트되어야 하므로) optionalAuth를 사용한다.
+// 하트비트는 30~60초 주기로 호출되는 것을 가정하고, 최근 90초 이내 하트비트가 있는 행만 "현재 시청자"로 센다.
+// ============================================
+const LIVE_VIEWER_HEARTBEAT_WINDOW_SEC = 90;
+
+app.post('/api/live/channels/:slug/sessions/:sessionId/heartbeat', optionalAuth, async (req, res) => {
+  try {
+    const viewerKey = String(req.body?.viewer_key || '').trim();
+    if (!viewerKey) return res.status(400).json({ error: 'Bad Request', message: 'viewer_key가 필요합니다', timestamp: new Date().toISOString() });
+
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id').eq('id', req.params.sessionId).eq('channel_id', channel.id).maybeSingle();
+    if (!session) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    await supabase.from(liveTable('live_session_viewers')).upsert(
+      [{ live_session_id: req.params.sessionId, viewer_key: viewerKey, user_id: req.user ? req.user.id : null, last_seen_at: new Date().toISOString() }],
+      { onConflict: 'live_session_id,viewer_key' }
+    );
+    res.json({ success: true, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error recording live viewer heartbeat:', err);
+    res.status(500).json({ error: 'Failed to record heartbeat', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/live/channels/:slug/sessions/:sessionId/viewer-count', async (req, res) => {
+  try {
+    const cutoff = new Date(Date.now() - LIVE_VIEWER_HEARTBEAT_WINDOW_SEC * 1000).toISOString();
+    const { count, error } = await supabase.from(liveTable('live_session_viewers'))
+      .select('id', { count: 'exact', head: true })
+      .eq('live_session_id', req.params.sessionId).gte('last_seen_at', cutoff);
+    if (error) throw error;
+    res.json({ success: true, data: { viewer_count: count || 0 }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching live viewer count:', err);
+    res.status(500).json({ error: 'Failed to fetch viewer count', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 최근 구매 토스트("OOO님 방금 구매") - 세션 한정재고 확정(sold) 로그를 그대로 재사용한다(새 테이블 없음).
+app.get('/api/live/channels/:slug/sessions/:sessionId/recent-purchases', async (req, res) => {
+  try {
+    const { data: invRows } = await supabase.from(liveTable('live_session_inventory')).select('id, product_id').eq('live_session_id', req.params.sessionId);
+    const invIds = (invRows || []).map(r => r.id);
+    if (invIds.length === 0) return res.json({ success: true, data: [], timestamp: new Date().toISOString() });
+    const invToProduct = {};
+    (invRows || []).forEach(r => { invToProduct[r.id] = r.product_id; });
+
+    const { data: logs, error } = await supabase.from(liveTable('live_session_inventory_log'))
+      .select('inventory_id, delta_sold, actor_user_id, created_at')
+      .in('inventory_id', invIds).eq('change_type', 'confirm').gt('delta_sold', 0)
+      .order('created_at', { ascending: false }).limit(8);
+    if (error) throw error;
+
+    const productIds = [...new Set((logs || []).map(l => invToProduct[l.inventory_id]).filter(Boolean))];
+    const userIds = [...new Set((logs || []).map(l => l.actor_user_id).filter(Boolean))];
+    const [{ data: products }, { data: profiles }] = await Promise.all([
+      productIds.length ? supabase.from('products_with').select('id, name').in('id', productIds) : Promise.resolve({ data: [] }),
+      userIds.length ? supabase.from('profiles').select('id, full_name, email').in('id', userIds) : Promise.resolve({ data: [] })
+    ]);
+    const productById = {}; (products || []).forEach(p => { productById[p.id] = p.name; });
+    const profileById = {}; (profiles || []).forEach(p => { profileById[p.id] = p; });
+
+    const result = (logs || []).map(l => {
+      const profile = l.actor_user_id ? profileById[l.actor_user_id] : null;
+      return {
+        product_name: productById[invToProduct[l.inventory_id]] || '상품',
+        qty: l.delta_sold,
+        buyer_name: maskChatDisplayName(profile ? (profile.full_name || profile.email) : null),
+        created_at: l.created_at
+      };
+    });
+    res.json({ success: true, data: result, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching recent live purchases:', err);
+    res.status(500).json({ error: 'Failed to fetch recent purchases', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자용 채팅 조회(숨김 메시지 포함) - 모더레이션 화면이 이 목록을 그대로 보여주고 숨기기/다시 보이기를 건다.
+app.get('/api/admin/live/channels/:id/sessions/:sessionId/chat', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+    let query = supabase.from(liveTable('live_session_chat_messages'))
+      .select(`id, message, created_at, is_hidden, hidden_at, user_id, profiles!${liveTable('live_session_chat_messages')}_user_id_fkey(full_name, email)`)
+      .eq('live_session_id', req.params.sessionId).eq('channel_id', req.params.id);
+    // before: "더 보기" 페이지네이션 - 이 시각보다 오래된 메시지를 최신순으로 더 가져온다(대형 방송에서
+    // 채팅이 수천 건 쌓여도 한 번에 다 불러오지 않도록). 숨겨진 메시지도 모더레이션 화면에서는 계속 보여준다.
+    if (req.query.before) query = query.lt('created_at', req.query.before);
+    query = query.order('created_at', { ascending: false }).limit(limit);
+
+    const { data, error } = await query;
+    if (error) throw error;
+    const messages = (data || []).map(r => ({
+      id: r.id, message: r.message, created_at: r.created_at, is_hidden: r.is_hidden, hidden_at: r.hidden_at,
+      sender_name: r.profiles ? (r.profiles.full_name || r.profiles.email) : '탈퇴한 회원' // 관리자 모더레이션 화면에서는 실명/이메일을 그대로 보여준다(악용 대응 목적)
+    }));
+    res.json({ success: true, data: messages, count: messages.length, has_more: messages.length === limit, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching admin live chat messages:', err);
+    res.status(500).json({ error: 'Failed to fetch chat messages', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 채팅 메시지 숨기기/다시 보이기 - 하드 삭제 대신 소프트 삭제로 남겨서 분쟁/악용 시 근거를 보존한다.
+app.patch('/api/admin/live/channels/:id/sessions/:sessionId/chat/:messageId', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const hidden = !!req.body?.is_hidden;
+    const updates = hidden
+      ? { is_hidden: true, hidden_by: req.user.id, hidden_at: new Date().toISOString() }
+      : { is_hidden: false, hidden_by: null, hidden_at: null };
+    const { data, error } = await supabase.from(liveTable('live_session_chat_messages'))
+      .update(updates).eq('id', req.params.messageId).eq('live_session_id', req.params.sessionId).eq('channel_id', req.params.id)
+      .select().single();
+    if (error) throw error;
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating live chat message visibility:', err);
+    res.status(500).json({ error: 'Failed to update chat message', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 📡 LIVE+ OmniCast (멀티플랫폼 동시송출) - "목적지 연결 관리형" MVP
+// ============================================
+// 설계 원칙(형님과 합의): 실제 영상 릴레이는 LIVE+ 서버가 하지 않는다. 호스트가 OBS 같은 방송 장비에서
+// 멀티스트림 기능으로 한 번 송출하면, LIVE+가 미리 만들어둔 각 플랫폼의 RTMP 수신 정보(주소+키)를 그
+// 멀티스트림 목적지로 등록해서 동시에 나가는 방식이다. LIVE+는 (1) 플랫폼 연결(OAuth)과 (2) 방송마다
+// 그 플랫폼에 실제로 "이번 방송"을 생성해 RTMP 수신 정보를 발급받아 보여주는 것까지만 담당한다.
+// 별도의 미디어 릴레이 서버(RTMP 수신+ffmpeg 재전송)는 인프라 규모가 완전히 다른 별개 작업이라
+// 이번 MVP 범위에 포함하지 않았다.
+//
+// 유튜브/페이스북은 공식 Live Streaming API가 있어 코드로 완전히 구현했지만, 두 플랫폼 다 형님이
+// Google Cloud Console / Meta for Developers에서 직접 OAuth 앱을 만들어 클라이언트ID/시크릿을
+// 발급받아 아래 관리자 설정 화면에 등록해야만 실제로 동작한다(등록 전에는 "연동 설정 필요" 안내로
+// 정직하게 막아둔다 - 카카오페이/네이버페이 때와 동일한 태도).
+//
+// 틱톡/인스타그램/X는 일반 개발자가 자유롭게 발급받을 수 있는 공식 "라이브 생성" API가 없다(틱톡은
+// 별도 파트너 심사, 인스타그램/X는 사실상 일반 서드파티에 공개돼 있지 않음). 로드맵 메모에서 "공식
+// 권한이 있는 경우에만 연결, 비공식 API·우회 자동화 금지"로 합의했으므로, 이 세 플랫폼은 목적지
+// 목록에는 존재하지만 "연동 준비중" 상태로만 두고 실제 연결 기능은 만들지 않았다.
+const OMNICAST_PLATFORM_INFO = {
+  youtube: { name: '유튜브 라이브', oauth: true, implemented: true },
+  facebook: { name: '페이스북 라이브', oauth: true, implemented: true },
+  custom_rtmp: { name: '커스텀 RTMP', oauth: false, implemented: true },
+  // Cloudflare Stream: 다른 플랫폼과 달리 "우리 사이트 안에서 직접 재생"이 목적이다. RTMP 수신은
+  // Cloudflare가 담당하지만(우리 서버가 영상을 직접 릴레이하지 않는다는 기존 설계 원칙은 그대로 유지),
+  // 재생은 유튜브/페이스북처럼 외부 사이트로 보내지 않고 이 플랫폼이 내려주는 HLS 주소를 우리 시청 페이지에
+  // 그대로 <video>로 재생한다 - live-channel.html의 영상 우선순위에서 가장 먼저 고려된다.
+  cloudflare_stream: { name: '자체 사이트 재생(Cloudflare Stream)', oauth: false, implemented: true },
+  tiktok: { name: '틱톡', oauth: true, implemented: false },
+  instagram: { name: '인스타그램', oauth: true, implemented: false },
+  x: { name: 'X (트위터)', oauth: true, implemented: false }
+};
+
+async function getOmnicastPlatformConfig(providerKey) {
+  const { data, error } = await supabase.from(liveTable('omnicast_platform_configs')).select('*').eq('provider_key', providerKey).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+// state 파라미터 서명 - signNaverState/verifyNaverState와 동일한 HMAC 방식이되, 어느 채널·어느
+// 관리자가 연결을 시작했는지(channelId/adminUserId)까지 함께 왕복시켜야 해서 payload를 실어 확장했다.
+function signOmnicastState(data) {
+  const nonce = crypto.randomBytes(16).toString('hex');
+  const ts = Date.now().toString();
+  const payload = Buffer.from(JSON.stringify(data)).toString('base64url');
+  const base = `${nonce}.${ts}.${payload}`;
+  const sig = crypto.createHmac('sha256', process.env.JWT_SECRET || RUNTIME_FALLBACK_SECRET).update(base).digest('hex');
+  return `${base}.${sig}`;
+}
+function verifyOmnicastState(state) {
+  if (!state || typeof state !== 'string') return null;
+  const parts = state.split('.');
+  if (parts.length !== 4) return null;
+  const [nonce, ts, payload, sig] = parts;
+  const base = `${nonce}.${ts}.${payload}`;
+  const expected = crypto.createHmac('sha256', process.env.JWT_SECRET || RUNTIME_FALLBACK_SECRET).update(base).digest('hex');
+  if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return null;
+  const age = Date.now() - Number(ts);
+  if (!Number.isFinite(age) || age < 0 || age > 10 * 60 * 1000) return null; // 10분 초과 시 만료
+  try { return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')); } catch (e) { return null; }
+}
+
+// 목적지 목록 응답에서는 access_token/refresh_token/stream_key 원문을 절대 내려주지 않는다(pg_configs와
+// 동일한 태도). custom_rtmp의 rtmp_url 자체는 비밀이 아니라(어차피 공개 서버 주소) 그대로 보여준다.
+function maskOmnicastDestination(d) {
+  return {
+    id: d.id, channel_id: d.channel_id, platform: d.platform, label: d.label,
+    external_account_id: d.external_account_id, external_account_name: d.external_account_name,
+    rtmp_url: d.platform === 'custom_rtmp' ? d.rtmp_url : null,
+    has_key: !!(d.stream_key || d.access_token),
+    status: d.status, last_error: d.last_error,
+    created_at: d.created_at, updated_at: d.updated_at
+  };
+}
+
+// 관리자: 플랫폼별 OAuth 앱 인증정보 조회 (시크릿 원문은 내려주지 않음)
+app.get('/api/admin/live/omnicast/platforms', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('omnicast_platform_configs')).select('*').order('provider_key');
+    if (error) throw error;
+    res.json({
+      success: true,
+      data: (data || []).map(c => ({
+        provider_key: c.provider_key, provider_name: c.provider_name,
+        implemented: OMNICAST_PLATFORM_INFO[c.provider_key]?.implemented || false,
+        client_key: c.client_key || null, has_secret_key: !!c.secret_key, redirect_uri: c.redirect_uri || null,
+        enabled: c.enabled, extra_config: c.extra_config || {}
+      })),
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching omnicast platform configs:', err);
+    res.status(500).json({ error: 'Failed to fetch omnicast platform configs', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.patch('/api/admin/live/omnicast/platforms/:provider', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const provider = req.params.provider;
+    if (!OMNICAST_PLATFORM_INFO[provider] || provider === 'custom_rtmp') {
+      return res.status(404).json({ error: 'Not Found', message: '지원하지 않는 플랫폼입니다', timestamp: new Date().toISOString() });
+    }
+    if (!OMNICAST_PLATFORM_INFO[provider].implemented) {
+      return res.status(400).json({ error: 'Bad Request', message: '이 플랫폼은 아직 자동 연결을 지원하지 않습니다 (공식 API 접근 권한 확보 후 지원 예정)', timestamp: new Date().toISOString() });
+    }
+    const update = { updated_at: new Date().toISOString() };
+    if (typeof req.body.client_key === 'string') update.client_key = req.body.client_key.trim() || null;
+    if (typeof req.body.secret_key === 'string') update.secret_key = req.body.secret_key.trim() || null;
+    if (typeof req.body.redirect_uri === 'string') update.redirect_uri = req.body.redirect_uri.trim() || null;
+    if (typeof req.body.enabled === 'boolean') update.enabled = req.body.enabled;
+
+    const { data, error } = await supabase.from(liveTable('omnicast_platform_configs')).update(update).eq('provider_key', provider).select().single();
+    if (error) throw error;
+    res.json({
+      success: true,
+      data: { provider_key: data.provider_key, client_key: data.client_key, has_secret_key: !!data.secret_key, redirect_uri: data.redirect_uri, enabled: data.enabled },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error updating omnicast platform config:', err);
+    res.status(500).json({ error: 'Failed to update omnicast platform config', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 채널의 송출 목적지 목록/추가(커스텀 RTMP만 직접 추가)/삭제
+app.get('/api/admin/live/channels/:id/omnicast/destinations', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_channel_broadcast_destinations'))
+      .select('*').eq('channel_id', req.params.id).order('created_at', { ascending: false });
+    if (error) throw error;
+    res.json({ success: true, data: (data || []).map(maskOmnicastDestination), count: (data || []).length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching omnicast destinations:', err);
+    res.status(500).json({ error: 'Failed to fetch omnicast destinations', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// platform을 생략하면 예전처럼 커스텀 RTMP로 동작(하위호환). Cloudflare Stream은 OAuth가 아니라
+// API 토큰 방식이라(유튜브/페이스북과 다름) 커스텀 RTMP처럼 이 엔드포인트로 바로 등록한다 - 다만 필요한
+// 필드가 rtmp_url/stream_key가 아니라 Cloudflare 계정ID/API토큰이라 플랫폼별로 검증을 분기한다.
+app.post('/api/admin/live/channels/:id/omnicast/destinations', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const platform = req.body?.platform === 'cloudflare_stream' ? 'cloudflare_stream' : 'custom_rtmp';
+    const { label } = req.body || {};
+    if (!label || !String(label).trim()) return res.status(400).json({ error: 'Bad Request', message: '목적지 이름(label)은 필수입니다', timestamp: new Date().toISOString() });
+
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id').eq('id', req.params.id).maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    let insertRow;
+    if (platform === 'cloudflare_stream') {
+      const { account_id, api_token } = req.body || {};
+      if (!account_id || !String(account_id).trim()) return res.status(400).json({ error: 'Bad Request', message: 'Cloudflare 계정 ID는 필수입니다', timestamp: new Date().toISOString() });
+      if (!api_token || !String(api_token).trim()) return res.status(400).json({ error: 'Bad Request', message: 'Cloudflare API 토큰은 필수입니다', timestamp: new Date().toISOString() });
+      insertRow = {
+        channel_id: req.params.id, platform: 'cloudflare_stream', label: String(label).trim(),
+        external_account_id: String(account_id).trim(), access_token: encryptSecret(String(api_token).trim()),
+        status: 'connected', connected_by: req.user.id
+      };
+    } else {
+      const { rtmp_url, stream_key } = req.body || {};
+      if (!rtmp_url || !String(rtmp_url).trim()) return res.status(400).json({ error: 'Bad Request', message: 'RTMP 서버 주소는 필수입니다', timestamp: new Date().toISOString() });
+      if (!stream_key || !String(stream_key).trim()) return res.status(400).json({ error: 'Bad Request', message: '스트림 키는 필수입니다', timestamp: new Date().toISOString() });
+      insertRow = {
+        channel_id: req.params.id, platform: 'custom_rtmp', label: String(label).trim(),
+        rtmp_url: String(rtmp_url).trim(), stream_key: encryptSecret(String(stream_key).trim()),
+        status: 'connected', connected_by: req.user.id
+      };
+    }
+
+    const { data, error } = await supabase.from(liveTable('live_channel_broadcast_destinations')).insert([insertRow]).select().single();
+
+    if (error) throw error;
+    res.status(201).json({ success: true, data: maskOmnicastDestination(data), timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error adding omnicast destination:', err);
+    res.status(500).json({ error: 'Failed to add omnicast destination', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 목적지가 실제로 갖고 있는 RTMP 접속정보를 확인(OBS에 그대로 옮겨 적기 위함) - admin 전용, 목록 조회와
+// 분리해서 꼭 필요할 때만 원문을 내려준다
+app.get('/api/admin/live/channels/:id/omnicast/destinations/:destId/reveal', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_channel_broadcast_destinations'))
+      .select('platform, rtmp_url, stream_key').eq('id', req.params.destId).eq('channel_id', req.params.id).maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '목적지를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (data.platform !== 'custom_rtmp') return res.status(400).json({ error: 'Bad Request', message: '이 플랫폼은 방송을 시작할 때마다 새 접속정보가 발급됩니다. 세션의 송출 목록에서 확인해주세요.', timestamp: new Date().toISOString() });
+    res.json({ success: true, data: { rtmp_url: data.rtmp_url, stream_key: decryptSecret(data.stream_key) }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error revealing omnicast destination:', err);
+
+    res.status(500).json({ error: 'Failed to reveal omnicast destination', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.delete('/api/admin/live/channels/:id/omnicast/destinations/:destId', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { error } = await supabase.from(liveTable('live_channel_broadcast_destinations')).delete().eq('id', req.params.destId).eq('channel_id', req.params.id);
+    if (error) throw error;
+    res.json({ success: true, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting omnicast destination:', err);
+    res.status(500).json({ error: 'Failed to delete omnicast destination', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 유튜브/페이스북 연결 시작 - 관리자 설정이 안 돼있으면 정직하게 막고, 돼있으면 인가 URL을 돌려준다
+// (프론트엔드가 이 URL로 새 탭/리다이렉트를 열면 구글/페이스북 로그인 화면으로 이동)
+app.get('/api/admin/live/channels/:id/omnicast/:platform/connect', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const platform = req.params.platform;
+    const info = OMNICAST_PLATFORM_INFO[platform];
+    if (!info || !info.oauth) return res.status(404).json({ error: 'Not Found', message: '지원하지 않는 플랫폼입니다', timestamp: new Date().toISOString() });
+    if (!info.implemented) return res.status(400).json({ error: 'Bad Request', message: `${info.name}은 아직 자동 연결을 지원하지 않습니다 (공식 API 접근 권한 확보 후 지원 예정)`, timestamp: new Date().toISOString() });
+
+    const { data: channel } = await supabase.from(liveTable('channels')).select('id').eq('id', req.params.id).maybeSingle();
+    if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const config = await getOmnicastPlatformConfig(platform);
+    if (!config || !config.enabled || !config.client_key || !config.secret_key || !config.redirect_uri) {
+      return res.status(400).json({ error: 'Bad Request', message: `${info.name} 연동이 아직 설정되지 않았습니다. 관리자 환경설정에서 OAuth 클라이언트ID/시크릿/리디렉션 URI를 먼저 등록해주세요.`, timestamp: new Date().toISOString() });
+    }
+
+    const state = signOmnicastState({ channelId: req.params.id, adminUserId: req.user.id, platform });
+    let authorizeUrl;
+    if (platform === 'youtube') {
+      authorizeUrl = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+        client_id: config.client_key, redirect_uri: config.redirect_uri, response_type: 'code',
+        scope: 'https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.force-ssl',
+        access_type: 'offline', prompt: 'consent', state
+      }).toString();
+    } else if (platform === 'facebook') {
+      authorizeUrl = 'https://www.facebook.com/v19.0/dialog/oauth?' + new URLSearchParams({
+        client_id: config.client_key, redirect_uri: config.redirect_uri,
+        scope: 'pages_show_list,pages_read_engagement,pages_manage_posts,publish_video', state
+      }).toString();
+    } else {
+      return res.status(400).json({ error: 'Bad Request', message: '지원하지 않는 플랫폼입니다', timestamp: new Date().toISOString() });
+    }
+    res.json({ success: true, data: { authorize_url: authorizeUrl }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error starting omnicast connect:', err);
+    res.status(500).json({ error: 'Failed to start omnicast connect', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 유튜브/페이스북 OAuth 콜백 - 구글/페이스북이 브라우저를 이 주소로 직접 리다이렉트하므로 인증 미들웨어를
+// 걸 수 없다(관리자 로그인 세션이 아니라 state 서명으로 위변조를 막는다 - 네이버 로그인 콜백과 동일한 방식).
+app.get('/api/admin/live/omnicast/:platform/callback', async (req, res) => {
+  const platform = req.params.platform;
+  const { code, state, error: oauthError } = req.query;
+  // channelId를 try 블록 바깥(함수 스코프)에 선언해둔다 - 예전에는 try 블록 안의 const로만 있어서,
+  // state 파싱 이후 단계(토큰 교환 등)에서 예외가 나면 catch 블록이 channelId를 몰라 무조건
+  // failRedirect(null, ...)을 호출했다. 그 결과 존재하지 않는 "/admin/live-host/"(빈 id) 로
+  // 리다이렉트되어 404 페이지가 떴다 - 이번에 실제로 사용자가 겪은 문제.
+  let channelId = null;
+  // channelId를 끝내 알아낼 수 없을 때(state 자체가 위조/만료라 파싱조차 안 될 때)는
+  // 존재하지도 않는 "/admin/live-host/"로 보내 무조건 404를 띄우는 대신, 항상 존재하는
+  // 관리자 홈으로 보낸다.
+  const failRedirect = (cid, msg) => res.redirect((cid ? `/admin/live-host/${cid}` : '/admin') + '?omnicast_error=' + encodeURIComponent(msg));
+  try {
+    const parsedState = verifyOmnicastState(state);
+    if (!parsedState) return failRedirect(null, '연결 요청이 만료되었거나 올바르지 않습니다. 다시 시도해주세요.');
+    const { adminUserId, platform: statedPlatform } = parsedState;
+    channelId = parsedState.channelId;
+    if (statedPlatform !== platform) return failRedirect(channelId, '요청이 올바르지 않습니다.');
+    if (oauthError) return failRedirect(channelId, '연결이 취소되었거나 거부되었습니다.');
+    if (!code) return failRedirect(channelId, '인가코드를 받지 못했습니다.');
+
+    const config = await getOmnicastPlatformConfig(platform);
+    if (!config || !config.enabled) return failRedirect(channelId, '연동 설정을 찾을 수 없습니다.');
+
+    if (platform === 'youtube') {
+      const tokenResp = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          code: String(code), client_id: config.client_key, client_secret: config.secret_key,
+          redirect_uri: config.redirect_uri, grant_type: 'authorization_code'
+        }).toString(), signal: AbortSignal.timeout(15000)
+      });
+      const tokenJson = await tokenResp.json().catch(() => null);
+      if (!tokenResp.ok || !tokenJson?.access_token) { console.error('YouTube token exchange failed:', tokenJson); return failRedirect(channelId, '유튜브 인증 서버 응답에 실패했습니다.'); }
+
+      const chResp = await fetch('https://www.googleapis.com/youtube/v3/channels?part=snippet&mine=true', {
+        headers: { Authorization: `Bearer ${tokenJson.access_token}` }, signal: AbortSignal.timeout(15000)
+      });
+      const chJson = await chResp.json().catch(() => null);
+      const ytChannel = chJson?.items?.[0];
+      if (!chResp.ok || !ytChannel) { console.error('YouTube channel fetch failed:', chJson); return failRedirect(channelId, '유튜브 채널 정보를 가져오지 못했습니다. 이 계정에 라이브 스트리밍이 가능한 유튜브 채널이 있는지 확인해주세요.'); }
+
+      const expiresAt = tokenJson.expires_in ? new Date(Date.now() + tokenJson.expires_in * 1000).toISOString() : null;
+      await supabase.from(liveTable('live_channel_broadcast_destinations')).insert([{
+        channel_id: channelId, platform: 'youtube', label: ytChannel.snippet?.title || '유튜브 채널',
+        external_account_id: ytChannel.id, external_account_name: ytChannel.snippet?.title || null,
+        access_token: encryptSecret(tokenJson.access_token), refresh_token: encryptSecret(tokenJson.refresh_token || null), token_expires_at: expiresAt,
+        status: 'connected', connected_by: adminUserId
+      }]);
+      return res.redirect(`/admin/live-host/${channelId}?omnicast_connected=youtube`);
+
+    }
+
+    if (platform === 'facebook') {
+      const tokenResp = await fetch('https://graph.facebook.com/v19.0/oauth/access_token?' + new URLSearchParams({
+        client_id: config.client_key, client_secret: config.secret_key, redirect_uri: config.redirect_uri, code: String(code)
+      }).toString(), { signal: AbortSignal.timeout(15000) });
+      const tokenJson = await tokenResp.json().catch(() => null);
+      if (!tokenResp.ok || !tokenJson?.access_token) { console.error('Facebook token exchange failed:', tokenJson); return failRedirect(channelId, '페이스북 인증 서버 응답에 실패했습니다.'); }
+
+      const pagesResp = await fetch(`https://graph.facebook.com/v19.0/me/accounts?access_token=${encodeURIComponent(tokenJson.access_token)}`, { signal: AbortSignal.timeout(15000) });
+      const pagesJson = await pagesResp.json().catch(() => null);
+      const pages = pagesJson?.data || [];
+      if (!pagesResp.ok || pages.length === 0) { console.error('Facebook pages fetch failed:', pagesJson); return failRedirect(channelId, '이 계정으로 관리 중인 페이스북 페이지를 찾지 못했습니다. 라이브를 진행할 페이지의 관리자 권한이 있는지 확인해주세요.'); }
+
+      if (pages.length === 1) {
+        const page = pages[0];
+        await supabase.from(liveTable('live_channel_broadcast_destinations')).insert([{
+          channel_id: channelId, platform: 'facebook', label: page.name || '페이스북 페이지',
+          external_account_id: page.id, external_account_name: page.name || null,
+          access_token: encryptSecret(page.access_token), status: 'connected', connected_by: adminUserId
+        }]);
+        return res.redirect(`/admin/live-host/${channelId}?omnicast_connected=facebook`);
+
+      }
+
+      // 관리 중인 페이지가 여러 개면 임의로 첫 페이지를 골라버리지 않고, 어느 페이지를 라이브에 쓸지
+      // 관리자가 직접 고르게 한다. 페이지별 access_token은 15분짜리 임시 테이블에만 담아두고, 실제
+      // 목적지로 확정될 때에만 live_channel_broadcast_destinations_live에 저장한다.
+      const { data: pending, error: pendingErr } = await supabase.from(liveTable('omnicast_pending_facebook_selections')).insert([{
+        channel_id: channelId, admin_user_id: adminUserId,
+        pages: pages.map(p => ({ id: p.id, name: p.name, access_token: p.access_token }))
+      }]).select('id').single();
+      if (pendingErr) { console.error('Error storing pending facebook selection:', pendingErr); return failRedirect(channelId, '페이지 선택 정보를 저장하지 못했습니다.'); }
+      return res.redirect(`/admin/live-host/${channelId}?omnicast_facebook_select=${pending.id}`);
+    }
+
+    return failRedirect(channelId, '지원하지 않는 플랫폼입니다.');
+  } catch (err) {
+    console.error(`Error in omnicast ${platform} callback:`, err);
+    return failRedirect(channelId, '연결 처리 중 오류가 발생했습니다.');
+  }
+});
+
+async function getPendingFacebookSelection(selectionId) {
+  const { data, error } = await supabase.from(liveTable('omnicast_pending_facebook_selections')).select('*').eq('id', selectionId).maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+  if (new Date(data.expires_at).getTime() < Date.now()) return null; // 15분 만료 - 조회 시점에 걸러낸다(스케줄러로 청소하지 않음)
+  return data;
+}
+
+// 페이스북 계정이 여러 페이지를 관리 중일 때, 어떤 페이지를 골라야 할지 보여주기 위한 목록(access_token은
+// 절대 내려주지 않는다 - 실제 확정은 choose 엔드포인트에서 서버가 직접 처리)
+app.get('/api/admin/live/omnicast/facebook/pending/:selectionId', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const pending = await getPendingFacebookSelection(req.params.selectionId);
+    if (!pending) return res.status(404).json({ error: 'Not Found', message: '선택 요청이 만료되었거나 존재하지 않습니다. 다시 연결해주세요.', timestamp: new Date().toISOString() });
+    // 이 연결을 시작한 관리자 본인만 대기 중인 페이지 선택 정보를 볼 수 있다 (다른 관리자가 selectionId를
+    // 추측/열람해 이 연결의 access_token이 어떤 페이지로 확정되는지 알거나 가로채지 못하도록).
+    if (pending.admin_user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Forbidden', message: '본인이 시작한 연결만 조회할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+    res.json({ success: true, data: { channel_id: pending.channel_id, pages: (pending.pages || []).map(p => ({ id: p.id, name: p.name })) }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching pending facebook selection:', err);
+    res.status(500).json({ error: 'Failed to fetch pending facebook selection', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/live/omnicast/facebook/pending/:selectionId/choose', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { page_id } = req.body || {};
+    if (!page_id) return res.status(400).json({ error: 'Bad Request', message: 'page_id는 필수입니다', timestamp: new Date().toISOString() });
+    const pending = await getPendingFacebookSelection(req.params.selectionId);
+    if (!pending) return res.status(404).json({ error: 'Not Found', message: '선택 요청이 만료되었거나 존재하지 않습니다. 다시 연결해주세요.', timestamp: new Date().toISOString() });
+    // 이 연결을 시작한 관리자 본인만 페이지를 확정할 수 있다.
+    if (pending.admin_user_id !== req.user.id) {
+      return res.status(403).json({ error: 'Forbidden', message: '본인이 시작한 연결만 확정할 수 있습니다', timestamp: new Date().toISOString() });
+    }
+    const page = (pending.pages || []).find(p => p.id === page_id);
+    if (!page) return res.status(400).json({ error: 'Bad Request', message: '목록에 없는 페이지입니다', timestamp: new Date().toISOString() });
+
+    const { data, error } = await supabase.from(liveTable('live_channel_broadcast_destinations')).insert([{
+      channel_id: pending.channel_id, platform: 'facebook', label: page.name || '페이스북 페이지',
+      external_account_id: page.id, external_account_name: page.name || null,
+      access_token: encryptSecret(page.access_token), status: 'connected', connected_by: pending.admin_user_id
+    }]).select().single();
+    if (error) throw error;
+    await supabase.from(liveTable('omnicast_pending_facebook_selections')).delete().eq('id', req.params.selectionId);
+
+    res.status(201).json({ success: true, data: maskOmnicastDestination(data), timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error choosing facebook page:', err);
+    res.status(500).json({ error: 'Failed to choose facebook page', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 구글 access_token은 보통 1시간이면 만료된다. 목적지를 연결해두고 한참 뒤에(예: 다음날 방송) 다시
+// 쓰면 access_token만으로는 401이 나므로, 만료됐거나 곧 만료될 때(2분 여유)는 refresh_token으로 새
+// access_token을 발급받아 DB에도 갱신해둔다 - 이렇게 하지 않으면 "연결은 됐는데 방송 시작이 계속
+// 실패하는" 현상이 생긴다. refresh_token이 없거나 갱신 자체가 실패하면 원래 access_token을 그대로
+// 돌려주고(있는 그대로 시도) 실제 API 호출에서 401로 실패하게 둔다 - 여기서 예외를 던지지 않는다.
+async function getFreshYoutubeAccessToken(dest) {
+  const expiresAt = dest.token_expires_at ? new Date(dest.token_expires_at).getTime() : 0;
+  const stillValid = expiresAt && (expiresAt - Date.now() > 2 * 60 * 1000);
+  const currentAccessToken = decryptSecret(dest.access_token);
+  if (stillValid || !dest.refresh_token) return currentAccessToken;
+  try {
+    const config = await getOmnicastPlatformConfig('youtube');
+    if (!config || !config.client_key || !config.secret_key) return currentAccessToken;
+    const resp = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: config.client_key, client_secret: config.secret_key,
+        refresh_token: decryptSecret(dest.refresh_token), grant_type: 'refresh_token'
+      }).toString(), signal: AbortSignal.timeout(15000)
+    });
+    const json = await resp.json().catch(() => null);
+    if (!resp.ok || !json?.access_token) { console.error('YouTube token refresh failed:', json); return currentAccessToken; }
+    const newExpiresAt = json.expires_in ? new Date(Date.now() + json.expires_in * 1000).toISOString() : null;
+    await supabase.from(liveTable('live_channel_broadcast_destinations'))
+      .update({ access_token: encryptSecret(json.access_token), token_expires_at: newExpiresAt, updated_at: new Date().toISOString() })
+      .eq('id', dest.id);
+    return json.access_token;
+  } catch (err) {
+    console.error('Error refreshing YouTube access token:', err);
+    return currentAccessToken;
+  }
+}
+
+// 목적지별로 실제 플랫폼에 "이번 방송" 생성을 시도한다 - 절대 예외를 던지지 않고(호출부가 항상 행 하나를
+// 만들 수 있도록) 실패하면 status:'error'+error_message를 채워 돌려준다. custom_rtmp는 외부 호출이
+// 없으므로 저장해둔 값을 그대로 복사한다.
+async function createOmnicastBroadcast(dest, session) {
+  if (dest.platform === 'custom_rtmp') {
+    return { status: 'created', ingest_rtmp_url: dest.rtmp_url, ingest_stream_key: decryptSecret(dest.stream_key) };
+  }
+
+  if (dest.platform === 'youtube') {
+    try {
+      const accessToken = await getFreshYoutubeAccessToken(dest);
+      const bResp = await fetch('https://www.googleapis.com/youtube/v3/liveBroadcasts?part=snippet,status,contentDetails', {
+        method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          snippet: { title: session.title, scheduledStartTime: new Date().toISOString() },
+          status: { privacyStatus: 'public' },
+          contentDetails: { enableAutoStart: true, enableAutoStop: true }
+        }), signal: AbortSignal.timeout(15000)
+      });
+      const bJson = await bResp.json().catch(() => null);
+      if (!bResp.ok || !bJson?.id) return { status: 'error', error_message: `유튜브 방송 생성 실패: ${bJson?.error?.message || bResp.status}` };
+
+      const sResp = await fetch('https://www.googleapis.com/youtube/v3/liveStreams?part=snippet,cdn', {
+        method: 'POST', headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ snippet: { title: session.title }, cdn: { frameRate: 'variable', ingestionType: 'rtmp', resolution: 'variable' } }), signal: AbortSignal.timeout(15000)
+      });
+      const sJson = await sResp.json().catch(() => null);
+      if (!sResp.ok || !sJson?.id) return { status: 'error', error_message: `유튜브 스트림 생성 실패: ${sJson?.error?.message || sResp.status}`, external_broadcast_id: bJson.id };
+
+      await fetch(`https://www.googleapis.com/youtube/v3/liveBroadcasts/bind?id=${bJson.id}&streamId=${sJson.id}&part=id,contentDetails`, {
+        method: 'POST', headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(15000)
+      });
+
+      return {
+        status: 'created', external_broadcast_id: bJson.id,
+        ingest_rtmp_url: sJson.cdn?.ingestionInfo?.ingestionAddress || null,
+        ingest_stream_key: sJson.cdn?.ingestionInfo?.streamName || null
+      };
+    } catch (err) {
+      return { status: 'error', error_message: `유튜브 연동 오류: ${err.message}` };
+    }
+  }
+  if (dest.platform === 'facebook') {
+    try {
+      const lvResp = await fetch(`https://graph.facebook.com/v19.0/${dest.external_account_id}/live_videos`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: session.title, status: 'LIVE_NOW', access_token: decryptSecret(dest.access_token) }), signal: AbortSignal.timeout(15000)
+      });
+      const lvJson = await lvResp.json().catch(() => null);
+
+      if (!lvResp.ok || !lvJson?.id) return { status: 'error', error_message: `페이스북 라이브 생성 실패: ${lvJson?.error?.message || lvResp.status}` };
+      // 페이스북은 서버 주소와 키가 분리되지 않고 stream_url 하나에 합쳐서 발급된다 - OBS 서버란에 이 값을
+      // 통째로 넣으면 된다(키를 따로 입력할 필요 없음). 화면에는 ingest_rtmp_url 하나만 안내한다.
+      return { status: 'created', external_broadcast_id: lvJson.id, ingest_rtmp_url: lvJson.secure_stream_url || lvJson.stream_url || null, ingest_stream_key: null };
+    } catch (err) {
+      return { status: 'error', error_message: `페이스북 연동 오류: ${err.message}` };
+    }
+  }
+  // Cloudflare Stream: 방송마다 새 "Live Input"을 하나 만들어 RTMP 수신정보(OBS에 붙여넣을 주소+키)와
+  // 재생용 HLS 주소를 함께 발급받는다. 유튜브와 마찬가지로 인풋 하나가 곧 이번 방송 1회분이다.
+  if (dest.platform === 'cloudflare_stream') {
+    try {
+      const apiToken = decryptSecret(dest.access_token);
+      const resp = await fetch(`https://api.cloudflare.com/client/v4/accounts/${dest.external_account_id}/stream/live_inputs`, {
+        method: 'POST', headers: { Authorization: `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ meta: { name: session.title }, recording: { mode: 'automatic', timeoutSeconds: 60 } }),
+        signal: AbortSignal.timeout(15000)
+      });
+      const json = await resp.json().catch(() => null);
+      if (!resp.ok || !json?.success || !json?.result?.uid) {
+        return { status: 'error', error_message: `Cloudflare Stream 라이브 입력 생성 실패: ${json?.errors?.[0]?.message || resp.status}` };
+      }
+      const r = json.result;
+      return {
+        status: 'created', external_broadcast_id: r.uid,
+        ingest_rtmp_url: r.rtmps?.url || null, ingest_stream_key: r.rtmps?.streamKey || null,
+        playback_url: r.playback?.hls || null
+      };
+    } catch (err) {
+      return { status: 'error', error_message: `Cloudflare Stream 연동 오류: ${err.message}` };
+    }
+  }
+  return { status: 'error', error_message: '이 플랫폼은 아직 지원하지 않습니다.' };
+}
+
+// ============================================
+// 📹 LIVE+ 브라우저 원클릭 방송(WebRTC) - LiveKit Cloud 연동
+// ============================================
+// OmniCast(유튜브/페이스북/Cloudflare Stream)는 전부 "호스트가 OBS 같은 별도 방송 장비로 RTMP 송출"을
+// 전제로 한다. 이 방식은 상품을 들고 카메라 앞에서 바로 설명하는 가벼운 라이브(폰/노트북 웹캠으로 즉석
+// 방송)에는 진입장벽이 높다. 그래서 브라우저 카메라를 바로 쓰는 별도 경로를 추가한다 - 실시간 영상 릴레이
+// 자체는 여기서도 LIVE+ 서버가 하지 않고(기존 설계 원칙 유지), LiveKit Cloud라는 WebRTC 전용 SaaS가
+// 담당한다. 이 서버는 (1) 누가 방송을 켰는지(세션당 1개, live_sessions_live.webrtc_active) 기록하고
+// (2) 호스트/시청자별 접속 토큰만 발급한다. jsonwebtoken 같은 별도 라이브러리를 쓰지 않는다는 파일 상단
+// 방침과 동일하게, LiveKit 토큰 규격(HS256 JWT + video grant)도 crypto로 직접 서명한다.
+function base64urlEncode(buf) {
+  return buf.toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function mintLiveKitToken({ identity, name, room, canPublish }) {
+  const apiKey = process.env.LIVEKIT_API_KEY;
+  const apiSecret = process.env.LIVEKIT_API_SECRET;
+  if (!apiKey || !apiSecret) return null;
+  const now = Math.floor(Date.now() / 1000);
+  const header = base64urlEncode(Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })));
+  const payload = base64urlEncode(Buffer.from(JSON.stringify({
+    iss: apiKey, sub: identity, name: name || identity, iat: now, nbf: now, exp: now + 6 * 3600,
+    video: { room, roomJoin: true, canPublish: !!canPublish, canSubscribe: true, canPublishData: !!canPublish }
+  })));
+  const sig = base64urlEncode(crypto.createHmac('sha256', apiSecret).update(`${header}.${payload}`).digest());
+  return `${header}.${payload}.${sig}`;
+}
+function isLiveKitConfigured() {
+  return !!(process.env.LIVEKIT_URL && process.env.LIVEKIT_API_KEY && process.env.LIVEKIT_API_SECRET);
+}
+
+// 관리자: LiveKit 연동이 설정되어 있는지(환경변수 등록 여부) - 호스트 화면에서 "브라우저로 방송 시작"
+// 버튼을 보여줄지 판단하는 용도. URL 자체는 비밀이 아니라 그대로 내려준다.
+app.get('/api/admin/live/webrtc/status', authenticate, requireRole(['admin', 'super_admin']), (req, res) => {
+  res.json({ success: true, data: { configured: isLiveKitConfigured(), livekit_url: process.env.LIVEKIT_URL || null }, timestamp: new Date().toISOString() });
+});
+
+// 호스트: 브라우저 방송 시작 - 세션이 이미 "방송 중(live)" 상태여야 한다(먼저 평소처럼 "방송 시작"을
+// 눌러야 함 - 상태 모델을 하나로 유지). webrtc_active를 켜고, 발행(publish) 가능한 호스트 토큰을 돌려준다.
+app.post('/api/admin/live/channels/:id/sessions/:sessionId/webrtc/start', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    if (!isLiveKitConfigured()) return res.status(400).json({ error: 'Bad Request', message: '브라우저 방송(WebRTC) 연동이 아직 설정되지 않았습니다. LiveKit Cloud 가입 후 LIVEKIT_URL/LIVEKIT_API_KEY/LIVEKIT_API_SECRET을 환경변수로 등록해주세요.', timestamp: new Date().toISOString() });
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id, status').eq('id', req.params.sessionId).eq('channel_id', req.params.id).maybeSingle();
+    if (!session) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (session.status !== 'live') return res.status(400).json({ error: 'Bad Request', message: '먼저 "방송 시작"으로 세션을 방송 중 상태로 전환한 뒤 브라우저 방송을 켜주세요.', timestamp: new Date().toISOString() });
+
+    await supabase.from(liveTable('live_sessions')).update({ webrtc_active: true }).eq('id', session.id);
+    const token = mintLiveKitToken({ identity: `host_${req.user.id}`, name: '호스트', room: session.id, canPublish: true });
+    res.json({ success: true, data: { livekit_url: process.env.LIVEKIT_URL, token }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error starting webrtc broadcast:', err);
+    res.status(500).json({ error: 'Failed to start webrtc broadcast', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/live/channels/:id/sessions/:sessionId/webrtc/stop', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_sessions')).update({ webrtc_active: false })
+      .eq('id', req.params.sessionId).eq('channel_id', req.params.id).select('id').maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error stopping webrtc broadcast:', err);
+    res.status(500).json({ error: 'Failed to stop webrtc broadcast', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공개: 시청자용 구독 전용 토큰 - 누구나(비로그인 포함) 호출 가능. 호출할 때마다 새 익명 identity를
+// 발급한다(로그인 여부를 굳이 따지지 않음 - 시청은 원래 비로그인으로도 가능한 공개 정보였다).
+app.get('/api/live/channels/:slug/sessions/:sessionId/webrtc/viewer-token', async (req, res) => {
+  try {
+    if (!isLiveKitConfigured()) return res.status(400).json({ error: 'Bad Request', message: '브라우저 방송 연동이 설정되지 않았습니다.', timestamp: new Date().toISOString() });
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id, webrtc_active').eq('id', req.params.sessionId).maybeSingle();
+    if (!session || !session.webrtc_active) return res.status(404).json({ error: 'Not Found', message: '지금 진행 중인 브라우저 방송이 없습니다', timestamp: new Date().toISOString() });
+    const viewerId = `viewer_${crypto.randomBytes(6).toString('hex')}`;
+    const token = mintLiveKitToken({ identity: viewerId, name: '시청자', room: session.id, canPublish: false });
+    res.json({ success: true, data: { livekit_url: process.env.LIVEKIT_URL, token }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error minting webrtc viewer token:', err);
+    res.status(500).json({ error: 'Failed to mint viewer token', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/live/channels/:id/sessions/:sessionId/omnicast/targets', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from(liveTable('live_session_broadcast_targets'))
+      .select(`*, live_channel_broadcast_destinations_live:${liveTable('live_channel_broadcast_destinations')}(label, platform)`).eq('live_session_id', req.params.sessionId).order('created_at', { ascending: true });
+    if (error) throw error;
+    res.json({ success: true, data: data || [], count: (data || []).length, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error fetching omnicast targets:', err);
+    res.status(500).json({ error: 'Failed to fetch omnicast targets', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/live/channels/:id/sessions/:sessionId/omnicast/targets', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { destination_id } = req.body || {};
+    if (!destination_id) return res.status(400).json({ error: 'Bad Request', message: 'destination_id는 필수입니다', timestamp: new Date().toISOString() });
+
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id, title, channel_id').eq('id', req.params.sessionId).eq('channel_id', req.params.id).maybeSingle();
+    if (!session) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const { data: dest } = await supabase.from(liveTable('live_channel_broadcast_destinations')).select('*').eq('id', destination_id).eq('channel_id', req.params.id).maybeSingle();
+    if (!dest) return res.status(404).json({ error: 'Not Found', message: '목적지를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (dest.status !== 'connected') return res.status(400).json({ error: 'Bad Request', message: '연결이 끊긴 목적지입니다. 다시 연결한 뒤 시도해주세요.', timestamp: new Date().toISOString() });
+
+    const { data: existing } = await supabase.from(liveTable('live_session_broadcast_targets')).select('id').eq('live_session_id', session.id).eq('destination_id', destination_id).maybeSingle();
+    if (existing) return res.status(409).json({ error: 'Conflict', message: '이미 이 세션에 추가된 목적지입니다', timestamp: new Date().toISOString() });
+
+    const result = await createOmnicastBroadcast(dest, session);
+    const { data, error } = await supabase.from(liveTable('live_session_broadcast_targets')).insert([{
+      live_session_id: session.id, destination_id, platform: dest.platform,
+      external_broadcast_id: result.external_broadcast_id || null,
+      ingest_rtmp_url: result.ingest_rtmp_url || null, ingest_stream_key: result.ingest_stream_key || null,
+      playback_url: result.playback_url || null,
+      status: result.status, error_message: result.error_message || null
+    }]).select().single();
+    if (error) throw error;
+    res.status(result.status === 'error' ? 502 : 201).json({ success: result.status !== 'error', data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating omnicast target:', err);
+    res.status(500).json({ error: 'Failed to create omnicast target', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 송출 종료 - 유튜브/페이스북은 최선을 다해 원격 방송도 함께 종료를 시도하지만(실패해도 로컬 기록은
+// 그대로 종료 처리한다 - 이미 끝난 방송을 다시 못 끝내서 우리 화면에 영원히 "진행중"으로 남는 것을 방지),
+// 목적지 자체가 이미 지워졌거나 토큰이 만료된 경우까지 고려해 항상 로컬 상태는 갱신한다.
+app.patch('/api/admin/live/channels/:id/sessions/:sessionId/omnicast/targets/:targetId', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    if (req.body?.status !== 'ended') return res.status(400).json({ error: 'Bad Request', message: "status는 'ended'만 지원합니다", timestamp: new Date().toISOString() });
+    const { data: target } = await supabase.from(liveTable('live_session_broadcast_targets')).select('*').eq('id', req.params.targetId).eq('live_session_id', req.params.sessionId).maybeSingle();
+    if (!target) return res.status(404).json({ error: 'Not Found', message: '송출 대상을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    if (target.status !== 'ended' && target.external_broadcast_id) {
+      const { data: dest } = await supabase.from(liveTable('live_channel_broadcast_destinations')).select('*').eq('id', target.destination_id).maybeSingle();
+      try {
+        if (dest && target.platform === 'youtube') {
+          const accessToken = await getFreshYoutubeAccessToken(dest);
+          await fetch(`https://www.googleapis.com/youtube/v3/liveBroadcasts/transition?broadcastStatus=complete&id=${target.external_broadcast_id}&part=id,status`, {
+            method: 'POST', headers: { Authorization: `Bearer ${accessToken}` }, signal: AbortSignal.timeout(15000)
+          });
+        } else if (dest && target.platform === 'facebook') {
+          await fetch(`https://graph.facebook.com/v19.0/${target.external_broadcast_id}`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ end_live_video: true, access_token: decryptSecret(dest.access_token) }), signal: AbortSignal.timeout(15000)
+          });
+        }
+      } catch (remoteErr) {
+
+        console.error('Error ending remote broadcast (로컬 상태는 그대로 종료 처리):', remoteErr);
+      }
+    }
+
+    const { data, error } = await supabase.from(liveTable('live_session_broadcast_targets'))
+      .update({ status: 'ended', ended_at: new Date().toISOString() }).eq('id', req.params.targetId).select().single();
+    if (error) throw error;
+    res.json({ success: true, data, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error ending omnicast target:', err);
+    res.status(500).json({ error: 'Failed to end omnicast target', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.delete('/api/admin/live/channels/:id/sessions/:sessionId/omnicast/targets/:targetId', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: target } = await supabase.from(liveTable('live_session_broadcast_targets')).select('status').eq('id', req.params.targetId).eq('live_session_id', req.params.sessionId).maybeSingle();
+    if (!target) return res.status(404).json({ error: 'Not Found', message: '송출 대상을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (target.status === 'live') return res.status(409).json({ error: 'Conflict', message: '송출 중인 목적지입니다. 먼저 종료해주세요.', timestamp: new Date().toISOString() });
+    const { error } = await supabase.from(liveTable('live_session_broadcast_targets')).delete().eq('id', req.params.targetId);
+    if (error) throw error;
+    res.json({ success: true, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting omnicast target:', err);
+    res.status(500).json({ error: 'Failed to delete omnicast target', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
