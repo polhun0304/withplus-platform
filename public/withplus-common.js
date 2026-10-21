@@ -531,9 +531,18 @@
       const days = Math.ceil((new Date(product.expiry_date) - new Date()) / 86400000);
       if (days >= 0 && days <= EXPIRY_SOON_DAYS) badges.push({ label: '유통임박', cls: 'is-expiry' });
     }
-    if (stock <= 0) badges.push({ label: '품절', cls: 'is-soldout' });
+    if (isProductSoldOut(product)) badges.push({ label: '품절', cls: 'is-soldout' });
     else if (stock <= 5) badges.push({ label: '품절임박', cls: 'is-low' });
     return badges;
+  }
+  // 품절 판단(서버 isProductSoldOut 과 같은 기준): 품절(구 단종) 상태값이거나 재고 0.
+  // 상세 API 가 is_sold_out(옵션 재고까지 반영)을 내려주면 그 값을 그대로 쓴다.
+  const SOLD_OUT_STATUSES = ['discontinued', 'soldout', 'sold_out', 'out_of_stock'];
+  function isProductSoldOut(product) {
+    if (!product) return false;
+    if (typeof product.is_sold_out === 'boolean') return product.is_sold_out;
+    if (SOLD_OUT_STATUSES.indexOf(String(product.status || '')) !== -1) return true;
+    return product.stock != null && Number(product.stock) <= 0;
   }
   function getProductCatchLine(product) {
     const text = String(product.description || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -551,7 +560,7 @@
       : 0;
     const rating = Number(product.rating || 0).toFixed(1);
     const reviewCount = product.review_count || 0;
-    const outOfStock = Number(product.stock) <= 0;
+    const outOfStock = isProductSoldOut(product);
     const imageUrl = Array.isArray(product.images_urls) && product.images_urls.length > 0 ? product.images_urls[0] : null;
     const rates = cachedMileageRates;
     const badges = getProductBadges(product);
@@ -564,6 +573,7 @@
                 <button class="action-btn wishlist-btn" type="button">❤️</button>
             </div>
             ${imageUrl ? '' : emoji}
+            ${outOfStock ? '<div class="wp-soldout-overlay" aria-label="품절"><span>품절</span></div>' : ''}
             ${badges.length ? `<div class="wp-card-badges">${badges.map(b => `<span class="wp-card-badge ${b.cls}">${b.label}</span>`).join('')}</div>` : ''}
         </div>
         <div class="product-info">
@@ -1316,6 +1326,13 @@
       .wp-drawer-link { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; color: #222; text-decoration: none; font-size: 15px; }
       .wp-drawer-link:hover { background: #FFF7F9; color: #E8125C; }
       .wp-drawer-link svg { color: #C9AAB4; }
+      .wp-drawer-app { display: flex; align-items: center; gap: 10px; margin: 4px 16px 6px; padding: 11px 12px; border: 1px solid #F3D3DE; border-radius: 12px; text-decoration: none; color: #222; background: #fff; }
+      .wp-drawer-app:hover { background: #FFF7F9; }
+      .wp-drawer-app-ico { font-size: 22px; line-height: 1; flex-shrink: 0; }
+      .wp-drawer-app-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+      .wp-drawer-app-txt b { font-size: 15px; color: #E8125C; }
+      .wp-drawer-app-txt small { font-size: 12px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .wp-drawer-app svg { color: #C9AAB4; flex-shrink: 0; }
       body.wp-drawer-lock { overflow: hidden; }
 
       /* 상품 카드 공통 (이유몰식): 상태 배지 · 한 줄 소개 · 빨간 할인율 */
@@ -1324,6 +1341,9 @@
       .wp-card-badge.is-expiry { color: #8E24AA; }
       .wp-card-badge.is-low { color: #E8590C; }
       .wp-card-badge.is-soldout { color: #fff; background: #555; border-color: #555; }
+      .product-image .wp-soldout-overlay { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.55); border-radius: inherit; pointer-events: none; }
+      .product-image .wp-soldout-overlay ~ .wp-card-badges .is-soldout { display: none; }
+      .product-image .wp-soldout-overlay span { display: inline-flex; align-items: center; justify-content: center; width: 64px; height: 64px; border-radius: 50%; background: rgba(34,34,34,0.82); color: #fff; font-size: 15px; font-weight: 800; letter-spacing: .04em; }
       .product-card .wp-card-catch { font-size: 12px; color: #888; margin: 0 0 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .product-card .product-price { flex-wrap: wrap; align-items: baseline; }
       .product-card .discount-rate { color: #E8125C; font-size: 1.15em; font-weight: 800; }
@@ -1393,6 +1413,20 @@
     });
   }
 
+  // 📱 앱 버전 — 이미 설치된 앱(홈 화면 아이콘·Play 스토어 앱)으로 열린 경우엔 "앱 설치" 메뉴를 숨긴다
+  function isRunningAsApp() {
+    try {
+      return (global.matchMedia && global.matchMedia('(display-mode: standalone)').matches)
+        || global.navigator.standalone === true
+        || /^android-app:\/\//.test(document.referrer || '');
+    } catch (e) { return false; }
+  }
+  // 설치 안내 창 열기(pwa-install.js 가 실제 처리). 스크립트가 없는 화면이면 마이페이지 안내로 보낸다.
+  function openAppInstall() {
+    if (global.WithPlusPWA && typeof global.WithPlusPWA.open === 'function') global.WithPlusPWA.open();
+    else location.href = '/mypage#app-install';
+  }
+
   function buildDrawer() {
     if (document.getElementById('wp-drawer')) return;
     const backdrop = document.createElement('div');
@@ -1410,6 +1444,7 @@
         <button type="button" class="wp-icon-btn" id="wp-drawer-close" aria-label="메뉴 닫기">${shellIcon('close')}</button>
       </div>
       <div class="wp-drawer-user" id="wp-drawer-user"><span>로그인하고 적립 혜택을 받아보세요</span><a href="/login">로그인</a></div>
+      ${isRunningAsApp() ? '' : `<a class="wp-drawer-app" href="#app-install" data-wp-app-install><span class="wp-drawer-app-ico">📱</span><span class="wp-drawer-app-txt"><b>앱 설치</b><small>홈 화면에 추가하고 앱처럼 바로 열기</small></span>${shellIcon('chevronRight', 18)}</a>`}
       <div class="wp-drawer-body">
         <div class="wp-drawer-section" id="wp-drawer-cats-title">카테고리</div>
         <div class="wp-drawer-cats" id="wp-drawer-cats"></div>
@@ -1432,6 +1467,13 @@
     document.body.appendChild(drawer);
     backdrop.addEventListener('click', closeDrawer);
     drawer.querySelector('#wp-drawer-close').addEventListener('click', closeDrawer);
+    const appBtn = drawer.querySelector('[data-wp-app-install]');
+    if (appBtn) appBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation(); // pwa-install.js 의 공통 클릭 처리와 중복 실행 방지
+      closeDrawer();
+      openAppInstall();
+    });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
   }
 
@@ -1925,6 +1967,9 @@
     getPageTemplatesCached,
     formatPercent,
     renderProductCard,
+    isProductSoldOut,
+    openAppInstall,
+    isRunningAsApp,
     escapeHtml,
     safeUrlAttr,
     timeAgo,

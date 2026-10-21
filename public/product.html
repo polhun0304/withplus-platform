@@ -297,6 +297,7 @@
 
     <script src="/vendor/supabase.min.js"></script>
     <script src="/withplus-common.js"></script>
+    <script src="/soldout-popup.js"></script>
     <script>
         (async function () {
             WithPlus.initHeader();
@@ -307,6 +308,8 @@
             try {
                 const { ok, json } = await WithPlus.fetchJSON('/api/products/' + encodeURIComponent(id));
                 if (!ok || !json.success || !json.data) {
+                    // 품절 안내 팝업: 삭제·없는 상품은 안내 + 특가상품 추천 화면으로 (서버 오류는 아래 기존 안내)
+                    if (window.WPSoldout && (json && json.deleted)) { WPSoldout.showDeleted(wrap, id); return; }
                     wrap.innerHTML = `
                         <div class="state-box">
                             <div class="emoji">😕</div>
@@ -344,7 +347,7 @@
                 const discountRate = hasDiscount ? Math.round((1 - Number(p.discount_price) / Number(p.price)) * 100) : 0;
                 const rating = Number(p.rating || 0).toFixed(1);
                 const reviewCount = p.review_count || 0;
-                const outOfStock = Number(p.stock) <= 0;
+                const outOfStock = WithPlus.isProductSoldOut ? WithPlus.isProductSoldOut(p) : Number(p.stock) <= 0; // 품절 상태값·옵션 재고까지 반영
                 const mileageRates = WithPlus.getMileageRatesCached();
                 const personalMileage = Math.floor(Number(currentPrice) * mileageRates.personal);
                 const communityMileage = Math.floor(Number(currentPrice) * mileageRates.community);
@@ -1150,6 +1153,9 @@
                         section.style.display = '';
                     } catch (err) { /* 실패해도 상품 상세 화면 전체에는 지장 없음 */ }
                 })();
+
+                // 품절 안내 팝업 + 구매 버튼 "품절" 잠금 (soldout-popup.js)
+                if (outOfStock && window.WPSoldout) WPSoldout.show(p);
 
                 // 리뷰 작성 영역: 로그인 상태에 따라 작성 폼 또는 로그인 안내 표시
                 await renderReviewWriteArea(p.id);

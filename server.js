@@ -131,6 +131,23 @@ app.get('/pwa/icon/:size', (req, res, next) => {
   if (!file) return next();
   res.sendFile(path.join(PWA_PUBLIC_DIR, 'images', 'icons', file), { maxAge: '7d' });
 });
+// 📱 Play 스토어 앱(TWA) 연결 확인 파일 — 구글이 "이 앱이 이 사이트의 공식 앱"인지 확인할 때 읽는다.
+// 패키지명·서명키 지문(SHA-256)은 형님이 앱을 만든 뒤 환경변수로 넣는다(docs/APP_STORE_GUIDE.md).
+//   TWA_PACKAGE_NAME=kr.withplus.app
+//   TWA_SHA256_FINGERPRINTS=AA:BB:...(여러 개면 쉼표로 구분 — 업로드 키 + Play 앱 서명 키)
+// 값이 없으면 빈 배열([])을 내려 아무 앱도 연결되지 않게 한다(가짜 키를 지어내지 않음).
+app.get('/.well-known/assetlinks.json', (req, res) => {
+  const pkg = String(process.env.TWA_PACKAGE_NAME || '').trim();
+  const fps = String(process.env.TWA_SHA256_FINGERPRINTS || '')
+    .split(',')
+    .map(s => s.trim().toUpperCase())
+    .filter(s => /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/.test(s));
+  const body = (pkg && /^[a-zA-Z][\w]*(\.[a-zA-Z][\w]*)+$/.test(pkg) && fps.length > 0)
+    ? [{ relation: ['delegate_permission/common.handle_all_urls'], target: { namespace: 'android_app', package_name: pkg, sha256_cert_fingerprints: fps } }]
+    : [];
+  res.set('Cache-Control', 'public, max-age=300');
+  res.type('application/json').send(JSON.stringify(body));
+});
 
 // 정적 파일 서빙 (홈페이지: public/index.html)
 app.use(express.static(path.join(__dirname, 'public')));
@@ -446,6 +463,21 @@ const isAdminRole = (role) => role === 'admin' || role === 'super_admin';
 // 컬럼이 추가될 때마다(예: cost_price가 이번에 추가된 것처럼) 의도치 않게 새 컬럼이 응답에 새어나갈 수 있으므로,
 // "필요한 컬럼만 명시적으로 나열"하는 화이트리스트 방식으로 통일한다. cost_price는 여기 절대 포함하지 않는다.
 const PRODUCT_SAFE_COLUMNS = 'id, created_at, name, slug, description, long_description, price, discount_price, category, stock, images_urls, supplier_id, rating, review_count, status, detail_sections, vendor_id, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount, brand';
+
+// 품절 안내 팝업 — 품절(구 '단종') 처리 상태값. 관리자 화면 표기가 단종→품절로 바뀌어도 저장값은 'discontinued'이며,
+// 이후 별도 상태값(soldout 등)이 생겨도 같은 '품절'로 취급한다.
+const SOLD_OUT_PRODUCT_STATUSES = ['discontinued', 'soldout', 'sold_out', 'out_of_stock'];
+function isUuidLike(v) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v || ''));
+}
+// 품절 판단: 품절 상태값이거나, 옵션이 있으면 판매중 옵션 재고가 모두 0, 옵션이 없으면 상품 재고가 0
+function isProductSoldOut(product, variants) {
+  if (!product) return true;
+  if (SOLD_OUT_PRODUCT_STATUSES.includes(String(product.status || ''))) return true;
+  const list = Array.isArray(variants) ? variants.filter(v => v && v.is_active !== false) : [];
+  if (list.length > 0) return list.every(v => Number(v.stock) <= 0);
+  return Number(product.stock) <= 0;
+}
 
 function getClientIp(req) {
   return (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim() || null;
@@ -5689,20 +5721,37 @@ app.get('/api/products/:id', async (req, res) => {
   try {
     const { id } = req.params;
 
-    const { data, error } = await supabasePublic
-      .from('products_with')
-      .select(`
+    // 품절 안내 팝업: 잘못된 형식의 주소·영구 삭제된 상품은 500이 아니라 404(deleted)로 정직하게 알려준다
+    if (!isUuidLike(id)) {
+      return res.status(404).json({ error: 'Not Found', message: 'Product not found', deleted: true, timestamp: new Date().toISOString() });
+    }
+    const PRODUCT_DETAIL_SELECT = `
         ${PRODUCT_SAFE_COLUMNS},
         reviews:product_reviews(id, rating, title, comment, user_id, created_at, verified_purchase, status)
-      `)
+      `;
+    let { data, error } = await supabasePublic
+      .from('products_with')
+      .select(PRODUCT_DETAIL_SELECT)
       .eq('id', id)
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
+    // 공개(anon) 조회에서 안 보이는 상품 중 '품절(구 단종) 처리'된 상품만 서비스 권한으로 다시 읽어
+    // 상세 화면에 "품절" 안내와 함께 보여준다(숨김·심사중 등 다른 비공개 상태는 계속 없는 상품으로 취급).
+    if (!data) {
+      const { data: soldRow } = await supabase
+        .from('products_with')
+        .select(PRODUCT_DETAIL_SELECT)
+        .eq('id', id)
+        .in('status', SOLD_OUT_PRODUCT_STATUSES)
+        .maybeSingle();
+      data = soldRow || null;
+    }
     if (!data) {
       return res.status(404).json({
         error: 'Not Found',
         message: 'Product not found',
+        deleted: true,
         timestamp: new Date().toISOString()
       });
     }
@@ -5738,9 +5787,10 @@ app.get('/api/products/:id', async (req, res) => {
         : null
     };
 
+    const isSoldOut = isProductSoldOut(data, variants || []);
     res.json({
       success: true,
-      data: { ...data, reviews: visibleReviews, variants: variants || [], review_satisfaction: reviewSatisfaction },
+      data: { ...data, reviews: visibleReviews, variants: variants || [], review_satisfaction: reviewSatisfaction, is_sold_out: isSoldOut },
       timestamp: new Date().toISOString()
     });
   } catch (err) {
@@ -16108,6 +16158,111 @@ app.get('/api/products/:id/similar', async (req, res) => {
   } catch (err) {
     console.error('Error fetching similar products:', err);
     res.status(500).json({ error: 'Failed to fetch similar products', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🔴 품절 안내 팝업 → "특가상품 찾아보기" 추천
+// 품절(또는 삭제)된 상품을 연 고객에게, 같은 카테고리 → 상위/형제 카테고리 → 전체 순으로
+// 지금 판매중·재고 있는 할인 상품을 할인율이 큰 순서로 추천한다.
+// (한정수량 초특가(flash deal) 테이블은 아직 main 에 없어 포함하지 않는다 — 생기면 1순위로 앞에 붙이면 된다)
+// 판매중 상품 목록은 5분간 메모리에 캐시해 팝업이 많이 열려도 DB 부하가 없게 한다.
+// ============================================
+let soldoutRecoCache = { at: 0, products: null, categories: null };
+const SOLDOUT_RECO_CACHE_MS = 5 * 60 * 1000;
+const SOLDOUT_RECO_COLUMNS = 'id, name, price, discount_price, category, stock, images_urls, rating, review_count, status, description, expiry_date, brand';
+async function loadSoldoutRecoPool() {
+  if (soldoutRecoCache.products && Date.now() - soldoutRecoCache.at < SOLDOUT_RECO_CACHE_MS) return soldoutRecoCache;
+  const products = [];
+  for (let from = 0; from < 5000; from += 1000) {
+    const { data, error } = await supabasePublic
+      .from('products_with')
+      .select(SOLDOUT_RECO_COLUMNS)
+      .eq('status', 'active')
+      .gt('stock', 0)
+      .range(from, from + 999);
+    if (error) throw error;
+    products.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  const { data: categories } = await supabasePublic
+    .from('categories')
+    .select('id, slug, label, db_category, parent_id')
+    .eq('is_active', true);
+  soldoutRecoCache = { at: Date.now(), products, categories: categories || [] };
+  return soldoutRecoCache;
+}
+function soldoutDiscountRate(p) {
+  const price = Number(p.price) || 0;
+  const dp = p.discount_price == null ? null : Number(p.discount_price);
+  if (!price || dp == null || !(dp < price)) return 0;
+  return Math.round((1 - dp / price) * 100);
+}
+
+app.get('/api/products/:id/soldout-recommendations', async (req, res) => {
+  try {
+    const productId = req.params.id;
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 12, 1), 24);
+
+    // 기준 상품(품절 상품은 공개 조회에서 안 보여 서비스 권한으로 카테고리만 읽는다). 삭제된 상품이면 없음.
+    let base = null;
+    if (isUuidLike(productId)) {
+      const { data } = await supabase.from('products_with').select('id, category').eq('id', productId).maybeSingle();
+      base = data || null;
+    }
+    const baseCategory = (base && base.category) || (typeof req.query.category === 'string' ? req.query.category.slice(0, 60) : '') || '';
+
+    const { products, categories } = await loadSoldoutRecoPool();
+    const pool = products.filter(p => p.id !== productId);
+
+    // 카테고리 단계: ① 같은 카테고리 ② 상위·형제·하위 카테고리 ③ 전체
+    const sameSet = new Set(baseCategory ? [baseCategory] : []);
+    const relatedSet = new Set();
+    if (baseCategory) {
+      const mine = categories.filter(c => c.db_category === baseCategory || c.slug === baseCategory);
+      mine.forEach(c => {
+        if (c.parent_id) {
+          const parent = categories.find(x => x.id === c.parent_id);
+          if (parent && parent.db_category) relatedSet.add(parent.db_category);
+          categories.filter(x => x.parent_id === c.parent_id && x.db_category).forEach(x => relatedSet.add(x.db_category));
+        }
+        categories.filter(x => x.parent_id === c.id && x.db_category).forEach(x => relatedSet.add(x.db_category));
+      });
+      sameSet.forEach(c => relatedSet.delete(c));
+    }
+
+    const byDeal = (a, b) => (soldoutDiscountRate(b) - soldoutDiscountRate(a))
+      || ((Number(b.review_count) || 0) - (Number(a.review_count) || 0))
+      || ((Number(b.rating) || 0) - (Number(a.rating) || 0));
+    const picked = [];
+    const seen = new Set();
+    const take = (list, reason) => {
+      for (const p of list) {
+        if (picked.length >= limit) return;
+        if (seen.has(p.id)) continue;
+        seen.add(p.id);
+        picked.push({ ...p, discount_rate: soldoutDiscountRate(p), reco_reason: reason });
+      }
+    };
+    const onSale = pool.filter(p => soldoutDiscountRate(p) > 0);
+    take(onSale.filter(p => sameSet.has(p.category)).sort(byDeal), 'same_category');
+    take(onSale.filter(p => relatedSet.has(p.category)).sort(byDeal), 'related_category');
+    // 비슷한 카테고리에 할인 상품이 모자라면 전체 특가(할인율 큰 순)로 채우고,
+    // 그래도 모자랄 때만 할인 없는 같은 카테고리 → 전체 인기 상품 순으로 채운다("특가" 제목에 맞게)
+    take(onSale.slice().sort(byDeal), 'popular_deal');
+    take(pool.filter(p => sameSet.has(p.category)).sort(byDeal), 'same_category');
+    take(pool.slice().sort(byDeal), 'popular');
+
+    const catRow = baseCategory ? categories.find(c => c.db_category === baseCategory || c.slug === baseCategory) : null;
+    res.json({
+      success: true,
+      data: picked,
+      base: { found: !!base, category: baseCategory || null, category_label: catRow ? catRow.label : null, category_slug: catRow ? catRow.slug : null },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching soldout recommendations:', err);
+    res.status(500).json({ error: 'Failed to fetch recommendations', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
