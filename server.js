@@ -50,6 +50,95 @@ if (!process.env.JWT_SECRET) {
 const RUNTIME_FALLBACK_SECRET = crypto.randomBytes(32).toString('hex');
 
 // ============================================
+// 📺 라이브커머스 테이블 스위치 (WITH+ / LIVE+ 데이터 분리)
+// ============================================
+// WITH+와 LIVE+는 같은 Supabase DB를 쓰지만 라이브 데이터(채널·세션·채팅·퀴즈·경매·쿠폰함·OmniCast 연결 등)는
+// 사이트별로 완전히 분리한다. LIVE+는 *_live 테이블, WITH+는 *_with 테이블을 쓴다(2026-10-22 마이그레이션
+// docs/migrations/2026-10-22_live_commerce_with.sql). 같은 코드가 어느 사이트에서든 돌 수 있도록 라이브 테이블 이름은
+// 반드시 liveTable('<기본이름>')으로만 만든다 - '_live'/'_with'를 코드에 직접 박아 넣지 않는다.
+//  - 상품·주문·회원·쿠폰(products_with·orders_with·profiles·coupons…)처럼 원래 두 사이트가 함께 쓰는 테이블은 그대로 공유.
+//  - LIVE+에서 접미사 없이 쓰던 전역 테이블(omnicast_*)과 LIVE+ 크리에이터 테이블(creators_with 등, 이름이 이미
+//    _with라 WITH+는 live_creators_with 등을 쓴다)은 아래 예외표로 매핑한다.
+//  - orders_with(공유)의 channel_id/live_session_id/creator_id는 LIVE+ 테이블을 가리키는 FK라, WITH+ 라이브 주문은
+//    live_channel_id_with/live_session_id_with/live_creator_id_with 컬럼(LIVE_ORDER_COL)에 기록한다.
+// 사이트 판별은 기존 UPLOAD_PLATFORM(사진 업로드 폴더 구분)과 같은 환경변수를 쓴다(기본값 withplus).
+const LIVE_SITE = (process.env.UPLOAD_PLATFORM || 'withplus') === 'liveplus' ? 'liveplus' : 'withplus';
+const IS_LIVEPLUS_SITE = LIVE_SITE === 'liveplus';
+const LIVE_SUFFIX = IS_LIVEPLUS_SITE ? '_live' : '_with';
+const LIVE_TABLE_LIVEPLUS_NAMES = {
+  omnicast_platform_configs: 'omnicast_platform_configs',
+  omnicast_pending_facebook_selections: 'omnicast_pending_facebook_selections',
+  live_creators: 'creators_with',
+  live_creator_referral_codes: 'creator_referral_codes_with',
+  live_creator_settlements: 'creator_settlements_with'
+};
+function liveTable(base) {
+  if (IS_LIVEPLUS_SITE && Object.prototype.hasOwnProperty.call(LIVE_TABLE_LIVEPLUS_NAMES, base)) return LIVE_TABLE_LIVEPLUS_NAMES[base];
+  return base + LIVE_SUFFIX;
+}
+// 라이브 전용 RPC - LIVE+는 원래 이름(award_quiz_win 등), WITH+는 <이름>_with(*_with 테이블만 다룸).
+// (reserve_channel_stock/release_channel_stock/adjust_stock_with는 공유 재고 RPC라 이 함수를 쓰지 않는다)
+function liveRpc(name) { return IS_LIVEPLUS_SITE ? name : `${name}_with`; }
+// 라이브 설정(platform_settings) 키 - LIVE+는 원래 키, WITH+는 <키>_with
+function liveSettingKey(key) { return IS_LIVEPLUS_SITE ? key : `${key}_with`; }
+// 공유 주문 테이블(orders_with)의 라이브 출처 컬럼
+const LIVE_ORDER_COL = IS_LIVEPLUS_SITE
+  ? { channel: 'channel_id', session: 'live_session_id', creator: 'creator_id' }
+  : { channel: 'live_channel_id_with', session: 'live_session_id_with', creator: 'live_creator_id_with' };
+const LIVE_SITE_LABEL = IS_LIVEPLUS_SITE ? 'LIVE+' : 'WITH+ 라이브';
+
+// OmniCast(YouTube/Facebook OAuth access_token·refresh_token, 커스텀 RTMP stream_key) 저장용 암호화 키.
+// OMNICAST_ENCRYPTION_KEY 환경변수(32바이트를 hex로 인코딩한 64자 문자열)를 우선 사용하고, 없으면
+// JWT_SECRET 폴백(RUNTIME_FALLBACK_SECRET)과 동일한 패턴으로 프로세스가 시작될 때마다 새로 생성되는
+// 임의의 32바이트 값으로 폴백한다.
+// 트레이드오프 주의: 폴백을 쓰는 경우 서버가 재시작되면 키가 바뀌어, 그 이전에 이 키로 암호화 저장해둔
+// access_token/refresh_token/stream_key를 더 이상 복호화할 수 없게 된다(YouTube/Facebook 재연결,
+// 커스텀 RTMP 스트림키 재입력이 필요해짐) - 운영 환경에서는 반드시 OMNICAST_ENCRYPTION_KEY를 고정값으로 설정해야 한다.
+let omnicastEncryptionKey;
+if (process.env.OMNICAST_ENCRYPTION_KEY) {
+  const keyBuf = Buffer.from(process.env.OMNICAST_ENCRYPTION_KEY, 'hex');
+  if (keyBuf.length === 32) {
+    omnicastEncryptionKey = keyBuf;
+  } else {
+    console.warn('⚠️  OMNICAST_ENCRYPTION_KEY는 32바이트(hex 64자)여야 합니다. 형식이 올바르지 않아 런타임 임의 키로 폴백합니다.');
+    omnicastEncryptionKey = crypto.randomBytes(32);
+  }
+} else {
+  console.warn('⚠️  OMNICAST_ENCRYPTION_KEY 환경변수가 설정되지 않아 OmniCast 토큰/스트림키를 런타임 임의 키로 암호화합니다. 서버가 재시작되면 기존에 암호화 저장된 값을 복호화할 수 없게 되니(YouTube/Facebook 재연결, RTMP 키 재입력 필요), 운영 환경에서는 반드시 OMNICAST_ENCRYPTION_KEY를 고정값으로 설정하세요.');
+  omnicastEncryptionKey = crypto.randomBytes(32);
+}
+
+// AES-256-GCM으로 OmniCast 시크릿(OAuth access_token/refresh_token, RTMP stream_key)을 암호화한다.
+// 반환값 형식: "enc:v1:<iv-hex>:<authTag-hex>:<ciphertext-hex>" - 접두사(enc:v1:)로 기존에 평문으로
+// 저장돼 있던(이번 수정 이전의, 마이그레이션 전) 값과 구분한다. null/빈 문자열은 그대로 null로 저장한다.
+function encryptSecret(text) {
+  if (text === null || text === undefined || text === '') return null;
+  const iv = crypto.randomBytes(12); // GCM 권장 IV 길이(12바이트)
+  const cipher = crypto.createCipheriv('aes-256-gcm', omnicastEncryptionKey, iv);
+  const encrypted = Buffer.concat([cipher.update(String(text), 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return `enc:v1:${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
+}
+
+// encryptSecret으로 암호화된 값을 복호화한다. "enc:v1:" 접두사가 없으면(이번 수정 이전에 평문으로 저장된
+// 기존 값 - 별도 마이그레이션 전까지는 평문으로 남아있다) 그대로 돌려준다(하위호환). 복호화 자체가
+// 실패하면(암호화 키가 그 사이 바뀐 경우 등) null을 돌려주고 에러만 로그로 남긴다.
+function decryptSecret(stored) {
+  if (stored === null || stored === undefined || stored === '') return stored;
+  if (typeof stored !== 'string' || !stored.startsWith('enc:v1:')) return stored; // 평문(마이그레이션 전) 하위호환
+  try {
+    const [, , ivHex, authTagHex, dataHex] = stored.split(':');
+    const decipher = crypto.createDecipheriv('aes-256-gcm', omnicastEncryptionKey, Buffer.from(ivHex, 'hex'));
+    decipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
+    const decrypted = Buffer.concat([decipher.update(Buffer.from(dataHex, 'hex')), decipher.final()]);
+    return decrypted.toString('utf8');
+  } catch (err) {
+    console.error('OmniCast 시크릿 복호화 실패 (암호화 키가 바뀌었을 수 있음):', err.message);
+    return null;
+  }
+}
+
+// ============================================
 // 미들웨어
 // ============================================
 // 🔒 CSP(Content-Security-Policy): 전면 비활성화 대신 최소한의 CSP를 적용한다. 이 코드베이스는 여러
@@ -67,6 +156,10 @@ app.use(helmet({
       "style-src": ["'self'", "'unsafe-inline'", "https:"],
       "img-src": ["'self'", "data:", "https:", "blob:"],
       "connect-src": ["'self'", "https:", "wss:"],
+      // 📺 라이브(WITH+ 라이브커머스): 유튜브/페이스북 임베드 재생, Cloudflare Stream HLS(blob: MSE), hls.js 워커(blob:)
+      "frame-src": ["'self'", "https://www.youtube.com", "https://www.youtube-nocookie.com", "https://www.facebook.com", "https://web.facebook.com"],
+      "media-src": ["'self'", "https:", "blob:", "data:"],
+      "worker-src": ["'self'", "blob:"],
       "object-src": ["'none'"],
       "base-uri": ["'self'"],
       "frame-ancestors": ["'self'"],
@@ -105,6 +198,27 @@ const couponLimiter = rateLimit({
 });
 app.use('/api/serial-coupons/redeem', couponLimiter);
 app.use('/api/coupons/validate', couponLimiter);
+
+// 📺 라이브 팬 활동 점수 API - view/share처럼 서버가 실제 발생 여부를 검증할 수 없는 가벼운 활동은, 클라이언트가
+// 짧은 시간에 반복 호출해 점수를 긁어가는 남용을 막기 위해 별도로 더 엄격하게 제한한다.
+const fanActivityLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too Many Requests', message: '활동 기록 요청이 너무 많습니다. 잠시 후 다시 시도해주세요.', timestamp: new Date().toISOString() }
+});
+
+// 📺 라이브 채팅 도배 방지 - 같은 사용자가 보낸 두 요청이 동시에 도착해도(TOCTOU 레이스) 사용자 단위로
+// 짧은 시간창(2초)에 1회만 허용한다(라우트 핸들러 진입 전에 걸러낸다). authenticate 뒤에 붙으므로 req.user가 있다.
+const liveChatLimiter = rateLimit({
+  windowMs: 2 * 1000,
+  max: 1,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req.user && req.user.id) || rateLimit.ipKeyGenerator(req.ip),
+  message: { error: 'Too Many Requests', message: '메시지를 너무 빠르게 보내고 있어요. 잠시 후 다시 시도해주세요', timestamp: new Date().toISOString() }
+});
 
 // ============================================
 // 설치형 앱(PWA) 표준 v1 — 매니페스트·아이콘·서비스워커·오프라인 화면은 로그인 없이 열린다(인증 미들웨어보다 앞).
