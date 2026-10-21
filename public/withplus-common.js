@@ -182,11 +182,40 @@
     return Number(price).toLocaleString('ko-KR') + '원';
   }
 
+  // ============================================
+  // 구매수량별 가격 옵션 (서버 getQuantityTierPrice / computeProductLineTotal 과 동일 규칙 - 표시용)
+  // 수량이 등록된 묶음 수량과 정확히 같으면 묶음 총액, 아니면 1개 가격(할인가 반영) x 수량.
+  // 실제 결제 금액은 항상 서버가 다시 계산한다.
+  // ============================================
+  function getEffectiveUnitPrice(p) {
+    const price = Number(p && p.price) || 0;
+    const dp = p && p.discount_price !== null && p.discount_price !== undefined && p.discount_price !== '' ? Number(p.discount_price) : null;
+    return (dp !== null && Number.isFinite(dp) && dp > 0 && dp < price) ? dp : price;
+  }
+  function getQuantityPriceOptions(p) {
+    const opts = p && Array.isArray(p.quantity_price_options) ? p.quantity_price_options : [];
+    return opts
+      .map(o => ({ qty: Number(o.qty), price: Number(o.price), label: o.label || '', badge: o.badge || '' }))
+      .filter(o => Number.isInteger(o.qty) && o.qty >= 1 && Number.isFinite(o.price) && o.price > 0)
+      .sort((a, b) => a.qty - b.qty);
+  }
+  function getQuantityTierPrice(p, qty) {
+    const tier = getQuantityPriceOptions(p).find(o => o.qty === Number(qty));
+    return tier ? tier.price : null;
+  }
+  function computeLineTotal(p, qty, priceAdjustment) {
+    const q = Number(qty) || 1;
+    const adj = Number(priceAdjustment) || 0;
+    const tierTotal = getQuantityTierPrice(p, q);
+    if (tierTotal !== null) return { lineTotal: tierTotal + adj * q, tierApplied: true };
+    return { lineTotal: (getEffectiveUnitPrice(p) + adj) * q, tierApplied: false };
+  }
+
   function getShippingBadgeLabel(stock) {
     const n = Number(stock);
     if (!Number.isFinite(n) || n <= 0) return '';
     if (n <= 5) return `⏰ 재고 ${n}개 남음 - 서둘러 주문해주세요`;
-    return '🚚 오늘 주문하면 빠르게 배송해드립니다';
+    return '🚚 오후 2시까지 주문하면 당일 출고';
   }
 
   // ============================================
@@ -1917,6 +1946,10 @@
     renderCategoryNav,
     initCategoryNav,
     formatPrice,
+    getEffectiveUnitPrice,
+    getQuantityPriceOptions,
+    getQuantityTierPrice,
+    computeLineTotal,
     getShippingBadgeLabel,
     fetchJSON,
     refreshMileageRates,

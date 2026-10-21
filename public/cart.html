@@ -493,9 +493,11 @@
                             return;
                         }
                     }
-                    const basePrice = (p.discount_price && Number(p.discount_price) < Number(p.price)) ? Number(p.discount_price) : Number(p.price);
-                    const price = basePrice + (variant ? Number(variant.price_adjustment || 0) : 0);
-                    lineItems.push({ product: p, variant, quantity: ci.quantity, price });
+                    const adj = variant ? Number(variant.price_adjustment || 0) : 0;
+                    const price = WithPlus.getEffectiveUnitPrice(p) + adj;
+                    // 구매수량별 가격 옵션: 수량이 묶음 수량과 같으면 묶음 총액 (서버와 동일 규칙, 실제 금액은 서버가 재계산)
+                    const lt = WithPlus.computeLineTotal(p, ci.quantity, adj);
+                    lineItems.push({ product: p, variant, quantity: ci.quantity, price, lineTotal: lt.lineTotal, tierApplied: lt.tierApplied });
                 });
 
                 if (lineItems.length === 0) {
@@ -508,7 +510,7 @@
                     return;
                 }
 
-                const subtotal = lineItems.reduce((sum, li) => sum + li.price * li.quantity, 0);
+                const subtotal = lineItems.reduce((sum, li) => sum + li.lineTotal, 0);
                 const shippingPolicy = await getShippingPolicy();
                 const shippingCalc = calcShippingFee(shippingPolicy, subtotal, lastKnownPostal);
                 const shippingFee = shippingCalc.fee;
@@ -588,14 +590,16 @@
                         <div class="info">
                             <div class="name"><a href="/product/${li.product.id}">${WithPlus.escapeHtml(li.product.name)}</a></div>
                             ${li.variant ? `<div style="font-size:0.85em; color:var(--text-gray); margin-bottom:2px;">옵션: ${WithPlus.escapeHtml(li.variant.name)}</div>` : ''}
-                            <div class="price">${WithPlus.formatPrice(li.price)}</div>
+                            <div class="price">${li.tierApplied
+                                ? `${WithPlus.formatPrice(Math.round(li.lineTotal / li.quantity))} <span style="font-size:0.8em; color:#C62828; font-weight:600;">· ${li.quantity}개 묶음가 적용</span>`
+                                : WithPlus.formatPrice(li.price)}</div>
                         </div>
                         <div class="qty-control">
                             <button type="button" class="qty-minus">−</button>
                             <input type="text" class="qty-input" value="${li.quantity}" readonly>
                             <button type="button" class="qty-plus">+</button>
                         </div>
-                        <div class="line-total">${WithPlus.formatPrice(li.price * li.quantity)}</div>
+                        <div class="line-total">${WithPlus.formatPrice(li.lineTotal)}</div>
                         <button type="button" class="remove-btn" title="삭제">✕</button>
                     </div>`;
                 }).join('');
