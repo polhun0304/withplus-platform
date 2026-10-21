@@ -8732,6 +8732,424 @@ app.get('/api/admin/inventory/find-product-location', authenticate, requireRole(
   }
 });
 
+// ============================================
+// 📊 재고 현황판(Stock Report) — 고객사 구글시트(구분|상품명|일자별 출고|현수량|단가|위치|유통기한)를 대체
+// ------------------------------------------------------------------
+// 데이터 출처(새 테이블 없음, 전부 읽기 전용 집계):
+//  - 상품/구분/현수량/단가/유통기한/코드: products_with (+ product_variants_with: 옵션·SKU·바코드)
+//  - 일자별 판매(출고)수량: orders_with.items(결제완료~배송완료 상태만, 취소/미결제 제외)
+//      → live_session_id가 있으면 "라이브", 없으면 "온라인"
+//    + channel_sales_with(라이브/오프라인 수기 판매, 취소 제외)
+//  - 라이브 회차명: live_sessions_live(+ channels_live 채널명)
+//  - 위치: product_location_assignments_with → warehouse_locations_with → warehouses_with
+//  - Lot·원장: stock_adjustments_with (상세 조회에서만, 상품 1개 단위)
+// 부하 관리: 기간은 최대 92일로 제한하고 주문/채널판매는 created_at(인덱스) 범위로만 조회한다.
+// 날짜 버킷은 한국시간(KST) 기준.
+// ============================================
+const WMS_REPORT_SALE_STATUSES = ['paid', 'processing', 'shipped', 'delivered'];
+const WMS_REPORT_MAX_DAYS = 92;
+const WMS_REPORT_CATEGORY_FALLBACK = { cosmetics: '뷰티', snack: '간식', food: '먹거리', functional: '건강식품', health: '건강헬스케어', probiotics: '유산균', diet: '다이어트', lifestyle: '생활잡화', fashion: '의류잡화', daily: '생활', special: '기획전', test: '테스트' };
+
+function wmsKstDay(ts) {
+  const d = new Date(new Date(ts).getTime() + 9 * 3600 * 1000);
+  return d.toISOString().slice(0, 10);
+}
+function wmsTodayKst() { return wmsKstDay(Date.now()); }
+function wmsAddDays(day, n) {
+  const d = new Date(day + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function wmsDaysBetween(a, b) { return Math.round((new Date(b + 'T00:00:00Z') - new Date(a + 'T00:00:00Z')) / 86400000); }
+function wmsNormalize(s) { return String(s || '').toLowerCase().replace(/[\s\-_()[\]{}.,/·]/g, ''); }
+
+// 기간 파라미터 정규화(YYYY-MM-DD, KST). 잘못되면 최근 14일.
+function wmsParseRange(query) {
+  const today = wmsTodayKst();
+  const re = /^\d{4}-\d{2}-\d{2}$/;
+  let to = re.test(query.to || '') ? query.to : today;
+  let from = re.test(query.from || '') ? query.from : wmsAddDays(to, -13);
+  if (from > to) { const t = from; from = to; to = t; }
+  if (wmsDaysBetween(from, to) + 1 > WMS_REPORT_MAX_DAYS) from = wmsAddDays(to, -(WMS_REPORT_MAX_DAYS - 1));
+  const days = [];
+  for (let d = from; d <= to; d = wmsAddDays(d, 1)) days.push(d);
+  // 평균 출고 분모: 오늘 이후(미래) 날짜는 제외
+  const elapsedDays = Math.max(1, days.filter(d => d <= today).length);
+  return { from, to, days, elapsedDays, today, fromIso: `${from}T00:00:00+09:00`, toIso: `${to}T23:59:59.999+09:00` };
+}
+
+async function wmsCategoryLabels() {
+  const map = { ...WMS_REPORT_CATEGORY_FALLBACK };
+  try {
+    const { data } = await supabase.from('categories').select('label, db_category, parent_id').eq('is_active', true).is('parent_id', null);
+    (data || []).forEach(c => { if (c.db_category && c.label) map[c.db_category] = c.label; });
+  } catch (_) { /* 라벨은 부가정보 - 실패해도 코드값으로 표시 */ }
+  return map;
+}
+
+// 1000행 제한을 넘는 테이블을 안전하게 끝까지 읽는다(상한 maxRows).
+async function wmsFetchAll(buildQuery, maxRows = 6000) {
+  const out = [];
+  for (let offset = 0; offset < maxRows; offset += 1000) {
+    const { data, error } = await buildQuery().range(offset, offset + 999);
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+
+// 기간 내 판매(출고) 이벤트를 [{product_id, variant_id, day, qty, channel, live_id}]로 평탄화
+async function wmsCollectSales(range, productIdSet) {
+  const events = [];
+  const [orders, chSales] = await Promise.all([wmsFetchAll(() => supabase.from('orders_with')
+    .select('id, created_at, status, items, live_session_id')
+    .in('status', WMS_REPORT_SALE_STATUSES)
+    .gte('created_at', range.fromIso).lte('created_at', range.toIso)
+    .order('created_at', { ascending: true }), 20000),
+  wmsFetchAll(() => supabase.from('channel_sales_with')
+    .select('product_id, variant_id, channel, quantity, unit_price, channel_ref, status, created_at')
+    .gte('created_at', range.fromIso).lte('created_at', range.toIso)
+    .order('created_at', { ascending: true }), 20000)]);
+  orders.forEach(o => {
+    const day = wmsKstDay(o.created_at);
+    (Array.isArray(o.items) ? o.items : []).forEach(it => {
+      if (!it || !it.product_id) return;
+      if (productIdSet && !productIdSet.has(it.product_id)) return;
+      const qty = parseInt(it.quantity, 10) || 0;
+      if (qty <= 0) return;
+      events.push({ product_id: it.product_id, variant_id: it.variant_id || null, day, qty, channel: o.live_session_id ? 'live' : 'online', live_id: o.live_session_id || null, price: Number(it.price) || 0 });
+    });
+  });
+  chSales.forEach(s => {
+    if (s.status === 'cancelled') return;
+    if (productIdSet && !productIdSet.has(s.product_id)) return;
+    const ref = s.channel_ref && /^[0-9a-f-]{36}$/i.test(s.channel_ref) ? s.channel_ref : (s.channel_ref ? 'ref:' + s.channel_ref : null);
+    events.push({ product_id: s.product_id, variant_id: s.variant_id || null, day: wmsKstDay(s.created_at), qty: Number(s.quantity) || 0, channel: s.channel === 'live' ? 'live' : 'offline', live_id: s.channel === 'live' ? ref : null, price: Number(s.unit_price) || 0 });
+  });
+  return events;
+}
+
+async function wmsLiveSessionInfo(ids) {
+  const uuidIds = ids.filter(id => id && /^[0-9a-f-]{36}$/i.test(id));
+  const map = {};
+  if (uuidIds.length) {
+    const { data: sessions } = await supabase.from('live_sessions_live').select('id, title, channel_id, started_at, scheduled_at, created_at').in('id', uuidIds);
+    const chIds = [...new Set((sessions || []).map(s => s.channel_id).filter(Boolean))];
+    const chMap = {};
+    if (chIds.length) {
+      const { data: chs } = await supabase.from('channels_live').select('id, name').in('id', chIds);
+      (chs || []).forEach(c => { chMap[c.id] = c.name; });
+    }
+    (sessions || []).forEach(s => {
+      const at = s.started_at || s.scheduled_at || s.created_at;
+      map[s.id] = { id: s.id, title: s.title || '라이브', channel_name: chMap[s.channel_id] || null, day: at ? wmsKstDay(at) : null };
+    });
+  }
+  ids.filter(id => id && id.startsWith('ref:')).forEach(id => { map[id] = { id, title: id.slice(4), channel_name: null, day: null }; });
+  return map;
+}
+// 시트 표기("10/4(와씨)")처럼 짧은 라이브 이름: 채널명 우선, 없으면 방송 제목 앞부분
+function wmsLiveShort(info) {
+  const base = (info && (info.channel_name || info.title)) || '라이브';
+  return base.replace(/[\[\]()🎬]/g, '').trim().slice(0, 6) || '라이브';
+}
+
+async function wmsLocationMap(productIds) {
+  const map = {};
+  if (!productIds.length) return map;
+  const chunks = [];
+  for (let i = 0; i < productIds.length; i += 300) chunks.push(productIds.slice(i, i + 300));
+  const [{ data: whs }, ...results] = await Promise.all([
+    supabase.from('warehouses_with').select('code, name'),
+    ...chunks.map(chunk => supabase.from('product_location_assignments_with')
+      .select('product_id, variant_id, is_primary, location_id, warehouse_locations_with(code, label, zone, rack, bin, warehouse_code)')
+      .in('product_id', chunk))
+  ]);
+  const whName = {};
+  (whs || []).forEach(w => { whName[w.code] = w.name; });
+  for (const { data, error } of results) {
+    if (error) throw error;
+    (data || []).forEach(a => {
+      const loc = a.warehouse_locations_with;
+      if (!loc) return;
+      const wh = loc.warehouse_code || null;
+      const text = wh && whName[wh] ? whName[wh] + (loc.code && loc.code !== wh ? ` ${loc.code}` : '') : (loc.label || loc.code);
+      (map[a.product_id] = map[a.product_id] || []).push({ location_id: a.location_id, warehouse_code: wh, warehouse_name: wh ? whName[wh] || wh : null, code: loc.code, label: loc.label, text, is_primary: !!a.is_primary });
+    });
+  }
+  Object.values(map).forEach(list => list.sort((a, b) => (b.is_primary ? 1 : 0) - (a.is_primary ? 1 : 0)));
+  return map;
+}
+
+function wmsReorderCalc(stock, avg, targetDays, today) {
+  const s = Number(stock || 0);
+  const daysLeft = avg > 0 ? Math.floor(s / avg) : null;
+  return {
+    days_left: daysLeft,
+    depletion_date: daysLeft !== null ? wmsAddDays(today, daysLeft) : null,
+    reorder_qty: avg > 0 ? Math.max(0, Math.ceil(avg * targetDays - s)) : 0
+  };
+}
+
+app.get('/api/admin/wms/stock-report', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const t0 = Date.now();
+    const range = wmsParseRange(req.query);
+    const targetDays = Math.min(365, Math.max(1, parseInt(req.query.target_days, 10) || 30));
+    const categories = String(req.query.category || '').split(',').map(s => s.trim()).filter(Boolean);
+    const q = String(req.query.q || '').trim();
+    const channel = ['online', 'live', 'offline'].includes(req.query.channel) ? req.query.channel : '';
+    const liveId = String(req.query.live_id || '').trim();
+    const location = String(req.query.location || '').trim(); // warehouse_code 또는 'none'(미배정)
+    const expiryDays = parseInt(req.query.expiry_days, 10) || 0;
+    const lowStockOnly = req.query.low_stock === '1' || req.query.low_stock === 'true';
+    const includeDiscontinued = req.query.include_discontinued === '1';
+    const sort = ['stock', 'outbound', 'expiry', 'name', 'reorder'].includes(req.query.sort) ? req.query.sort : 'stock';
+
+    // 1) 대상 상품
+    const isAdmin = isAdminRole(req.userRole);
+    let products = await wmsFetchAll(() => {
+      let qb = supabase.from('products_with')
+        .select('id, name, category, barcode, slug, price, discount_price, stock, expiry_date, status, supplier_id, brand, spec')
+        .order('id', { ascending: true });
+      if (!isAdmin) qb = qb.eq('supplier_id', req.user.id);
+      if (categories.length) qb = qb.in('category', categories);
+      if (!includeDiscontinued) qb = qb.neq('status', 'discontinued');
+      return qb;
+    });
+
+    // 옵션(SKU/바코드/옵션가)
+    const variantsByProduct = {};
+    const allIds = products.map(p => p.id);
+    const vChunks = [];
+    for (let i = 0; i < allIds.length; i += 300) vChunks.push(allIds.slice(i, i + 300));
+    const vResults = await Promise.all(vChunks.map(ids => supabase.from('product_variants_with').select('id, product_id, name, sku, barcode, price_adjustment, stock, is_active').in('product_id', ids)));
+    vResults.forEach(({ data: vs }) => (vs || []).forEach(v => { (variantsByProduct[v.product_id] = variantsByProduct[v.product_id] || []).push(v); }));
+
+    // 2) 검색(상품명/바코드/SKU/상품코드/ID) - 공백·기호 무시, 여러 단어는 모두 포함(AND)
+    if (q) {
+      const tokens = q.split(/\s+/).map(wmsNormalize).filter(Boolean);
+      products = products.filter(p => {
+        const hay = wmsNormalize([p.name, p.barcode, p.slug, p.brand, p.id, ...(variantsByProduct[p.id] || []).flatMap(v => [v.name, v.sku, v.barcode])].join(' '));
+        return tokens.every(t => hay.includes(t));
+      });
+    }
+
+    // 3) 유통기한 임박
+    if (expiryDays > 0) {
+      const limit = wmsAddDays(range.today, expiryDays);
+      products = products.filter(p => p.expiry_date && p.expiry_date <= limit);
+    }
+
+    // 4) 위치
+    // 위치·판매·구분라벨·창고목록은 서로 독립이므로 한 번에 병렬 조회(왕복 횟수 최소화)
+    const [locMap, salesAll, catLabels, { data: whs }] = await Promise.all([
+      wmsLocationMap(products.map(p => p.id)),
+      wmsCollectSales(range, new Set(products.map(p => p.id))),
+      wmsCategoryLabels(),
+      supabase.from('warehouses_with').select('code, name, is_active').order('code')
+    ]);
+    if (location) {
+      products = products.filter(p => location === 'none' ? !(locMap[p.id] || []).length : (locMap[p.id] || []).some(l => l.warehouse_code === location));
+    }
+
+    // 5) 판매 집계
+    const idSet = new Set(products.map(p => p.id));
+    const allEvents = salesAll.filter(e => idSet.has(e.product_id));
+    // 기간 안에 있었던 라이브 회차 목록(필터 선택지) - 채널 필터와 무관하게 전체에서 추출
+    const liveIdsInRange = [...new Set(allEvents.filter(e => e.live_id).map(e => e.live_id))];
+    const liveInfo = await wmsLiveSessionInfo(liveIdsInRange);
+    let events = allEvents;
+    if (liveId) events = events.filter(e => e.live_id === liveId);
+    else if (channel) events = events.filter(e => e.channel === channel);
+
+    const agg = {};
+    events.forEach(e => {
+      const a = agg[e.product_id] = agg[e.product_id] || { daily: {}, total: 0, online: 0, live: 0, offline: 0, liveBy: {} };
+      a.daily[e.day] = (a.daily[e.day] || 0) + e.qty;
+      a.total += e.qty;
+      a[e.channel] += e.qty;
+      if (e.live_id) a.liveBy[e.live_id] = (a.liveBy[e.live_id] || 0) + e.qty;
+    });
+
+    // 날짜 헤더: 그 날 판매가 있었던 라이브 회차를 "10/4(와씨)"처럼 표기
+    const liveByDay = {};
+    events.filter(e => e.live_id).forEach(e => {
+      const d = liveByDay[e.day] = liveByDay[e.day] || new Set();
+      d.add(e.live_id);
+    });
+    const dayColumns = range.days.map(d => {
+      const [, m, dd] = d.split('-');
+      const lives = [...(liveByDay[d] || [])].map(id => ({ id, short: wmsLiveShort(liveInfo[id]), title: liveInfo[id] ? liveInfo[id].title : '라이브' }));
+      return { date: d, label: `${parseInt(m, 10)}/${parseInt(dd, 10)}` + (lives.length ? `(${lives.map(l => l.short).join(',')})` : ''), lives, weekday: ['일', '월', '화', '수', '목', '금', '토'][new Date(d + 'T00:00:00Z').getUTCDay()] };
+    });
+
+    let rows = products.map(p => {
+      const a = agg[p.id] || { daily: {}, total: 0, online: 0, live: 0, offline: 0 };
+      const avg = Math.round((a.total / range.elapsedDays) * 100) / 100;
+      const calc = wmsReorderCalc(p.stock, avg, targetDays, range.today);
+      const vs = (variantsByProduct[p.id] || []).filter(v => v.is_active !== false);
+      const basePrice = Number(p.discount_price || p.price || 0);
+      const expiryD = p.expiry_date ? wmsDaysBetween(range.today, p.expiry_date) : null;
+      const low = Number(p.stock || 0) <= 5 || (calc.days_left !== null && calc.days_left <= 14);
+      return {
+        id: p.id, name: p.name, category: p.category, category_label: catLabels[p.category] || p.category || '-',
+        code: p.barcode || null, status: p.status,
+        skus: vs.map(v => v.sku || v.barcode).filter(Boolean),
+        price: Number(p.price || 0), discount_price: p.discount_price !== null && p.discount_price !== undefined ? Number(p.discount_price) : null,
+        unit_price: basePrice,
+        options: vs.map(v => ({ name: v.name, price: basePrice + Number(v.price_adjustment || 0), stock: v.stock })),
+        stock: Number(p.stock || 0),
+        locations: locMap[p.id] || [],
+        location_text: (locMap[p.id] || []).map(l => l.text).join(', ') || null,
+        expiry_date: p.expiry_date || null, expiry_d: expiryD,
+        daily: a.daily, period_total: a.total,
+        channel_split: { online: a.online, live: a.live, offline: a.offline },
+        avg_daily: avg,
+        days_left: calc.days_left, depletion_date: calc.depletion_date, reorder_qty: calc.reorder_qty,
+        low_stock: low,
+        supplier_id: p.supplier_id
+      };
+    });
+    if (lowStockOnly) rows = rows.filter(r => r.low_stock);
+
+    const cmp = {
+      stock: (a, b) => b.stock - a.stock,
+      outbound: (a, b) => b.period_total - a.period_total || b.stock - a.stock,
+      expiry: (a, b) => (a.expiry_date || '9999') < (b.expiry_date || '9999') ? -1 : (a.expiry_date || '9999') > (b.expiry_date || '9999') ? 1 : 0,
+      name: (a, b) => String(a.name).localeCompare(String(b.name), 'ko'),
+      reorder: (a, b) => b.reorder_qty - a.reorder_qty || (a.days_left ?? 1e9) - (b.days_left ?? 1e9)
+    }[sort];
+    rows.sort(cmp);
+
+    // 공급처명(발주서용)
+    const supIds = [...new Set(rows.map(r => r.supplier_id).filter(Boolean))];
+    const supMap = {};
+    for (let i = 0; i < supIds.length; i += 300) {
+      const { data: profs } = await supabase.from('profiles').select('id, full_name, email').in('id', supIds.slice(i, i + 300));
+      (profs || []).forEach(pf => { supMap[pf.id] = pf.full_name || pf.email || null; });
+    }
+    rows.forEach(r => { r.supplier_name = supMap[r.supplier_id] || null; delete r.supplier_id; });
+
+    const totals = { products: rows.length, stock: 0, period_total: 0, daily: {}, reorder_qty: 0, online: 0, live: 0, offline: 0 };
+    rows.forEach(r => {
+      totals.stock += r.stock; totals.period_total += r.period_total; totals.reorder_qty += r.reorder_qty;
+      totals.online += r.channel_split.online; totals.live += r.channel_split.live; totals.offline += r.channel_split.offline;
+      Object.entries(r.daily).forEach(([d, v]) => { totals.daily[d] = (totals.daily[d] || 0) + v; });
+    });
+    totals.avg_daily = Math.round((totals.period_total / range.elapsedDays) * 100) / 100;
+
+    // 필터 선택지(창고 목록은 위에서 병렬 조회)
+    res.json({
+      success: true,
+      data: {
+        range: { from: range.from, to: range.to, days: range.days.length, elapsed_days: range.elapsedDays, today: range.today, max_days: WMS_REPORT_MAX_DAYS },
+        target_days: targetDays,
+        day_columns: dayColumns,
+        rows, totals,
+        options: {
+          categories: Object.entries(catLabels).map(([value, label]) => ({ value, label })),
+          warehouses: (whs || []).filter(w => w.is_active !== false).map(w => ({ code: w.code, name: w.name })),
+          live_sessions: liveIdsInRange.map(id => ({ id, title: liveInfo[id] ? liveInfo[id].title : id, channel_name: liveInfo[id] ? liveInfo[id].channel_name : null, short: wmsLiveShort(liveInfo[id]), day: liveInfo[id] ? liveInfo[id].day : null }))
+            .sort((a, b) => String(b.day || '').localeCompare(String(a.day || '')))
+        },
+        notes: {
+          outbound_source: '판매 출고 = 쇼핑몰 주문(결제완료·준비중·배송중·배송완료, 취소/미결제 제외) + 라이브/오프라인 판매기록(취소 제외). 창고이동·자가사용·불량처리는 판매 출고에서 제외됩니다.',
+          low_stock_rule: '재고부족 = 현수량 5개 이하 또는 소진예상 14일 이내',
+          reorder_rule: `권장발주량 = max(0, ⌈일평균 출고 × 목표 보유일수(${targetDays}일) − 현수량⌉)`
+        },
+        elapsed_ms: Date.now() - t0
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error building stock report:', err);
+    res.status(500).json({ error: 'Failed to build stock report', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 상품 1개 상세 — 기본정보/현수량/위치/Lot/일자별·채널별 판매/최근 원장
+app.get('/api/admin/wms/stock-report/:productId', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const productId = req.params.productId;
+    if (!/^[0-9a-f-]{36}$/i.test(productId)) return res.status(400).json({ error: 'Bad Request', message: '잘못된 상품 ID입니다', timestamp: new Date().toISOString() });
+    const access = await assertProductAccess(productId, req);
+    if (access.error) {
+      return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+    const range = wmsParseRange(req.query);
+    const targetDays = Math.min(365, Math.max(1, parseInt(req.query.target_days, 10) || 30));
+
+    const supplierId = access.product ? access.product.supplier_id : null;
+    const [{ data: p, error: pErr }, { data: variants }, locMap, events, { data: ledger }, { data: lotRows }, catLabels, { data: prof }] = await Promise.all([
+      supabase.from('products_with')
+        .select('id, name, category, barcode, slug, price, discount_price, cost_price, stock, expiry_date, status, supplier_id, brand, spec, images_urls, created_at')
+        .eq('id', productId).maybeSingle(),
+      supabase.from('product_variants_with').select('id, name, sku, barcode, price_adjustment, stock, is_active').eq('product_id', productId),
+      wmsLocationMap([productId]),
+      wmsCollectSales(range, new Set([productId])),
+      supabase.from('stock_adjustments_with').select('id, delta, reason, scan_source, lot_number, location_id, order_id, created_at, variant_id').eq('product_id', productId).order('created_at', { ascending: false }).limit(30),
+      supabase.from('stock_adjustments_with').select('lot_number, delta, created_at').eq('product_id', productId).not('lot_number', 'is', null).limit(2000),
+      wmsCategoryLabels(),
+      supplierId ? supabase.from('profiles').select('full_name, email').eq('id', supplierId).maybeSingle() : Promise.resolve({ data: null })
+    ]);
+    if (pErr) throw pErr;
+    if (!p) return res.status(404).json({ error: 'Not Found', message: '상품을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+
+    const daily = range.days.map(d => ({ date: d, online: 0, live: 0, offline: 0, total: 0 }));
+    const dayIdx = {}; daily.forEach((r, i) => { dayIdx[r.date] = i; });
+    const split = { online: 0, live: 0, offline: 0 };
+    const liveBy = {};
+    events.forEach(e => {
+      const r = daily[dayIdx[e.day]];
+      if (r) { r[e.channel] += e.qty; r.total += e.qty; }
+      split[e.channel] += e.qty;
+      if (e.live_id) liveBy[e.live_id] = (liveBy[e.live_id] || 0) + e.qty;
+    });
+    const liveInfo = await wmsLiveSessionInfo(Object.keys(liveBy));
+    const total = split.online + split.live + split.offline;
+    const avg = Math.round((total / range.elapsedDays) * 100) / 100;
+    const calc = wmsReorderCalc(p.stock, avg, targetDays, range.today);
+
+    const lots = {};
+    (lotRows || []).forEach(r => {
+      const l = lots[r.lot_number] = lots[r.lot_number] || { lot_number: r.lot_number, qty: 0, first_in: r.created_at };
+      l.qty += Number(r.delta || 0);
+      if (r.created_at < l.first_in) l.first_in = r.created_at;
+    });
+
+    const supplierName = prof ? (prof.full_name || prof.email) : null;
+    const locs = locMap[productId] || [];
+    const locName = {}; locs.forEach(l => { locName[l.location_id] = l.text; });
+
+    res.json({
+      success: true,
+      data: {
+        product: {
+          id: p.id, name: p.name, category: p.category, category_label: catLabels[p.category] || p.category, code: p.barcode, slug: p.slug,
+          brand: p.brand, spec: p.spec, status: p.status, image: Array.isArray(p.images_urls) ? p.images_urls[0] || null : null,
+          price: Number(p.price || 0), discount_price: p.discount_price !== null ? Number(p.discount_price) : null, cost_price: p.cost_price !== null ? Number(p.cost_price) : null,
+          stock: Number(p.stock || 0), expiry_date: p.expiry_date, expiry_d: p.expiry_date ? wmsDaysBetween(range.today, p.expiry_date) : null,
+          supplier_name: supplierName
+        },
+        variants: (variants || []).map(v => ({ ...v, price: Number(p.discount_price || p.price || 0) + Number(v.price_adjustment || 0) })),
+        locations: locs,
+        lots: Object.values(lots).filter(l => l.qty !== 0).sort((a, b) => String(a.first_in).localeCompare(String(b.first_in))),
+        range: { from: range.from, to: range.to, elapsed_days: range.elapsedDays, today: range.today },
+        daily, channel_split: split, period_total: total, avg_daily: avg,
+        live_sessions: Object.entries(liveBy).map(([id, qty]) => ({ id, qty, title: liveInfo[id] ? liveInfo[id].title : id, channel_name: liveInfo[id] ? liveInfo[id].channel_name : null, day: liveInfo[id] ? liveInfo[id].day : null })),
+        days_left: calc.days_left, depletion_date: calc.depletion_date, reorder_qty: calc.reorder_qty, target_days: targetDays,
+        ledger: (ledger || []).map(l => ({ ...l, location_text: l.location_id ? (locName[l.location_id] || null) : null }))
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error building stock report detail:', err);
+    res.status(500).json({ error: 'Failed to build stock report detail', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 // ---- 장비(PDA/AGV) — is_simulated=true: 실제 하드웨어와 연동되지 않는 데모/시뮬레이션 데이터입니다 ----
 app.get('/api/admin/wms/equipment', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
