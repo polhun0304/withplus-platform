@@ -86,7 +86,7 @@
             <h2>제1장 총칙</h2>
 
             <h3>제1조 (목적)</h3>
-            <p>이 약관은 주식회사 지엠티이노베이션(대표자: 김대기)(이하 "몰"이라 합니다)가 운영하는 WITH+ 사이버몰(이하 "몰"이라 함)에서 제공하는 인터넷 관련 서비스를 이용함에 있어 몰과 이용자의 권리·의무 및 책임사항을 규정함을 목적으로 합니다.</p>
+            <p>이 약관은 주식회사 위더스(대표자: 박성복)(이하 "몰"이라 합니다)가 운영하는 WITH+ 사이버몰(이하 "몰"이라 함)에서 제공하는 인터넷 관련 서비스를 이용함에 있어 몰과 이용자의 권리·의무 및 책임사항을 규정함을 목적으로 합니다.</p>
 
             <h3>제2조 (정의)</h3>
             <ol>
@@ -214,13 +214,14 @@
 
             <h2>사업자 정보</h2>
             <table>
-                <tr><th style="width:35%;">상호</th><td><span id="pub-biz-company-name">주식회사 지엠티이노베이션 (WITH+)</span></td></tr>
-                <tr><th>대표자</th><td><span id="pub-biz-ceo-name">김대기</span></td></tr>
-                <tr><th>사업자등록번호</th><td><span id="pub-biz-business-number">640-81-03444</span></td></tr>
-                <tr><th>통신판매업신고번호</th><td><span id="pub-biz-mail-order-number">2024-경기김포-1785호</span></td></tr>
-                <tr><th>영업소 소재지</th><td><span id="pub-biz-address">경기도 김포시 양촌읍 양곡4로 13</span></td></tr>
-                <tr><th>전화번호</th><td><span id="pub-biz-phone">010-2871-7174</span></td></tr>
-                <tr><th>전자우편</th><td><span id="pub-biz-email">gmtinno@naver.com</span></td></tr>
+                <tr><th style="width:35%;">상호</th><td><span id="pub-biz-company-name">주식회사 위더스 (WITH+)</span></td></tr>
+                <tr><th>대표자</th><td><span id="pub-biz-ceo-name">박성복</span></td></tr>
+                <tr><th>사업자등록번호</th><td><span id="pub-biz-business-number">511-88-03602</span></td></tr>
+                <tr><th>통신판매업신고번호</th><td><span id="pub-biz-mail-order-number">2025-경기김포-8233호</span></td></tr>
+                <tr><th>건강기능식품 영업신고번호</th><td><span id="pub-biz-health-food-number">2026-0558419호</span> (건강기능식품유통전문판매업)</td></tr>
+                <tr><th>영업소 소재지</th><td><span id="pub-biz-address">경기도 김포시 대곶면 율마로 113-1</span></td></tr>
+                <tr><th>전화번호</th><td><span id="pub-biz-phone">070-8098-0300</span></td></tr>
+                <tr><th>전자우편</th><td><span id="pub-biz-email">with8803@naver.com</span></td></tr>
             </table>
         </div>
     </div>
@@ -250,6 +251,7 @@
                 setIfPresent('pub-biz-address', info.address);
                 setIfPresent('pub-biz-phone', info.phone);
                 setIfPresent('pub-biz-email', info.email);
+                if (info.health_food_registration_number) document.getElementById('pub-biz-health-food-number').textContent = info.health_food_registration_number;
                 if (info.mail_order_registration_number) {
                     const el = document.getElementById('pub-biz-mail-order-number');
                     el.textContent = info.mail_order_registration_number;

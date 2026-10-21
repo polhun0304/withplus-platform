@@ -9618,6 +9618,7 @@
                                     <div class="field"><label>대표자</label><input type="text" id="biz-ceo-name" value="${WithPlus.escapeHtml(bizInfo.ceo_name || '')}" placeholder="대표자 성명"></div>
                                     <div class="field"><label>사업자등록번호</label><input type="text" id="biz-business-number" value="${WithPlus.escapeHtml(bizInfo.business_number || '')}" placeholder="000-00-00000"></div>
                                     <div class="field"><label>통신판매업신고번호</label><input type="text" id="biz-mail-order-number" value="${WithPlus.escapeHtml(bizInfo.mail_order_registration_number || '')}" placeholder="예: 2024-서울강남-00000"></div>
+                                    <div class="field"><label>건강기능식품 영업신고번호</label><input type="text" id="biz-health-food-number" value="${WithPlus.escapeHtml(bizInfo.health_food_registration_number || '')}" placeholder="예: 2026-0000000호 (판매하지 않으면 비워두세요)"></div>
                                     <div class="field"><label>사업장 주소</label><input type="text" id="biz-address" value="${WithPlus.escapeHtml(bizInfo.address || '')}" placeholder="사업장 소재지"></div>
                                     <div class="field"><label>대표전화</label><input type="text" id="biz-phone" value="${WithPlus.escapeHtml(bizInfo.phone || '')}" placeholder="예: 010-0000-0000"></div>
                                     <div class="field"><label>이메일</label><input type="text" id="biz-email" value="${WithPlus.escapeHtml(bizInfo.email || '')}" placeholder="예: contact@withplus.com"></div>
@@ -9961,6 +9962,7 @@
                                         ceo_name: document.getElementById('biz-ceo-name').value.trim(),
                                         business_number: document.getElementById('biz-business-number').value.trim(),
                                         mail_order_registration_number: document.getElementById('biz-mail-order-number').value.trim(),
+                                        health_food_registration_number: document.getElementById('biz-health-food-number').value.trim(),
                                         address: document.getElementById('biz-address').value.trim(),
                                         phone: document.getElementById('biz-phone').value.trim(),
                                         email: document.getElementById('biz-email').value.trim(),

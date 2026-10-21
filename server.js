@@ -13485,6 +13485,7 @@ const PLATFORM_BUSINESS_INFO_DEFAULTS = {
   business_number: '',
   address: '',
   mail_order_registration_number: '',
+  health_food_registration_number: '',
   phone: '',
   email: '',
   privacy_officer_name: '',
@@ -13514,13 +13515,15 @@ app.get('/api/admin/settings/business-info', authenticate, requireRole(['admin',
 
 app.put('/api/admin/settings/business-info', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { company_name, ceo_name, business_number, address, mail_order_registration_number, phone, email, privacy_officer_name, privacy_officer_position, privacy_officer_contact } = req.body || {};
+    const { company_name, ceo_name, business_number, address, mail_order_registration_number, health_food_registration_number, phone, email, privacy_officer_name, privacy_officer_position, privacy_officer_contact } = req.body || {};
     const value = {
       company_name: company_name ? String(company_name).trim() : null,
       ceo_name: ceo_name ? String(ceo_name).trim() : null,
       business_number: business_number ? String(business_number).trim() : null,
       address: address ? String(address).trim() : null,
       mail_order_registration_number: mail_order_registration_number ? String(mail_order_registration_number).trim() : null,
+      // 건강기능식품 판매업 영업신고번호 - 건강기능식품을 판매하는 몰은 하단에 함께 표시한다
+      health_food_registration_number: health_food_registration_number ? String(health_food_registration_number).trim() : null,
       phone: phone ? String(phone).trim() : null,
       email: email ? String(email).trim() : null,
       privacy_officer_name: privacy_officer_name ? String(privacy_officer_name).trim() : null,

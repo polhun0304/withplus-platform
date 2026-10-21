@@ -1409,6 +1409,7 @@
         }
         #pub-biz-phone:not(:empty)::before, #pub-biz-email:not(:empty)::before { content: ' · '; }
         .footer-bottom .pub-mail-order:not(:empty)::before { content: ' · 통신판매업 '; }
+        .footer-bottom .pub-health-food:not(:empty)::before { content: ' · 건강기능식품 영업신고 '; }
 
         /* 🔥 실시간 랭킹 */
         .rank-tabs { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: -10px 0 18px; padding-bottom: 2px; }
@@ -1931,8 +1932,8 @@
 
             <div class="footer-bottom">
                 <p>
-                    <span id="pub-biz-company-name">WITH+ (주식회사 지엠티이노베이션)</span> · 대표 <span id="pub-biz-ceo-name">김대기</span> · 사업자번호 <span id="pub-biz-business-number">640-81-03444</span><span class="pub-mail-order" id="pub-biz-mail-order-number">2024-경기김포-1785호</span><br>
-                    <span id="pub-biz-address">경기도 김포시 양촌읍 양곡4로 13</span><span id="pub-biz-phone">010-2871-7174</span><span id="pub-biz-email">gmtinno@naver.com</span>
+                    <span id="pub-biz-company-name">WITH+ (주식회사 위더스)</span> · 대표 <span id="pub-biz-ceo-name">박성복</span> · 사업자번호 <span id="pub-biz-business-number">511-88-03602</span><span class="pub-mail-order" id="pub-biz-mail-order-number">2025-경기김포-8233호</span><span class="pub-health-food" id="pub-biz-health-food-number">2026-0558419호</span><br>
+                    <span id="pub-biz-address">경기도 김포시 대곶면 율마로 113-1</span><span id="pub-biz-phone">070-8098-0300</span><span id="pub-biz-email">with8803@naver.com</span><br><span class="pub-po">개인정보보호책임자 <span id="pub-biz-po-name">김대기</span>(<span id="pub-biz-po-contact">lhfnb00735@naver.com</span>)</span>
                 </p>
                 <p class="footer-copy">&copy; 2024-2026 WITH+ Co., Ltd. All Rights Reserved.</p>
             </div>
@@ -2032,6 +2033,9 @@
                     setIfPresent('pub-biz-address', info.address);
                     setIfPresent('pub-biz-phone', info.phone);
                     setIfPresent('pub-biz-email', info.email);
+                    setIfPresent('pub-biz-health-food-number', info.health_food_registration_number);
+                    setIfPresent('pub-biz-po-name', info.privacy_officer_name);
+                    setIfPresent('pub-biz-po-contact', info.privacy_officer_contact);
                 } catch (e) { /* 실패해도 위 HTML의 기본값을 그대로 보여준다 */ }
             })();
 
