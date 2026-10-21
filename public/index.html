@@ -1195,7 +1195,15 @@
             justify-content: space-between;
             gap: 12px;
         }
-        .wcb-select-wrap { position: relative; }
+        .wcb-select-wrap { position: relative; min-width: 0; }
+        .wcb-select #wcb-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+        .wcb-points { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin: -2px 0 2px 30px; font-size: 12.5px; color: #6B5A60; line-height: 1.35; }
+        .wcb-points[hidden], .wcb-login[hidden], .wcb-menu a[hidden] { display: none; }
+        .wcb-points b { color: var(--wp-pink); font-weight: 800; }
+        .wcb-points .wcb-sep { color: #D9B8C3; }
+        .wcb-login { display: block; width: max-content; margin: -2px 0 2px 30px; font-size: 12.5px; color: var(--wp-pink); font-weight: 600; text-decoration: none; }
+        .wcb-login:hover { text-decoration: underline; }
+        .wcb-menu .wcb-menu-label { padding: 8px 16px 2px; font-size: 12px; color: #999; }
         .wcb-select { display: inline-flex; align-items: center; gap: 8px; background: none; border: none; cursor: pointer; font: inherit; font-size: 17px; font-weight: 700; color: #222; padding: 4px 0; }
         .wcb-select svg:first-child { color: var(--wp-pink); }
         .wcb-menu { position: absolute; top: calc(100% + 8px); left: 0; z-index: 120; background: #fff; border: 1px solid #F1E1E6; border-radius: 12px; box-shadow: 0 10px 24px rgba(0,0,0,0.10); min-width: 210px; padding: 6px 0; }
@@ -1302,7 +1310,10 @@
             .wh-actions { margin-left: auto; }
             .wh-search.search-box { order: 3; flex-basis: 100%; max-width: none; padding-left: 18px; }
             .wp-community-bar { margin: 10px 14px 0; padding: 8px 10px 8px 14px; border-radius: 14px; }
-            .wcb-select { font-size: 15px; }
+            .wcb-select { font-size: 15px; gap: 6px; max-width: 100%; }
+            .wcb-select #wcb-name { max-width: calc(100vw - 210px); }
+            .wcb-points { margin-left: 28px; font-size: 11.5px; gap: 0 5px; }
+            .wcb-login { margin-left: 28px; font-size: 11.5px; }
             .wcb-slogan { display: none; }
             .wcb-cta { font-size: 13px; padding: 7px 12px; }
             .hero { margin: 12px 14px 0; padding: 26px 22px; border-radius: 18px; }
@@ -1375,6 +1386,22 @@
             .products-section .add-to-cart-btn,
             .recently-viewed .product-meta,
             .recently-viewed .add-to-cart-btn { display: none; }
+        }
+
+        /* 🖼️ 메인 이미지 배너 — 슬라이드 전체를 사진으로 꽉 채운다(PC 3:1 · 모바일 3:2, 넘치는 부분은 가운데 기준으로 잘림) */
+        .hero-slide.img-slide { padding: 0 !important; display: block; position: relative; aspect-ratio: 3 / 1; overflow: hidden; background: #F4E9ED; color: inherit; text-decoration: none; }
+        .img-slide picture, .img-slide img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: cover; object-position: center; }
+        .hero.has-img-banners .hero-dots span { box-shadow: 0 0 0 1px rgba(255,255,255,.75); }
+        @media (max-width: 768px) {
+            .hero-slide.img-slide { aspect-ratio: 3 / 2; }
+            .hero-slide.img-slide:not(.has-mobile) { aspect-ratio: 2 / 1; }
+        }
+
+        /* 공동체 바 — 좁은 화면에서는 라벨을 줄여 두 줄로 유지 */
+        @media (max-width: 480px) {
+            .wcb-long { display: none; }
+            .wcb-select #wcb-name { max-width: calc(100vw - 180px); }
+            .wcb-cta { padding: 7px 10px; }
         }
 
         /* ===== 오늘의 특가 슬라이더 (이유몰식 메인 상품 배너) ===== */
@@ -1566,18 +1593,23 @@
                 <span id="wcb-name">전체 쇼핑몰</span>
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
             </button>
+            <div class="wcb-points" id="wcb-points" hidden>
+                <span>공동체<span class="wcb-long"> 적립금</span> <b id="wcb-cp">-</b></span><span class="wcb-sep" aria-hidden="true">·</span><span>나의<span class="wcb-long"> 적립금</span> <b id="wcb-mp">-</b></span>
+            </div>
+            <a class="wcb-login" id="wcb-login" href="/login" hidden>로그인하고 적립금 확인 ›</a>
             <div class="wcb-menu" id="wcb-menu" hidden>
                 <a href="#" id="wcb-current" hidden>내 공동체 매장 바로가기</a>
+                <div id="wcb-others"></div>
                 <a href="#" id="wcb-reset">전체 쇼핑몰 보기</a>
                 <a href="/communities">다른 공동체 찾아보기</a>
             </div>
         </div>
         <span class="wcb-slogan">함께할수록 더 큰 나눔</span>
-        <a class="wcb-cta" href="/communities">공동체 혜택 안내 <span aria-hidden="true">›</span></a>
+        <a class="wcb-cta" href="/communities"><span class="wcb-long">공동체 </span>혜택 안내 <span aria-hidden="true">›</span></a>
     </div>
 
     <!-- HERO SECTION -->
-    <section class="hero hero-slider" id="hero-slider" aria-roledescription="carousel" aria-label="오늘의 특가">
+    <section class="hero hero-slider" id="hero-slider" aria-roledescription="carousel" aria-label="메인 배너">
         <div class="hero-track" id="hero-track">
         <div class="hero-content hero-slide">
             <h1>함께할수록 더 큰 나눔</h1>
@@ -1834,24 +1866,58 @@
                 const slug = WithPlus.getPreferredCommunitySlug();
                 let name = '';
                 try { name = localStorage.getItem('withplus_preferred_community_name') || ''; } catch (e) {}
+                const nameEl = document.getElementById('wcb-name');
                 const resetLink = document.getElementById('wcb-reset');
                 const currentLink = document.getElementById('wcb-current');
-                if (slug) {
-                    document.getElementById('wcb-name').textContent = name || '내 공동체';
-                    currentLink.href = '/c/' + encodeURIComponent(slug);
-                    currentLink.textContent = (name || '내 공동체') + ' 매장 바로가기';
+                const setCurrent = (n, s) => {
+                    nameEl.textContent = n || '내 공동체';
+                    btn.title = n || '';
+                    currentLink.href = '/c/' + encodeURIComponent(s);
+                    currentLink.textContent = (n || '내 공동체') + ' 매장 바로가기';
                     currentLink.hidden = false;
-                } else {
-                    resetLink.hidden = true;
-                }
+                };
+                if (slug) setCurrent(name, slug);
+                // "전체 쇼핑몰 보기"는 특정 공동체 매장을 보고 있을 때(선호 공동체가 기억돼 있을 때)만 의미가 있다
+                resetLink.hidden = !slug;
                 const setOpen = (open) => { menu.hidden = !open; btn.setAttribute('aria-expanded', String(open)); };
                 btn.addEventListener('click', (e) => { e.stopPropagation(); setOpen(menu.hidden); });
                 document.addEventListener('click', (e) => { if (!menu.contains(e.target)) setOpen(false); });
+                document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { setOpen(false); btn.focus(); } });
                 resetLink.addEventListener('click', (e) => {
                     e.preventDefault();
                     WithPlus.clearPreferredCommunity();
                     location.href = '/';
                 });
+
+                // 로그인 회원: 내가 속한 공동체 이름 + 공동체 적립금 · 나의 적립금(실제 잔액)을 바에 표시
+                (async () => {
+                    const pointsEl = document.getElementById('wcb-points');
+                    const loginEl = document.getElementById('wcb-login');
+                    const token = await WithPlus.getAccessToken().catch(() => null);
+                    if (!token) { loginEl.hidden = false; return; }
+                    let res = null;
+                    try {
+                        const r = await fetch('/api/me/community-summary' + (slug ? '?prefer=' + encodeURIComponent(slug) : ''), { headers: { Authorization: 'Bearer ' + token } });
+                        res = r.ok ? await r.json() : null;
+                    } catch (e) { res = null; }
+                    if (!res || !res.success || !res.data) return;
+                    const d = res.data;
+                    const fmt = (n) => Number(n || 0).toLocaleString('ko-KR') + 'P';
+                    const primary = d.primary;
+                    if (!primary) return; // 소속 공동체가 없으면 기존 "전체 쇼핑몰" 그대로
+                    // 전체 쇼핑몰을 보고 있어도 바에는 내가 속한 공동체 이름을 보여준다(서버가 지금 매장이 내 공동체면 그곳을 대표로 골라준다)
+                    setCurrent(primary.name, primary.slug);
+                    document.getElementById('wcb-cp').textContent = primary.community_points === null || primary.community_points === undefined ? '-' : fmt(primary.community_points);
+                    document.getElementById('wcb-mp').textContent = fmt(d.my_points);
+                    pointsEl.title = primary.name + ' 공동체 적립금 · 나의 사용 가능 적립금';
+                    pointsEl.hidden = false;
+                    const others = (d.communities || []).filter(c => c.slug !== primary.slug);
+                    const othersEl = document.getElementById('wcb-others');
+                    if (others.length) {
+                        othersEl.innerHTML = '<div class="wcb-menu-label">내 공동체</div>' + others.map(c =>
+                            `<a href="/c/${encodeURIComponent(c.slug)}">${WithPlus.escapeHtml(c.name)} 매장 바로가기</a>`).join('');
+                    }
+                })();
             })();
 
             // ============================================
@@ -1925,56 +1991,156 @@
 
 
             // ============================================
-            // 오늘의 특가 슬라이더: 할인율이 큰 실제 상품(재고 있는 것) 최대 6개를 메인 배너 뒤에 이어 붙이고,
-            // 손가락으로 넘기거나 4초마다 자동으로 넘어간다. 할인 상품이 없으면 기존 배너 한 장만 보인다.
+            // 메인 슬라이더 설정 + 이미지 배너 — 관리자 > 🖼 배너 관리에서 정한 값(한 번만 불러와 공유)
+            // config: 자동 넘김 간격(초), 순서(images_first: 이미지→소개→특가 / deals_first: 특가→소개→이미지),
+            //         소개 배너 표시 여부, 특가 상품 선택(auto: 할인율 순 / manual: 관리자가 고른 상품·순서)
             // ============================================
-            function mountDealSlider(products) {
+            const HERO_DEFAULT_CONFIG = { interval_sec: 4, order: 'images_first', show_intro: true, deals: { mode: 'auto', product_ids: [] } };
+            const heroDataP = fetch('/api/home/hero-banners')
+                .then(r => r.ok ? r.json() : null)
+                .then(j => ({
+                    banners: (j && j.success && Array.isArray(j.data)) ? j.data : [],
+                    config: Object.assign({}, HERO_DEFAULT_CONFIG, (j && j.config) || {})
+                }))
+                .catch(() => ({ banners: [], config: Object.assign({}, HERO_DEFAULT_CONFIG) }));
+
+            // ============================================
+            // 메인 슬라이더 공통 동작: 점·숫자(1/N) 표시, 손가락 넘김, 자동 넘김(기본 4초).
+            // 이미지 배너·오늘의 특가 배너가 각자 비동기로 붙을 때마다 refresh()로 순서를 맞추고 다시 센다(이벤트는 한 번만 연결).
+            // ============================================
+            const heroSlider = (() => {
                 const track = document.getElementById('hero-track');
-                if (!track || track.dataset.deals) return;
-                const deals = (products || [])
+                const counter = document.getElementById('hero-counter');
+                const dots = document.getElementById('hero-dots');
+                let index = 0;
+                let started = false;
+                let paused = false;
+                let touched = false;
+                let config = Object.assign({}, HERO_DEFAULT_CONFIG);
+                const slides = () => track ? track.querySelectorAll('.hero-slide:not(.hero-slide-off)') : [];
+                const update = () => {
+                    const n = slides().length;
+                    index = Math.min(n - 1, Math.max(0, Math.round(track.scrollLeft / (track.clientWidth || 1))));
+                    counter.textContent = `${index + 1}/${n}`;
+                    dots.querySelectorAll('span').forEach((d, i) => d.classList.toggle('on', i === index));
+                };
+                // 슬라이드 묶음 순서를 설정대로 실제 DOM 순서로 맞춘다(스크롤 위치·편집 버튼이 DOM 순서를 그대로 쓰므로 CSS order는 쓰지 않음)
+                function arrange() {
+                    const intro = track.querySelector('.hero-content.hero-slide');
+                    const imgs = Array.from(track.querySelectorAll('.img-slide'));
+                    const deals = Array.from(track.querySelectorAll('.deal-slide'));
+                    if (intro) {
+                        // 소개 배너를 끄더라도 보여줄 다른 배너가 하나도 없으면 빈 화면이 되지 않게 남겨 둔다
+                        const hideIntro = config.show_intro === false && (imgs.length + deals.length) > 0;
+                        intro.hidden = hideIntro;
+                        intro.classList.toggle('hero-slide-off', hideIntro);
+                    }
+                    const groups = config.order === 'deals_first' ? [deals, [intro], imgs] : [imgs, [intro], deals];
+                    groups.flat().filter(Boolean).forEach(el => track.appendChild(el));
+                }
+                function scheduleNext() {
+                    setTimeout(() => {
+                        const total = slides().length;
+                        if (!paused && !document.hidden && !window.__wpLayoutEditing && total > 1) {
+                            const next = (index + 1) % total;
+                            track.scrollTo({ left: next * track.clientWidth, behavior: 'smooth' });
+                        }
+                        scheduleNext();
+                    }, Math.max(2, Number(config.interval_sec) || 4) * 1000);
+                }
+                function refresh() {
+                    if (!track || !counter || !dots) return;
+                    arrange();
+                    if (!touched) track.scrollLeft = 0;
+                    const n = slides().length;
+                    dots.innerHTML = Array.from({ length: n }, () => '<span></span>').join('');
+                    counter.hidden = n < 2;
+                    dots.hidden = n < 2;
+                    update();
+                    if (started || n < 2) return;
+                    started = true;
+                    track.addEventListener('scroll', () => requestAnimationFrame(update), { passive: true });
+                    // 자동 넘김 — 사용자가 만지는 동안/화면 밖일 때는 멈춘다
+                    ['pointerdown', 'touchstart', 'mouseenter'].forEach(ev => track.addEventListener(ev, () => { paused = true; touched = true; }, { passive: true }));
+                    ['pointerup', 'touchend', 'mouseleave'].forEach(ev => track.addEventListener(ev, () => { setTimeout(() => { paused = false; }, 3000); }, { passive: true }));
+                    scheduleNext();
+                }
+                return { refresh, current: () => index, setConfig: (c) => { config = Object.assign({}, HERO_DEFAULT_CONFIG, c || {}); } };
+            })();
+            // 소개 배너를 숨기는 설정이면 슬라이드 개수에서도 빠지게 한다
+            (function () { const st = document.createElement('style'); st.textContent = '.hero-slide.hero-slide-off{display:none !important}'; document.head.appendChild(st); })();
+
+            // ============================================
+            // 🖼️ 메인 이미지 배너: 관리자 > 🖼 배너 관리에서 올린 통이미지 광고를 슬라이더에 붙인다.
+            // PC 사진은 넓게(3:1), 모바일 사진이 있으면 좁은 화면에서 그 사진(3:2)을 쓴다. 배너가 없으면 기존 화면 그대로.
+            // ============================================
+            async function mountImageBanners() {
+                const track = document.getElementById('hero-track');
+                if (!track || track.dataset.imgBanners) return;
+                const { banners, config } = await heroDataP;
+                heroSlider.setConfig(config);
+                const list = banners.filter(b => b && /^https:\/\//i.test(b.pc_image || ''));
+                track.dataset.imgBanners = String(list.length);
+                if (list.length) {
+                    const html = list.map((b, i) => {
+                        const alt = WithPlus.escapeHtml(b.alt || '메인 배너');
+                        const mobile = /^https:\/\//i.test(b.mobile_image || '') ? `<source media="(max-width: 768px)" srcset="${WithPlus.safeUrlAttr(b.mobile_image)}">` : '';
+                        const pic = `<picture>${mobile}<img src="${WithPlus.safeUrlAttr(b.pc_image)}" alt="${alt}" ${i === 0 && config.order !== 'deals_first' ? 'fetchpriority="high"' : 'loading="lazy"'} decoding="async"></picture>`;
+                        const link = String(b.link_url || '');
+                        const safeLink = (/^\/(?!\/)/.test(link) || /^https?:\/\//i.test(link)) ? link : '';
+                        return safeLink
+                            ? `<a class="hero-slide img-slide${mobile ? ' has-mobile' : ''}" href="${WithPlus.safeUrlAttr(safeLink)}" aria-label="${alt}">${pic}</a>`
+                            : `<div class="hero-slide img-slide${mobile ? ' has-mobile' : ''}" role="img" aria-label="${alt}">${pic}</div>`;
+                    }).join('');
+                    track.insertAdjacentHTML('afterbegin', html);
+                    document.getElementById('hero-slider').classList.add('has-img-banners');
+                }
+                heroSlider.refresh();
+            }
+            mountImageBanners();
+
+            // ============================================
+            // 오늘의 특가 슬라이더: 기본은 할인율이 큰 실제 상품(재고 있는 것) 최대 6개, 관리자가 "직접 선택"으로 고정했으면
+            // 그 상품들을 고른 순서대로(이 화면에서 보이는 상품·재고 있는 것만) 붙인다. 손가락으로 넘기거나 자동으로 넘어간다.
+            // ============================================
+            function pickDealProducts(products, dealsCfg) {
+                const list = products || [];
+                const rateOf = (p) => (p.discount_price && Number(p.discount_price) < Number(p.price)) ? Math.round((1 - Number(p.discount_price) / Number(p.price)) * 100) : 0;
+                if (dealsCfg && dealsCfg.mode === 'manual' && Array.isArray(dealsCfg.product_ids) && dealsCfg.product_ids.length) {
+                    const byId = new Map(list.map(p => [String(p.id), p]));
+                    return dealsCfg.product_ids.map(id => byId.get(String(id)))
+                        .filter(p => p && Number(p.stock) > 0)
+                        .map(p => ({ p, rate: rateOf(p) }));
+                }
+                return list
                     .filter(p => p.discount_price && Number(p.discount_price) < Number(p.price) && Number(p.stock) > 0)
-                    .map(p => ({ p, rate: Math.round((1 - Number(p.discount_price) / Number(p.price)) * 100) }))
+                    .map(p => ({ p, rate: rateOf(p) }))
                     .sort((a, b) => b.rate - a.rate)
                     .slice(0, 6);
-                if (deals.length === 0) return;
+            }
+            async function mountDealSlider(products) {
+                const track = document.getElementById('hero-track');
+                if (!track || track.dataset.deals) return;
                 track.dataset.deals = '1';
+                const { config } = await heroDataP;
+                const deals = pickDealProducts(products, config.deals);
+                if (deals.length === 0) return;
                 track.insertAdjacentHTML('beforeend', deals.map(({ p, rate }) => {
                     const img = Array.isArray(p.images_urls) && p.images_urls[0] ? p.images_urls[0] : null;
+                    const onSale = rate > 0;
                     return `
                     <a class="hero-slide deal-slide" href="/product/${encodeURIComponent(p.id)}">
                         <div>
-                            <span class="deal-kicker">오늘의 특가 <b>-${rate}%</b></span>
+                            <span class="deal-kicker">오늘의 특가${onSale ? ` <b>-${rate}%</b>` : ''}</span>
                             <div class="deal-name">${WithPlus.escapeHtml(p.name)}</div>
-                            <div class="deal-price"><span class="now">${WithPlus.formatPrice(p.discount_price)}</span><span class="was">${WithPlus.formatPrice(p.price)}</span></div>
+                            <div class="deal-price"><span class="now">${WithPlus.formatPrice(onSale ? p.discount_price : p.price)}</span>${onSale ? `<span class="was">${WithPlus.formatPrice(p.price)}</span>` : ''}</div>
                             <span class="deal-cta">특가 상품 보러가기 ›</span>
                         </div>
                         <div class="deal-img" data-pid="${WithPlus.escapeHtml(String(p.id))}">${img ? `<img class="deal-pic" src="${WithPlus.safeUrlAttr(img)}" alt="${WithPlus.escapeHtml(p.name)}" loading="lazy">` : '🎁'}</div>
                     </a>`;
                 }).join(''));
 
-                const slides = track.querySelectorAll('.hero-slide');
-                const counter = document.getElementById('hero-counter');
-                const dots = document.getElementById('hero-dots');
-                dots.innerHTML = Array.from(slides).map((_, i) => `<span class="${i === 0 ? 'on' : ''}"></span>`).join('');
-                counter.hidden = false;
-                dots.hidden = false;
-                let index = 0;
-                const update = () => {
-                    index = Math.round(track.scrollLeft / track.clientWidth);
-                    counter.textContent = `${index + 1}/${slides.length}`;
-                    dots.querySelectorAll('span').forEach((d, i) => d.classList.toggle('on', i === index));
-                };
-                update();
-                track.addEventListener('scroll', () => requestAnimationFrame(update), { passive: true });
-                // 자동 넘김 — 사용자가 만지는 동안/화면 밖일 때는 멈춘다
-                let paused = false;
-                ['pointerdown', 'touchstart', 'mouseenter'].forEach(ev => track.addEventListener(ev, () => { paused = true; }, { passive: true }));
-                ['pointerup', 'touchend', 'mouseleave'].forEach(ev => track.addEventListener(ev, () => { setTimeout(() => { paused = false; }, 3000); }, { passive: true }));
-                setInterval(() => {
-                    if (paused || document.hidden || window.__wpLayoutEditing) return;
-                    const next = (index + 1) % slides.length;
-                    track.scrollTo({ left: next * track.clientWidth, behavior: 'smooth' });
-                }, 4000);
+                heroSlider.refresh();
                 applyBannerLayout();
             }
 
@@ -2002,7 +2168,7 @@
                 applyBannerLayout();
                 WithPlus.addLayoutEditButton('🛠 배너 사진 편집', () => {
                     const track = document.getElementById('hero-track');
-                    const slides = Array.from(track.querySelectorAll('.hero-slide'));
+                    const slides = Array.from(track.querySelectorAll('.hero-slide:not(.hero-slide-off)'));
                     let idx = Math.round(track.scrollLeft / track.clientWidth);
                     if (!slides[idx] || !slides[idx].classList.contains('deal-slide')) {
                         idx = slides.findIndex(s => s.classList.contains('deal-slide'));

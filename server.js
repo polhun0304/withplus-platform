@@ -11872,6 +11872,144 @@ app.put('/api/admin/layout', authenticate, requireRole(['admin', 'super_admin'])
 });
 
 // ============================================
+// 🖼️ 홈 메인 이미지 배너 — 관리자가 올린 통이미지 광고 배너(PC/모바일 사진·링크·노출기간·순서·켜기/끄기)
+// - platform_settings key=home_hero_banners(+_live)에 사이트별로 저장(WITH+와 LIVE+가 서로 덮어쓰지 않게)
+// - 기본은 홈 슬라이더 맨 앞에 순서대로 붙고 그 뒤에 소개 배너·오늘의 특가 배너가 이어진다(순서는 슬라이더 옵션에서 변경).
+// ============================================
+const HERO_BANNERS_KEY = 'home_hero_banners' + LAYOUT_KEY_SUFFIX;
+const HERO_BANNER_MAX = 20;
+function kstTodayYmd() {
+  return new Date(Date.now() + 9 * 3600 * 1000).toISOString().slice(0, 10);
+}
+function cleanHeroBanner(b, i) {
+  const s = (v, max) => String(v === undefined || v === null ? '' : v).trim().slice(0, max);
+  const pc = s(b && b.pc_image, 1000);
+  const mobile = s(b && b.mobile_image, 1000);
+  const link = s(b && b.link_url, 1000);
+  const start = s(b && b.start_date, 10);
+  const end = s(b && b.end_date, 10);
+  const n = i + 1;
+  if (!/^https:\/\//i.test(pc)) throw new Error(`${n}번 배너: PC 사진을 올려주세요`);
+  if (mobile && !/^https:\/\//i.test(mobile)) throw new Error(`${n}번 배너: 모바일 사진 주소가 올바르지 않습니다`);
+  if (link && !(/^\/(?!\/)/.test(link) || /^https?:\/\//i.test(link))) throw new Error(`${n}번 배너: 링크는 /로 시작하는 주소나 http(s) 주소만 쓸 수 있습니다`);
+  const ymd = /^\d{4}-\d{2}-\d{2}$/;
+  if (start && !ymd.test(start)) throw new Error(`${n}번 배너: 시작일 형식이 올바르지 않습니다`);
+  if (end && !ymd.test(end)) throw new Error(`${n}번 배너: 종료일 형식이 올바르지 않습니다`);
+  if (start && end && start > end) throw new Error(`${n}번 배너: 종료일이 시작일보다 빠릅니다`);
+  const order = Number(b && b.sort_order);
+  const rawId = s(b && b.id, 40);
+  return {
+    id: /^[a-z0-9-]{4,40}$/i.test(rawId) ? rawId : 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    pc_image: pc,
+    mobile_image: mobile,
+    link_url: link,
+    alt: s(b && b.alt, 100),
+    start_date: start,
+    end_date: end,
+    sort_order: Number.isFinite(order) ? Math.round(order) : n,
+    active: !!(b && b.active)
+  };
+}
+async function readHeroBanners() {
+  const { data, error } = await supabase.from('platform_settings').select('value').eq('key', HERO_BANNERS_KEY).maybeSingle();
+  if (error) throw error;
+  const list = data && data.value && Array.isArray(data.value.banners) ? data.value.banners : [];
+  return list.slice().sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0));
+}
+// 슬라이더 옵션 — 자동 넘김 간격, 이미지 배너/특가 배너 순서, 소개 배너 표시, 특가 배너 상품 선택(자동/직접 고정)
+// key=home_hero_config(+_live). 특가 사진 칸 크기는 기존 home_banner 배치 설정(box/items)을 그대로 쓴다.
+const HERO_CONFIG_KEY = 'home_hero_config' + LAYOUT_KEY_SUFFIX;
+const HERO_CONFIG_DEFAULTS = { interval_sec: 4, order: 'images_first', show_intro: true, deals: { mode: 'auto', product_ids: [] } };
+const HERO_DEAL_PIN_MAX = 10;
+function normalizeHeroConfig(v) {
+  const c = v && typeof v === 'object' ? v : {};
+  const sec = Math.round(Number(c.interval_sec));
+  const d = c.deals && typeof c.deals === 'object' ? c.deals : {};
+  const ids = Array.isArray(d.product_ids) ? d.product_ids.map(String).filter(id => /^[0-9a-f-]{36}$/i.test(id)) : [];
+  return {
+    interval_sec: Number.isFinite(sec) ? Math.min(15, Math.max(2, sec)) : HERO_CONFIG_DEFAULTS.interval_sec,
+    order: c.order === 'deals_first' ? 'deals_first' : 'images_first',
+    show_intro: c.show_intro !== false,
+    deals: { mode: d.mode === 'manual' ? 'manual' : 'auto', product_ids: [...new Set(ids)].slice(0, HERO_DEAL_PIN_MAX) }
+  };
+}
+async function readHeroConfig() {
+  const { data, error } = await supabase.from('platform_settings').select('value').eq('key', HERO_CONFIG_KEY).maybeSingle();
+  if (error) throw error;
+  return normalizeHeroConfig(data && data.value);
+}
+app.get('/api/admin/home/hero-config', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    res.json({ success: true, data: await readHeroConfig(), timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error reading hero config:', err);
+    res.status(500).json({ error: 'Failed to read config', message: '슬라이더 설정을 불러오지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+app.put('/api/admin/home/hero-config', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const sec = Number(body.interval_sec);
+    if (!Number.isFinite(sec) || sec < 2 || sec > 15) return res.status(400).json({ error: 'Bad Request', message: '자동 넘김 간격은 2~15초 사이로 입력해주세요', timestamp: new Date().toISOString() });
+    if (body.deals && Array.isArray(body.deals.product_ids) && body.deals.product_ids.length > HERO_DEAL_PIN_MAX) {
+      return res.status(400).json({ error: 'Bad Request', message: `특가 배너 상품은 최대 ${HERO_DEAL_PIN_MAX}개까지 고를 수 있습니다`, timestamp: new Date().toISOString() });
+    }
+    const value = normalizeHeroConfig(body);
+    if (value.deals.mode === 'manual' && value.deals.product_ids.length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '직접 선택일 때는 상품을 하나 이상 골라주세요', timestamp: new Date().toISOString() });
+    }
+    const { error } = await supabase.from('platform_settings').upsert({ key: HERO_CONFIG_KEY, value, updated_at: new Date().toISOString(), updated_by: req.user.id }, { onConflict: 'key' });
+    if (error) throw error;
+    res.json({ success: true, data: value, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error saving hero config:', err);
+    res.status(500).json({ error: 'Failed to save config', message: '슬라이더 설정을 저장하지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+// 공개: 지금 노출 중인 배너만(켜짐 + 오늘이 노출기간 안) + 슬라이더 옵션(config)
+app.get('/api/home/hero-banners', async (req, res) => {
+  try {
+    const today = kstTodayYmd();
+    const config = await readHeroConfig();
+    const banners = (await readHeroBanners())
+      .filter(b => b.active && b.pc_image && (!b.start_date || b.start_date <= today) && (!b.end_date || b.end_date >= today))
+      .map(b => ({ id: b.id, pc_image: b.pc_image, mobile_image: b.mobile_image || '', link_url: b.link_url || '', alt: b.alt || '' }));
+    res.set('Cache-Control', 'no-cache');
+    res.json({ success: true, data: banners, config, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error reading hero banners:', err);
+    res.status(500).json({ error: 'Failed to read banners', message: '배너를 불러오지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+app.get('/api/admin/home/hero-banners', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    res.json({ success: true, data: await readHeroBanners(), today: kstTodayYmd(), timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error reading hero banners (admin):', err);
+    res.status(500).json({ error: 'Failed to read banners', message: '배너를 불러오지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+app.put('/api/admin/home/hero-banners', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const input = req.body && req.body.banners;
+    if (!Array.isArray(input)) return res.status(400).json({ error: 'Bad Request', message: '저장할 배너 목록이 올바르지 않습니다', timestamp: new Date().toISOString() });
+    if (input.length > HERO_BANNER_MAX) return res.status(400).json({ error: 'Bad Request', message: `배너는 최대 ${HERO_BANNER_MAX}개까지 등록할 수 있습니다`, timestamp: new Date().toISOString() });
+    let banners;
+    try { banners = input.map(cleanHeroBanner); } catch (e) {
+      return res.status(400).json({ error: 'Bad Request', message: e.message, timestamp: new Date().toISOString() });
+    }
+    banners.sort((a, b) => a.sort_order - b.sort_order);
+    const { error } = await supabase.from('platform_settings').upsert({ key: HERO_BANNERS_KEY, value: { banners }, updated_at: new Date().toISOString(), updated_by: req.user.id }, { onConflict: 'key' });
+    if (error) throw error;
+    res.json({ success: true, data: banners, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error saving hero banners:', err);
+    res.status(500).json({ error: 'Failed to save banners', message: '배너를 저장하지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
 // 📣 창고털이 밴드 후기 연동
 // - 밴드에서 옮겨온 글은 band_posts_with에 '승인 대기'로 들어온다(작성자 이름은 가린 채로만 저장).
 // - 관리자가 후기마다 연결할 상품을 확인하고 승인해야만 상품 화면 "창고털이 밴드 후기"에 보인다.
@@ -12677,6 +12815,80 @@ app.get('/api/my/communities', authenticate, async (req, res) => {
   } catch (err) {
     console.error('Error fetching my communities:', err);
     res.status(500).json({ error: 'Failed to fetch my communities', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공동체 총 적립금 — 실제 주문(orders_with.community_earned_points, 취소·환불 제외) 합계.
+// 조직 랜딩(/api/communities/:slug)과 같은 기준이며, 주문이 1,000건을 넘어도 빠짐없이 더하도록 나눠서 읽는다.
+async function sumCommunityEarnedPoints(communityId) {
+  const PAGE = 1000;
+  let total = 0;
+  for (let from = 0; from < 200000; from += PAGE) {
+    const { data, error } = await supabase
+      .from('orders_with')
+      .select('community_earned_points, status')
+      .eq('community_id', communityId)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    (data || []).forEach(o => {
+      if (!['cancelled', 'refunded'].includes(o.status)) total += Number(o.community_earned_points || 0);
+    });
+    if (!data || data.length < PAGE) break;
+  }
+  return total;
+}
+
+// 홈 공동체 바용 요약 — 내가 속한 공동체(대표 1곳 + 나머지 목록), 대표 공동체의 총 적립금, 나의 적립금 잔액.
+// 대표 공동체: ?prefer=<slug>가 내가 가입한 곳이면 그곳, 아니면 가장 최근에 가입한 곳.
+// 나의 적립금은 장바구니·회원 혜택 바와 같은 getUserMileageBalance(사용 가능 잔액) 기준.
+app.get('/api/me/community-summary', authenticate, async (req, res) => {
+  try {
+    const { data: memberships, error } = await supabase
+      .from('community_members')
+      .select('community_id, joined_at')
+      .eq('user_id', req.user.id)
+      .eq('status', 'active');
+    if (error) throw error;
+
+    const joinedAt = {};
+    (memberships || []).forEach(m => {
+      const t = m.joined_at ? new Date(m.joined_at).getTime() : 0;
+      if (!(m.community_id in joinedAt) || t > joinedAt[m.community_id]) joinedAt[m.community_id] = t;
+    });
+    const ids = Object.keys(joinedAt);
+
+    let communities = [];
+    if (ids.length > 0) {
+      const { data, error: cErr } = await supabase
+        .from('communities')
+        .select('id, name, slug, logo_url')
+        .in('id', ids)
+        .eq('status', 'active');
+      if (cErr) throw cErr;
+      communities = (data || []).sort((a, b) => (joinedAt[b.id] || 0) - (joinedAt[a.id] || 0));
+    }
+
+    const prefer = String(req.query.prefer || '').trim();
+    const primary = communities.find(c => prefer && c.slug === prefer) || communities[0] || null;
+    const [myPoints, communityPoints] = await Promise.all([
+      getUserMileageBalance(req.user.id),
+      primary ? sumCommunityEarnedPoints(primary.id) : Promise.resolve(null)
+    ]);
+
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      success: true,
+      data: {
+        primary: primary ? { ...primary, community_points: communityPoints } : null,
+        communities: communities.map(c => ({ id: c.id, name: c.name, slug: c.slug })),
+        my_points: myPoints
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching community summary:', err);
+    res.status(500).json({ error: 'Failed to fetch community summary', message: '공동체 정보를 불러오지 못했습니다', timestamp: new Date().toISOString() });
   }
 });
 

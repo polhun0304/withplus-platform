@@ -83,6 +83,71 @@
         .detail-section-row .remove-section-btn { background: none; border: none; color: #C62828; cursor: pointer; font-size: 0.85em; }
         .detail-section-row input, .detail-section-row textarea { width: 100%; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.88em; font-family: inherit; margin-bottom: 6px; }
         .detail-section-row textarea { min-height: 50px; resize: vertical; }
+        /* 🖼️ 메인 배너 관리 */
+        .hb-card { border: 1px solid var(--border-color); border-radius: 12px; padding: 14px; margin-bottom: 14px; background: #fff; min-width: 0; }
+        .hb-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+        .hb-head .btn { padding: 6px 10px; }
+        .hb-badge { color: #fff; font-size: 12px; font-weight: 700; border-radius: 999px; padding: 2px 10px; }
+        .hb-previews { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; margin-bottom: 12px; }
+        .hb-previews > div { min-width: 0; }
+        .hb-cap { font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+        .hb-cap small { font-weight: 400; color: var(--text-gray); }
+        .hb-prev { position: relative; width: 100%; border-radius: 12px; overflow: hidden; background: #f3f3f3; display: flex; align-items: center; justify-content: center; color: #999; font-size: 13px; margin-bottom: 8px; }
+        .hb-prev-pc { aspect-ratio: 3 / 1; }
+        .hb-prev-mo { aspect-ratio: 3 / 2; max-width: 260px; }
+        .hb-prev img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+        .hb-file-btn { display: inline-block; cursor: pointer; margin-right: 6px; }
+        .hb-note { font-size: 12px; color: var(--text-gray); margin-top: 4px; }
+        .hb-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0 12px; align-items: end; }
+        .hb-fields input[type=text], .hb-fields input[type=date] { width: 100%; box-sizing: border-box; }
+        .hb-check { display: flex; align-items: center; gap: 6px; font-size: 14px; margin-bottom: 14px; }
+        .hb-msg { font-size: 13px; min-height: 1em; }
+        @media (max-width: 640px) { .hb-previews { grid-template-columns: 1fr; } }
+        .settings-card.hb-sec { max-width: 980px; margin-bottom: 20px; box-sizing: border-box; }
+        .hb-jump { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+        .hb-jump a { padding: 6px 12px; border-radius: 999px; background: #f4f4f4; color: #333; text-decoration: none; font-size: 13px; }
+        .hb-mode { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+        .hb-mode label { display: flex; gap: 6px; align-items: flex-start; }
+        .hb-deal-list { border: 1px solid var(--border-color); border-radius: 10px; padding: 4px 10px; }
+        .hb-deal-row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px dashed #eee; min-width: 0; }
+        .hb-deal-row:last-child { border-bottom: none; }
+        .hb-deal-row .btn { padding: 4px 8px; flex-shrink: 0; }
+        .hb-deal-no { width: 20px; text-align: center; font-weight: 700; color: #999; flex-shrink: 0; }
+        .hb-deal-thumb { width: 40px; height: 40px; border-radius: 8px; overflow: hidden; background: #f3f3f3; flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
+        .hb-deal-thumb img { width: 100%; height: 100%; object-fit: cover; }
+        .hb-deal-name { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; }
+        .hb-deal-name small { display: block; color: var(--text-gray); font-size: 12px; }
+        .hb-warn { color: #d32f2f; font-size: 12px; }
+        .hb-deal-search { margin-top: 10px; }
+        .hb-deal-search input { width: 100%; box-sizing: border-box; padding: 9px 12px; border: 1px solid var(--border-color); border-radius: 8px; }
+        #hb-deal-results { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; max-height: 260px; overflow-y: auto; }
+        .hb-deal-add { text-align: left; background: #fafafa; border: 1px solid #eee; border-radius: 8px; padding: 7px 10px; cursor: pointer; font: inherit; font-size: 13px; }
+        .hb-deal-add:hover { background: #fff0f5; }
+        .hb-deal-add small { color: var(--text-gray); }
+        .hb-box-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px 16px; }
+        .hb-range { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+        .hb-range input { width: 100%; }
+        .hb-deal-previews { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; align-items: start; }
+        .hb-deal-previews > div { min-width: 0; }
+        .hbp-frame { position: relative; overflow: hidden; border: 1px dashed #ddd; border-radius: 12px; }
+        .hbp-frame-mo { max-width: 260px; }
+        .hbp-hero { transform-origin: 0 0; border-radius: 22px; background: linear-gradient(120deg, #FFF1F5 0%, #FFE0EA 55%, #FFC9D9 100%); color: #1E1E1E; padding: 28px 40px; box-sizing: border-box; font-size: 16px; }
+        .hbp-hero.mo { border-radius: 18px; padding: 16px 16px 30px; font-size: 14px; }
+        .hbp-deal { display: grid; grid-template-columns: 1fr minmax(140px, var(--deal-col, 54%)); align-items: center; gap: 20px; }
+        .hbp-hero.mo .hbp-deal { grid-template-columns: 1fr minmax(120px, calc(var(--deal-col, 54%) + 4%)); gap: 12px; }
+        .hbp-kicker { font-size: .88em; font-weight: 600; }
+        .hbp-kicker b { background: #E8125C; color: #fff; border-radius: 999px; padding: 3px 12px; }
+        .hbp-name { font-size: 1.4em; font-weight: 800; margin: 8px 0 6px; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .hbp-hero.mo .hbp-name { font-size: 1.02em; }
+        .hbp-price { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+        .hbp-price .now { font-size: 1.3em; font-weight: 800; color: #E8125C; }
+        .hbp-hero.mo .hbp-price .now { font-size: 1.05em; }
+        .hbp-price .was { color: #999; text-decoration: line-through; }
+        .hbp-cta { display: inline-block; margin-top: 12px; background: #E8125C; color: #fff; font-weight: 700; border-radius: 999px; padding: 8px 16px; font-size: .88em; }
+        .hbp-hero.mo .hbp-cta { margin-top: 8px; padding: 6px 12px; font-size: .78em; }
+        .hbp-img { aspect-ratio: var(--deal-ar, 1.39); border-radius: var(--deal-radius, 18px); overflow: hidden; position: relative; transform: translate(var(--deal-dx, 0px), var(--deal-dy, 0px)); background: #fff; display: flex; align-items: center; justify-content: center; font-size: 3em; box-shadow: 0 10px 26px rgba(232,18,92,0.15); }
+        .hbp-img img { width: 100%; height: 100%; display: block; object-fit: cover; }
+        @media (max-width: 640px) { .hb-deal-previews { grid-template-columns: 1fr; } }
         .settings-card { background: white; border: 1px solid var(--border-color); border-radius: 12px; padding: 24px; max-width: 480px; }
         .settings-card h3 { margin-bottom: 6px; font-size: 1.1em; }
         .settings-card .desc { color: var(--text-gray); font-size: 0.85em; margin-bottom: 20px; }
@@ -1938,6 +2003,7 @@
                     ${isAdmin ? '<button class="tab-btn" data-tab="promotions">🎉 프로모션 이벤트</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="flash-deals">⚡ 한정수량 초특가</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="best-settings">⭐ 베스트 상품 설정</button>' : ''}
+                    ${isAdmin ? '<button class="tab-btn" data-tab="home-banners">🖼 배너 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="subscriptions">🔄 정기배송 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="categories">🏷️ 카테고리 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="suppliers">🏭 공급자 관리</button>' : ''}
@@ -2161,6 +2227,9 @@
                 </div>
                 <div class="tab-panel" id="tab-best-settings">
                     <div id="best-settings-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                </div>
+                <div class="tab-panel" id="tab-home-banners">
+                    <div id="home-banners-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                 </div>
                 <div class="tab-panel" id="tab-subscriptions">
                     <div id="subscriptions-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
@@ -10737,6 +10806,408 @@
                 document.querySelector('[data-tab="best-settings"]')?.addEventListener('click', () => {
                     const area = document.getElementById('best-settings-area');
                     if (!area.dataset.loaded) { area.dataset.loaded = '1'; loadBestSettingsAdmin(); }
+                });
+                // ===== 🖼️ 메인 배너 (홈 첫 화면 슬라이더의 통이미지 광고 배너, 관리자 전용) =====
+                // PC 사진(권장 1200×400, 3:1)과 선택 모바일 사진(권장 750×500, 3:2)·링크·대체문구·노출기간·순서·켜기/끄기를
+                // 한 목록으로 관리하고 [저장]을 눌러야 홈에 반영된다. 사진은 상품 사진과 같은 저장소(product-images/<사이트>/home-banner/)에 올라간다.
+                let hbList = [];
+                let hbToday = '';
+                const hbEsc = (v) => WithPlus.escapeHtml(v == null ? '' : String(v));
+                function hbStatus(b) {
+                    if (!b.active) return ['꺼짐', '#999'];
+                    if (!b.pc_image) return ['PC 사진 필요', '#d32f2f'];
+                    if (b.start_date && hbToday && b.start_date > hbToday) return ['예약', '#1565c0'];
+                    if (b.end_date && hbToday && b.end_date < hbToday) return ['기간 종료', '#999'];
+                    return ['노출 중', '#2e7d32'];
+                }
+                async function hbPrepare(file, maxW) {
+                    if (!/^image\/(jpeg|png|webp|gif)$/.test(file.type)) throw new Error('JPG·PNG·WEBP·GIF 사진만 올릴 수 있어요');
+                    if (file.size > 25 * 1024 * 1024) throw new Error('25MB 이하 사진만 올릴 수 있어요');
+                    if (file.type === 'image/gif') return file;
+                    const bmp = await createImageBitmap(file).catch(() => null);
+                    if (!bmp) return file;
+                    const k = Math.min(1, maxW / bmp.width);
+                    if (k === 1 && file.size < 900 * 1024) { if (bmp.close) bmp.close(); return file; }
+                    const c = document.createElement('canvas');
+                    c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+                    c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+                    if (bmp.close) bmp.close();
+                    const blob = await new Promise(r => c.toBlob(r, 'image/webp', 0.9));
+                    return blob || file;
+                }
+                async function hbUpload(file, kind) {
+                    const body = await hbPrepare(file, kind === 'mobile' ? 1500 : 2400);
+                    if (body.size > 10 * 1024 * 1024) throw new Error('줄여도 10MB가 넘어요. 더 작은 사진을 사용해주세요');
+                    const token = await WithPlus.getAccessToken();
+                    const res = await fetch('/api/admin/uploads/product-image', {
+                        method: 'POST',
+                        headers: { 'Content-Type': body.type || 'application/octet-stream', 'X-Product-Key': 'home-banner', 'X-Image-Kind': 'main', Authorization: 'Bearer ' + token },
+                        body
+                    });
+                    const json = await res.json().catch(() => ({}));
+                    if (!res.ok || !json.success) throw new Error(json.message || '사진 업로드에 실패했습니다');
+                    return json.data.url;
+                }
+                function hbRender() {
+                    const area = document.getElementById('hb-sec-images');
+                    if (!area) return;
+                    const cards = hbList.map((b, i) => {
+                        const [label, color] = hbStatus(b);
+                        const pcBox = b.pc_image ? `<img src="${WithPlus.safeUrlAttr(b.pc_image)}" alt="">` : '<span>PC 사진 없음</span>';
+                        const moBox = b.mobile_image ? `<img src="${WithPlus.safeUrlAttr(b.mobile_image)}" alt="">` : (b.pc_image ? `<img src="${WithPlus.safeUrlAttr(b.pc_image)}" alt="" style="opacity:.55">` : '<span>모바일 사진 없음</span>');
+                        return `
+                        <div class="hb-card" data-i="${i}">
+                            <div class="hb-head">
+                                <b>${i + 1}번 배너</b>
+                                <span class="hb-badge" style="background:${color}">${label}</span>
+                                <span style="flex:1"></span>
+                                <button type="button" class="btn btn-secondary hb-up" ${i === 0 ? 'disabled' : ''} title="위로">▲</button>
+                                <button type="button" class="btn btn-secondary hb-down" ${i === hbList.length - 1 ? 'disabled' : ''} title="아래로">▼</button>
+                                <button type="button" class="btn btn-secondary hb-del" style="color:#d32f2f">삭제</button>
+                            </div>
+                            <div class="hb-previews">
+                                <div>
+                                    <div class="hb-cap">PC 사진 <small>(권장 1200×400 · 3:1)</small></div>
+                                    <div class="hb-prev hb-prev-pc">${pcBox}</div>
+                                    <label class="btn btn-secondary hb-file-btn">📁 PC 사진 올리기<input type="file" class="hb-file" data-kind="pc" accept="image/jpeg,image/png,image/webp,image/gif" hidden></label>
+                                </div>
+                                <div>
+                                    <div class="hb-cap">모바일 사진 <small>(선택 · 권장 750×500 · 3:2)</small></div>
+                                    <div class="hb-prev hb-prev-mo">${moBox}</div>
+                                    <label class="btn btn-secondary hb-file-btn">📁 모바일 사진 올리기<input type="file" class="hb-file" data-kind="mobile" accept="image/jpeg,image/png,image/webp,image/gif" hidden></label>
+                                    ${b.mobile_image ? '<button type="button" class="btn btn-secondary hb-mo-clear">모바일 사진 빼기</button>' : '<div class="hb-note">없으면 PC 사진을 모바일 비율로 잘라 보여줍니다(흐린 미리보기)</div>'}
+                                </div>
+                            </div>
+                            <div class="hb-fields">
+                                <div class="field"><label>클릭 시 이동 주소</label><input type="text" class="hb-in" data-k="link_url" value="${hbEsc(b.link_url)}" placeholder="예: /product/상품ID 또는 https://..."></div>
+                                <div class="field"><label>대체 문구(사진 설명)</label><input type="text" class="hb-in" data-k="alt" maxlength="100" value="${hbEsc(b.alt)}" placeholder="예: 견과는 역시 투데이넛"></div>
+                                <div class="field"><label>노출 시작일 (비우면 바로)</label><input type="date" class="hb-in" data-k="start_date" value="${hbEsc(b.start_date)}"></div>
+                                <div class="field"><label>노출 종료일 (비우면 계속)</label><input type="date" class="hb-in" data-k="end_date" value="${hbEsc(b.end_date)}"></div>
+                                <label class="hb-check"><input type="checkbox" class="hb-in" data-k="active" ${b.active ? 'checked' : ''}> 홈 화면에 노출</label>
+                            </div>
+                            <div class="hb-msg"></div>
+                        </div>`;
+                    }).join('');
+                    area.innerHTML = `
+                        <div>
+                            <h3>🖼️ 홈 메인 이미지 배너</h3>
+                            <p class="desc">홈 첫 화면 슬라이더에 큰 광고 사진으로 보여집니다(위에서부터 순서대로 · 특가 배너와의 순서는 아래 슬라이더 옵션에서 정합니다). 사진 안에 글씨까지 넣은 완성 이미지를 올려주세요. 화면 비율이 다르면 가운데를 기준으로 잘립니다. 등록한 배너가 없으면 홈은 지금 모습 그대로입니다.</p>
+                            <div id="hb-cards">${cards || '<div class="state-box" style="padding:24px;"><div class="emoji">🖼️</div><h3>등록된 배너가 없습니다</h3><p>아래 [+ 배너 추가]로 시작하세요</p></div>'}</div>
+                            <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:14px;">
+                                <button type="button" class="btn btn-secondary" id="hb-add" ${hbList.length >= 20 ? 'disabled' : ''}>+ 배너 추가</button>
+                                <button type="button" class="settings-save-btn" id="hb-save" style="margin-top:0;">이미지 배너 저장</button>
+                                <a href="/" target="_blank" rel="noopener" class="btn btn-secondary">홈에서 확인 ↗</a>
+                                <span class="settings-msg" id="hb-save-msg" style="margin:0;"></span>
+                            </div>
+                        </div>`;
+                    hbBind();
+                }
+                function hbBind() {
+                    const area = document.getElementById('hb-sec-images');
+                    document.getElementById('hb-add').addEventListener('click', () => {
+                        hbList.push({ id: '', pc_image: '', mobile_image: '', link_url: '', alt: '', start_date: '', end_date: '', sort_order: hbList.length + 1, active: true });
+                        hbRender();
+                        const last = area.querySelector('.hb-card:last-child');
+                        if (last) last.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    });
+                    document.getElementById('hb-save').addEventListener('click', hbSave);
+                    area.querySelectorAll('.hb-card').forEach(card => {
+                        const i = Number(card.dataset.i);
+                        const b = hbList[i];
+                        card.querySelectorAll('.hb-in').forEach(inp => {
+                            inp.addEventListener(inp.type === 'checkbox' || inp.type === 'date' ? 'change' : 'input', () => {
+                                b[inp.dataset.k] = inp.type === 'checkbox' ? inp.checked : inp.value;
+                                if (inp.type === 'checkbox' || inp.type === 'date') {
+                                    const [label, color] = hbStatus(b);
+                                    const badge = card.querySelector('.hb-badge');
+                                    badge.textContent = label; badge.style.background = color;
+                                }
+                            });
+                        });
+                        const move = (step) => { const j = i + step; [hbList[i], hbList[j]] = [hbList[j], hbList[i]]; hbRender(); };
+                        card.querySelector('.hb-up').addEventListener('click', () => move(-1));
+                        card.querySelector('.hb-down').addEventListener('click', () => move(1));
+                        card.querySelector('.hb-del').addEventListener('click', () => {
+                            if (!confirm(`${i + 1}번 배너를 목록에서 뺄까요? [저장]을 눌러야 홈에 반영됩니다.`)) return;
+                            hbList.splice(i, 1); hbRender();
+                        });
+                        const clr = card.querySelector('.hb-mo-clear');
+                        if (clr) clr.addEventListener('click', () => { b.mobile_image = ''; hbRender(); });
+                        card.querySelectorAll('.hb-file').forEach(inp => {
+                            inp.addEventListener('change', async () => {
+                                const file = inp.files && inp.files[0];
+                                if (!file) return;
+                                const msg = card.querySelector('.hb-msg');
+                                msg.style.color = ''; msg.textContent = '⏳ 사진 올리는 중...';
+                                try {
+                                    const url = await hbUpload(file, inp.dataset.kind);
+                                    if (inp.dataset.kind === 'mobile') b.mobile_image = url; else b.pc_image = url;
+                                    hbRender();
+                                    const m2 = document.querySelector(`#home-banners-area .hb-card[data-i="${i}"] .hb-msg`);
+                                    if (m2) { m2.style.color = '#2e7d32'; m2.textContent = '사진을 올렸습니다. [저장]을 눌러야 홈에 반영됩니다.'; }
+                                } catch (e) {
+                                    msg.style.color = '#d32f2f'; msg.textContent = '⚠️ ' + e.message;
+                                }
+                            });
+                        });
+                    });
+                }
+                async function hbSave() {
+                    const msg = document.getElementById('hb-save-msg');
+                    const btn = document.getElementById('hb-save');
+                    btn.disabled = true; msg.style.color = ''; msg.textContent = '저장 중...';
+                    try {
+                        const banners = hbList.map((b, i) => Object.assign({}, b, { sort_order: i + 1 }));
+                        const r = await authedFetch('/api/admin/home/hero-banners', { method: 'PUT', body: JSON.stringify({ banners }) });
+                        if (!r.ok || !r.json.success) throw new Error(r.json.message || '저장하지 못했습니다');
+                        hbList = r.json.data;
+                        hbRender();
+                        const m2 = document.getElementById('hb-save-msg');
+                        m2.style.color = '#2e7d32'; m2.textContent = '✅ 저장했습니다. 홈 화면에 바로 반영됩니다.';
+                    } catch (e) {
+                        msg.style.color = '#d32f2f'; msg.textContent = '⚠️ ' + e.message;
+                        btn.disabled = false;
+                    }
+                }
+                // ----- 🔥 오늘의 특가 배너(상품 선택·사진 칸 크기) + ⚙️ 슬라이더 옵션 -----
+                // 특가 상품: auto = 홈과 같은 규칙(할인 중·재고 있는 상품을 할인율 높은 순 최대 6개), manual = 관리자가 고른 상품·순서(최대 10개)
+                // 사진 칸 크기: 기존 home_banner 배치 설정의 box(col·ar·dx·dy·radius)만 바꾸고, 상품별 사진 확대·위치(items)는 그대로 둔다.
+                const HB_BOX_DEFAULTS = { col: 54, ar: 0.72, dx: 0, dy: 0, radius: 18, zoom: 1, x: 50, y: 50, fit: 'cover' };
+                const HB_BOX_FIELDS = [
+                    { key: 'col', label: '사진 칸 너비', min: 20, max: 75, step: 1, unit: '%' },
+                    { key: 'ar', label: '사진 칸 세로 비율', min: 0.5, max: 1.6, step: 0.01, unit: '배' },
+                    { key: 'radius', label: '모서리 둥글기', min: 0, max: 60, step: 1, unit: 'px' },
+                    { key: 'dx', label: '칸 좌우 위치', min: -300, max: 300, step: 1, unit: 'px' },
+                    { key: 'dy', label: '칸 위아래 위치', min: -200, max: 200, step: 1, unit: 'px' }
+                ];
+                let hbProducts = [];
+                let hbConfig = { interval_sec: 4, order: 'images_first', show_intro: true, deals: { mode: 'auto', product_ids: [] } };
+                let hbLayout = { box: {}, items: {} };
+                const hbRate = (p) => (p.discount_price && Number(p.discount_price) < Number(p.price)) ? Math.round((1 - Number(p.discount_price) / Number(p.price)) * 100) : 0;
+                function hbAutoDeals() {
+                    return hbProducts.filter(p => hbRate(p) > 0 && Number(p.stock) > 0)
+                        .sort((a, b) => hbRate(b) - hbRate(a)).slice(0, 6);
+                }
+                function hbCurrentDeals() {
+                    if (hbConfig.deals.mode === 'manual') {
+                        const byId = new Map(hbProducts.map(p => [String(p.id), p]));
+                        return hbConfig.deals.product_ids.map(id => byId.get(String(id))).filter(Boolean);
+                    }
+                    return hbAutoDeals();
+                }
+                function hbDealRow(p, i, manual) {
+                    const rate = hbRate(p);
+                    const img = Array.isArray(p.images_urls) && p.images_urls[0] ? `<img src="${WithPlus.safeUrlAttr(p.images_urls[0])}" alt="">` : '🎁';
+                    const warn = Number(p.stock) > 0 ? '' : '<span class="hb-warn">품절 — 홈에서 빠짐</span>';
+                    return `<div class="hb-deal-row" data-id="${hbEsc(p.id)}">
+                        <span class="hb-deal-no">${i + 1}</span>
+                        <span class="hb-deal-thumb">${img}</span>
+                        <span class="hb-deal-name">${hbEsc(p.name)} ${warn}<small>${WithPlus.formatPrice(rate ? p.discount_price : p.price)}${rate ? ` · -${rate}%` : ' · 할인 없음(정가로 표시)'}</small></span>
+                        ${manual ? `<button type="button" class="btn btn-secondary hb-d-up" ${i === 0 ? 'disabled' : ''}>▲</button><button type="button" class="btn btn-secondary hb-d-down" ${i === hbConfig.deals.product_ids.length - 1 ? 'disabled' : ''}>▼</button><button type="button" class="btn btn-secondary hb-d-del" style="color:#d32f2f">빼기</button>` : ''}
+                    </div>`;
+                }
+                function hbRenderDeals() {
+                    const sec = document.getElementById('hb-sec-deals');
+                    if (!sec) return;
+                    const manual = hbConfig.deals.mode === 'manual';
+                    const list = hbCurrentDeals();
+                    const missing = manual ? hbConfig.deals.product_ids.filter(id => !hbProducts.some(p => String(p.id) === String(id))).length : 0;
+                    const box = Object.assign({}, HB_BOX_DEFAULTS, hbLayout.box || {});
+                    sec.innerHTML = `
+                        <h3>🔥 오늘의 특가 배너</h3>
+                        <p class="desc">상품 사진이 오른쪽에 들어가는 특가 배너입니다. 어떤 상품을 보여줄지와 사진 칸 크기를 정합니다(공동체 매장에서는 그 매장에 보이는 상품만, 품절 상품은 자동으로 빠집니다).</p>
+                        <div class="hb-mode">
+                            <label><input type="radio" name="hb-deal-mode" value="auto" ${manual ? '' : 'checked'}> 자동 — 할인 중인 상품을 할인율 높은 순으로 최대 6개</label>
+                            <label><input type="radio" name="hb-deal-mode" value="manual" ${manual ? 'checked' : ''}> 직접 선택 — 고른 상품을 고른 순서대로 (최대 10개)</label>
+                        </div>
+                        <div class="hb-cap" style="margin-top:10px;">${manual ? '고른 상품' : '지금 자동으로 뽑히는 상품'} (${list.length}개)</div>
+                        <div class="hb-deal-list">${list.length ? list.map((p, i) => hbDealRow(p, i, manual)).join('') : `<div class="hb-note" style="padding:10px 0;">${manual ? '아직 고른 상품이 없습니다. 아래에서 검색해 추가하세요.' : '지금 할인 중인 재고 상품이 없어 특가 배너가 나오지 않습니다.'}</div>`}</div>
+                        ${missing ? `<div class="hb-warn" style="margin-top:6px;">고른 상품 중 ${missing}개는 지금 판매 목록에 없어 홈에 나오지 않습니다.</div>` : ''}
+                        ${manual ? `<div class="hb-deal-search">
+                            <input type="search" id="hb-deal-q" placeholder="상품 이름으로 검색해 추가" autocomplete="off">
+                            <div id="hb-deal-results"></div>
+                        </div>` : ''}
+                        <div class="hb-cap" style="margin-top:18px;">사진 칸 크기 <small>(모든 특가 배너 공통 · 상품별 사진 확대·위치는 홈 화면 "🛠 배너 사진 편집"이나 상품 수정 화면에서)</small></div>
+                        <div class="hb-box-fields">${HB_BOX_FIELDS.map(f => `
+                            <label class="hb-range"><span>${f.label} <b id="hb-box-v-${f.key}">${box[f.key]}${f.unit}</b></span>
+                                <input type="range" class="hb-box-in" data-k="${f.key}" min="${f.min}" max="${f.max}" step="${f.step}" value="${box[f.key]}"></label>`).join('')}
+                        </div>
+                        <div class="hb-cap" style="margin-top:12px;">미리보기 <small>(첫 번째 특가 상품 기준)</small></div>
+                        <div class="hb-deal-previews">
+                            <div><div class="hb-note">PC</div><div class="hbp-frame" id="hbp-pc"></div></div>
+                            <div><div class="hb-note">모바일 (360px)</div><div class="hbp-frame hbp-frame-mo" id="hbp-mo"></div></div>
+                        </div>
+                        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-top:12px;">
+                            <button type="button" class="btn btn-secondary" id="hb-box-reset">칸 크기 기본값</button>
+                            <button type="button" class="settings-save-btn" id="hb-box-save" style="margin-top:0;">사진 칸 크기 저장</button>
+                            <span class="settings-msg" id="hb-box-msg" style="margin:0;"></span>
+                        </div>`;
+                    sec.querySelectorAll('input[name="hb-deal-mode"]').forEach(r => r.addEventListener('change', () => {
+                        hbConfig.deals.mode = r.value;
+                        if (r.value === 'manual' && hbConfig.deals.product_ids.length === 0) hbConfig.deals.product_ids = hbAutoDeals().map(p => String(p.id)); // 자동 목록에서 시작
+                        hbRenderDeals();
+                        hbMarkConfigDirty();
+                    }));
+                    sec.querySelectorAll('.hb-deal-row').forEach((row, i) => {
+                        const ids = hbConfig.deals.product_ids;
+                        const idx = ids.indexOf(row.dataset.id);
+                        const mv = (step) => { const j = idx + step; [ids[idx], ids[j]] = [ids[j], ids[idx]]; hbRenderDeals(); hbMarkConfigDirty(); };
+                        const up = row.querySelector('.hb-d-up'); if (up) up.addEventListener('click', () => mv(-1));
+                        const dn = row.querySelector('.hb-d-down'); if (dn) dn.addEventListener('click', () => mv(1));
+                        const del = row.querySelector('.hb-d-del'); if (del) del.addEventListener('click', () => { ids.splice(idx, 1); hbRenderDeals(); hbMarkConfigDirty(); });
+                    });
+                    const q = document.getElementById('hb-deal-q');
+                    if (q) {
+                        const results = document.getElementById('hb-deal-results');
+                        const run = () => {
+                            const term = q.value.trim().toLowerCase();
+                            if (!term) { results.innerHTML = ''; return; }
+                            const found = hbProducts.filter(p => String(p.name || '').toLowerCase().includes(term) && !hbConfig.deals.product_ids.includes(String(p.id))).slice(0, 12);
+                            results.innerHTML = found.length ? found.map(p => `<button type="button" class="hb-deal-add" data-id="${hbEsc(p.id)}">+ ${hbEsc(p.name)} <small>${WithPlus.formatPrice(hbRate(p) ? p.discount_price : p.price)}${hbRate(p) ? ` · -${hbRate(p)}%` : ''}${Number(p.stock) > 0 ? '' : ' · 품절'}</small></button>`).join('') : '<div class="hb-note">검색 결과가 없습니다</div>';
+                            results.querySelectorAll('.hb-deal-add').forEach(b => b.addEventListener('click', () => {
+                                if (hbConfig.deals.product_ids.length >= 10) { alert('특가 배너 상품은 최대 10개까지 고를 수 있어요'); return; }
+                                hbConfig.deals.product_ids.push(b.dataset.id);
+                                hbRenderDeals(); hbMarkConfigDirty();
+                                const q2 = document.getElementById('hb-deal-q'); if (q2) q2.focus();
+                            }));
+                        };
+                        q.addEventListener('input', run);
+                    }
+                    sec.querySelectorAll('.hb-box-in').forEach(inp => inp.addEventListener('input', () => {
+                        const f = HB_BOX_FIELDS.find(x => x.key === inp.dataset.k);
+                        hbLayout.box = Object.assign({}, HB_BOX_DEFAULTS, hbLayout.box, { [f.key]: Number(inp.value) });
+                        document.getElementById('hb-box-v-' + f.key).textContent = inp.value + f.unit;
+                        hbRenderPreview();
+                    }));
+                    document.getElementById('hb-box-reset').addEventListener('click', () => {
+                        hbLayout.box = { col: HB_BOX_DEFAULTS.col, ar: HB_BOX_DEFAULTS.ar, dx: 0, dy: 0, radius: HB_BOX_DEFAULTS.radius };
+                        hbRenderDeals();
+                    });
+                    document.getElementById('hb-box-save').addEventListener('click', hbSaveBox);
+                    hbRenderPreview();
+                }
+                // 홈 화면 특가 배너와 같은 구조·규칙으로 축소 미리보기(PC 1160px, 모바일 332px 폭을 실제 크기로 그린 뒤 줄여서 보여준다)
+                function hbRenderPreview() {
+                    const p = hbCurrentDeals()[0];
+                    const box = Object.assign({}, HB_BOX_DEFAULTS, hbLayout.box || {});
+                    const item = p ? Object.assign({}, HB_BOX_DEFAULTS, (hbLayout.items || {})[String(p.id)] || {}) : HB_BOX_DEFAULTS;
+                    [['hbp-pc', 1160, false], ['hbp-mo', 332, true]].forEach(([id, w, mo]) => {
+                        const frame = document.getElementById(id);
+                        if (!frame) return;
+                        if (!p) { frame.innerHTML = '<div class="hb-note" style="padding:20px;">보여줄 특가 상품이 없습니다</div>'; frame.style.height = ''; return; }
+                        const rate = hbRate(p);
+                        const img = Array.isArray(p.images_urls) && p.images_urls[0] ? `<img src="${WithPlus.safeUrlAttr(p.images_urls[0])}" alt="">` : '🎁';
+                        frame.innerHTML = `<div class="hbp-hero${mo ? ' mo' : ''}" style="width:${w}px; --deal-col:${box.col}%; --deal-ar:${1 / (Number(box.ar) || 1)}; --deal-dx:${box.dx}px; --deal-dy:${box.dy}px; --deal-radius:${box.radius}px;">
+                            <div class="hbp-deal">
+                                <div>
+                                    <span class="hbp-kicker">오늘의 특가${rate ? ` <b>-${rate}%</b>` : ''}</span>
+                                    <div class="hbp-name">${hbEsc(p.name)}</div>
+                                    <div class="hbp-price"><span class="now">${WithPlus.formatPrice(rate ? p.discount_price : p.price)}</span>${rate ? `<span class="was">${WithPlus.formatPrice(p.price)}</span>` : ''}</div>
+                                    <span class="hbp-cta">특가 상품 보러가기 ›</span>
+                                </div>
+                                <div class="hbp-img">${img}</div>
+                            </div>
+                        </div>`;
+                        const pic = frame.querySelector('.hbp-img img');
+                        if (pic && WithPlus.applyPhotoState) WithPlus.applyPhotoState(pic, item);
+                        const hero = frame.querySelector('.hbp-hero');
+                        const scale = Math.min(1, (frame.clientWidth || w) / w);
+                        hero.style.transform = `scale(${scale})`;
+                        frame.style.height = Math.ceil(hero.offsetHeight * scale) + 'px';
+                    });
+                }
+                async function hbSaveBox() {
+                    const msg = document.getElementById('hb-box-msg');
+                    msg.style.color = ''; msg.textContent = '저장 중...';
+                    try {
+                        // 다른 화면(상품별 사진 편집)에서 바뀐 items를 덮어쓰지 않도록 저장 직전에 최신 값을 다시 읽어 box만 바꾼다
+                        const r = await fetch('/api/layout?key=home_banner', { cache: 'no-store' });
+                        const j = await r.json().catch(() => ({}));
+                        const latest = (r.ok && j.success && j.data) || {};
+                        const b = Object.assign({}, HB_BOX_DEFAULTS, hbLayout.box || {});
+                        const value = Object.assign({}, latest, { box: { col: b.col, ar: b.ar, dx: b.dx, dy: b.dy, radius: b.radius }, items: latest.items || {} });
+                        await WithPlus.saveLayout('home_banner', value);
+                        hbLayout = { box: value.box, items: value.items };
+                        msg.style.color = '#2e7d32'; msg.textContent = '✅ 저장했습니다. 홈 화면에 바로 반영됩니다.';
+                    } catch (e) {
+                        msg.style.color = '#d32f2f'; msg.textContent = '⚠️ ' + e.message;
+                    }
+                }
+                function hbMarkConfigDirty() {
+                    const m = document.getElementById('hb-cfg-msg');
+                    if (m) { m.style.color = '#e65100'; m.textContent = '바뀐 내용이 있습니다 — [슬라이더·특가 설정 저장]을 눌러야 홈에 반영됩니다'; }
+                }
+                function hbRenderOptions() {
+                    const sec = document.getElementById('hb-sec-options');
+                    if (!sec) return;
+                    sec.innerHTML = `
+                        <h3>⚙️ 슬라이더 옵션</h3>
+                        <div class="hb-fields">
+                            <div class="field"><label>자동 넘김 간격 (초, 2~15)</label><input type="number" id="hb-cfg-interval" min="2" max="15" step="1" value="${hbConfig.interval_sec}"></div>
+                            <div class="field"><label>배너 순서</label>
+                                <select id="hb-cfg-order">
+                                    <option value="images_first" ${hbConfig.order === 'images_first' ? 'selected' : ''}>이미지 배너 먼저 → 소개 배너 → 특가 배너</option>
+                                    <option value="deals_first" ${hbConfig.order === 'deals_first' ? 'selected' : ''}>특가 배너 먼저 → 소개 배너 → 이미지 배너</option>
+                                </select></div>
+                            <label class="hb-check"><input type="checkbox" id="hb-cfg-intro" ${hbConfig.show_intro ? 'checked' : ''}> "함께할수록 더 큰 나눔" 소개 배너 보이기 <small style="color:var(--text-gray);">(다른 배너가 하나도 없으면 항상 보임)</small></label>
+                        </div>
+                        <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                            <button type="button" class="settings-save-btn" id="hb-cfg-save" style="margin-top:0;">슬라이더·특가 설정 저장</button>
+                            <span class="settings-msg" id="hb-cfg-msg" style="margin:0;"></span>
+                        </div>`;
+                    document.getElementById('hb-cfg-interval').addEventListener('input', (e) => { hbConfig.interval_sec = Number(e.target.value); hbMarkConfigDirty(); });
+                    document.getElementById('hb-cfg-order').addEventListener('change', (e) => { hbConfig.order = e.target.value; hbMarkConfigDirty(); });
+                    document.getElementById('hb-cfg-intro').addEventListener('change', (e) => { hbConfig.show_intro = e.target.checked; hbMarkConfigDirty(); });
+                    document.getElementById('hb-cfg-save').addEventListener('click', async () => {
+                        const msg = document.getElementById('hb-cfg-msg');
+                        msg.style.color = ''; msg.textContent = '저장 중...';
+                        try {
+                            const r = await authedFetch('/api/admin/home/hero-config', { method: 'PUT', body: JSON.stringify(hbConfig) });
+                            if (!r.ok || !r.json.success) throw new Error(r.json.message || '저장하지 못했습니다');
+                            hbConfig = r.json.data;
+                            hbRenderDeals();
+                            msg.style.color = '#2e7d32'; msg.textContent = '✅ 저장했습니다. 홈 화면에 바로 반영됩니다.';
+                        } catch (e) {
+                            msg.style.color = '#d32f2f'; msg.textContent = '⚠️ ' + e.message;
+                        }
+                    });
+                }
+                async function loadHbDealsAndOptions() {
+                    const [cfgRes, prodRes, layout] = await Promise.all([
+                        authedFetch('/api/admin/home/hero-config'),
+                        fetch('/api/products').then(r => r.json()).catch(() => null),
+                        fetch('/api/layout?key=home_banner', { cache: 'no-store' }).then(r => r.json()).catch(() => null)
+                    ]);
+                    if (cfgRes.ok && cfgRes.json.success) hbConfig = cfgRes.json.data;
+                    hbProducts = (prodRes && prodRes.success && Array.isArray(prodRes.data)) ? prodRes.data : [];
+                    const v = (layout && layout.success && layout.data) || {};
+                    hbLayout = { box: v.box || {}, items: v.items || {} };
+                    hbRenderDeals();
+                    hbRenderOptions();
+                }
+                window.addEventListener('resize', () => { if (document.getElementById('hbp-pc')) hbRenderPreview(); });
+
+                async function loadHomeBanners() {
+                    const area = document.getElementById('home-banners-area');
+                    try {
+                        const r = await authedFetch('/api/admin/home/hero-banners');
+                        if (!r.ok || !r.json.success) throw new Error(r.json.message || '불러오지 못했습니다');
+                        hbList = r.json.data || [];
+                        hbToday = r.json.today || '';
+                        area.innerHTML = `
+                            <div class="hb-jump"><a href="#hb-sec-images">🖼️ 이미지 배너</a><a href="#hb-sec-deals">🔥 특가 배너</a><a href="#hb-sec-options">⚙️ 슬라이더 옵션</a><a href="/" target="_blank" rel="noopener">홈에서 확인 ↗</a></div>
+                            <div class="settings-card hb-sec" id="hb-sec-images"></div>
+                            <div class="settings-card hb-sec" id="hb-sec-deals"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                            <div class="settings-card hb-sec" id="hb-sec-options"></div>`;
+                        hbRender();
+                        await loadHbDealsAndOptions();
+                    } catch (err) {
+                        area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>메인 배너를 불러오는 중 문제가 발생했습니다</h3><p>${hbEsc(err.message)}</p></div>`;
+                    }
+                }
+                document.querySelector('[data-tab="home-banners"]').addEventListener('click', () => {
+                    const area = document.getElementById('home-banners-area');
+                    if (!area.dataset.loaded) { area.dataset.loaded = '1'; loadHomeBanners(); }
                 });
 
                 // ===== 🔄 정기배송(구독) 관리 (관리자 전용) - 신청/일정 관리만, 자동결제·자동주문생성은 범위 밖 =====
