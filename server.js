@@ -4260,7 +4260,7 @@ async function runRepurchaseReminderScan(opts = {}) {
 
   for (const cand of dueCandidates) {
     const product = productById[cand.productId];
-    if (!product || product.status !== 'active') continue; // 단종/삭제된 상품은 재구매를 유도할 수 없음
+    if (!product || product.status !== 'active') continue; // 품절(판매중지)/삭제된 상품은 재구매를 유도할 수 없음
 
     // expected_next_purchase_at만 최신화 (last_reminder_sent_at/reminder_count는 건드리지 않음 - 아래에서 쿨다운 판단용으로 그대로 읽는다)
     const { data: reminderRow, error: upsertErr } = await supabase
@@ -6003,10 +6003,16 @@ app.get('/api/products/:id', async (req, res) => {
         reviews:product_reviews(id, rating, title, comment, user_id, created_at, verified_purchase, status)
       `)
       .eq('id', id)
-      .single();
+      .maybeSingle();
 
     if (error) throw error;
     if (!data) {
+      // 품절 처리(status='discontinued')된 상품은 공개 조회(RLS: active만 허용)에 잡히지 않는다. 찜·주문내역 링크로 들어온 손님에게
+      // "없는 상품" 대신 "품절"로 보이도록 기본 정보만 내려준다(구매는 상품 화면과 주문 API 양쪽에서 막힘). 판매중지(inactive)는 계속 숨긴다.
+      const { data: soldOut } = await supabase.from('products_with').select(PRODUCT_SAFE_COLUMNS).eq('id', id).eq('status', 'discontinued').maybeSingle();
+      if (soldOut) {
+        return res.json({ success: true, data: { ...soldOut, reviews: [], variants: [], review_satisfaction: { satisfied_count: 0, verified_count: 0, percent: null } }, timestamp: new Date().toISOString() });
+      }
       return res.status(404).json({
         error: 'Not Found',
         message: 'Product not found',
@@ -6281,38 +6287,40 @@ app.post('/api/products', authenticate, requireRole(['provider', 'admin', 'super
   }
 });
 
-// 상품 수정 (공급자 본인 상품 또는 관리자)
-app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, status, vendor_id, brand, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount, quantity_price_options } = req.body;
+// 상품 수정 핵심 로직 (단건 수정 PUT /api/products/:id 와 일괄 처리 POST /api/admin/products/bulk 가 함께 쓴다)
+// - 권한(본인 상품/관리자)·이미지 검증·재고원장(adjust_stock_with)·재입고/가격인하 알림·가격 이력 등 부수효과를 한 곳에서 동일하게 처리한다
+// - HTTP 응답을 직접 보내지 않고 { httpStatus, payload } 를 돌려준다 (예외는 호출한 쪽에서 500 처리)
+async function updateProductCore(req, id, body) {
+  {
+    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, status, vendor_id, brand, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount, quantity_price_options } = body || {};
 
     const { data: existing, error: findErr } = await supabase
       .from('products_with')
       .select('id, supplier_id, stock, price, discount_price')
       .eq('id', id)
+      .is('deleted_at', null) // 영구 삭제(종결) 처리된 상품은 수정·복구 불가
       .single();
 
     if (findErr || !existing) {
-      return res.status(404).json({ error: 'Not Found', message: 'Product not found', timestamp: new Date().toISOString() });
+      return { httpStatus: 404, payload: { error: 'Not Found', message: 'Product not found', timestamp: new Date().toISOString() } };
     }
 
     if (!isAdminRole(req.userRole) && existing.supplier_id !== req.user.id) {
-      return res.status(403).json({ error: 'Forbidden', message: '본인 상품만 수정할 수 있습니다', timestamp: new Date().toISOString() });
+      return { httpStatus: 403, payload: { error: 'Forbidden', message: '본인 상품만 수정할 수 있습니다', timestamp: new Date().toISOString() } };
     }
 
     if (!isValidImageUrlList(images_urls)) {
-      return res.status(400).json({
+      return { httpStatus: 400, payload: {
         error: 'Bad Request',
         message: 'images_urls는 http(s):// 로 시작하는 문자열 배열이어야 합니다',
         timestamp: new Date().toISOString()
-      });
+      } };
     }
 
     // 구매수량별 가격 옵션 - 보내지 않으면(undefined) 기존 값 유지, null/[]이면 해제
     const qtpUpdate = normalizeQuantityPriceOptions(quantity_price_options);
     if (!qtpUpdate.ok) {
-      return res.status(400).json({ error: 'Bad Request', message: qtpUpdate.message, timestamp: new Date().toISOString() });
+      return { httpStatus: 400, payload: { error: 'Bad Request', message: qtpUpdate.message, timestamp: new Date().toISOString() } };
     }
 
     const updates = {};
@@ -6356,7 +6364,7 @@ app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'su
               stockChanged = true;
             } catch (stockErr) {
               if (stockErr.message && stockErr.message.includes('INSUFFICIENT_STOCK')) {
-                return res.status(400).json({ error: 'Bad Request', message: '재고보다 많이 차감할 수 없습니다', timestamp: new Date().toISOString() });
+                return { httpStatus: 400, payload: { error: 'Bad Request', message: '재고보다 많이 차감할 수 없습니다', timestamp: new Date().toISOString() } };
               }
               throw stockErr;
             }
@@ -6376,10 +6384,10 @@ app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'su
         .single();
       if (error) {
         if (error.code === '23503') {
-          return res.status(400).json({ error: 'Bad Request', message: '존재하지 않는 공급자입니다', timestamp: new Date().toISOString() });
+          return { httpStatus: 400, payload: { error: 'Bad Request', message: '존재하지 않는 공급자입니다', timestamp: new Date().toISOString() } };
         }
         if (error.code === '23505') {
-          return res.status(409).json({ error: 'Conflict', message: '이미 사용 중인 바코드/상품코드입니다. 다른 코드를 입력하거나 자동생성을 이용해주세요', timestamp: new Date().toISOString() });
+          return { httpStatus: 409, payload: { error: 'Conflict', message: '이미 사용 중인 바코드/상품코드입니다. 다른 코드를 입력하거나 자동생성을 이용해주세요', timestamp: new Date().toISOString() } };
         }
         throw error;
       }
@@ -6408,14 +6416,23 @@ app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'su
       recordPriceHistory(id, data.price, data.discount_price).catch(() => {});
     }
 
-    res.json({ success: true, data, message: 'Product updated successfully', timestamp: new Date().toISOString() });
+    return { httpStatus: 200, payload: { success: true, data, message: 'Product updated successfully', timestamp: new Date().toISOString() } };
+  }
+}
+
+// 상품 수정 (공급자 본인 상품 또는 관리자)
+app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  try {
+    const { httpStatus, payload } = await updateProductCore(req, req.params.id, req.body);
+    res.status(httpStatus).json(payload);
   } catch (err) {
     console.error('Error updating product:', err);
     res.status(500).json({ error: 'Failed to update product', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
-// 상품 삭제 (실제로는 소프트 삭제 - status를 discontinued로 변경, 주문 이력 보존)
+// 상품 품절처리 (행은 지우지 않고 status를 discontinued(화면 표기 "품절")로 변경 — 주문 이력 보존, 판매재개 가능)
+// ※ 영구 삭제는 POST /api/admin/products/bulk { action: 'purge' } 로 따로 처리한다
 app.delete('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
     const { id } = req.params;
@@ -6424,6 +6441,7 @@ app.delete('/api/products/:id', authenticate, requireRole(['provider', 'admin', 
       .from('products_with')
       .select('id, supplier_id')
       .eq('id', id)
+      .is('deleted_at', null)
       .single();
 
     if (findErr || !existing) {
@@ -6445,6 +6463,217 @@ app.delete('/api/products/:id', authenticate, requireRole(['provider', 'admin', 
   } catch (err) {
     console.error('Error deleting product:', err);
     res.status(500).json({ error: 'Failed to delete product', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 상품 일괄 처리 (관리자 상품 목록의 체크박스 선택 → 하단 일괄 작업 바)
+// POST /api/admin/products/bulk  { ids: [...최대 500], action, value, mode, round }
+//  - action: purge(영구 삭제) / status(판매상태 — 품절처리·판매재개 포함) / category(카테고리) / stock(재고 설정) / price(가격 조정)
+//  - 공급자(provider)는 본인 상품만 처리된다(남의 상품은 항목별 "권한 없음"으로 보고)
+//  - 상태·카테고리·재고·가격 변경은 단건 수정과 같은 updateProductCore를 그대로 거치므로
+//    재고원장 기록·재입고/가격인하 알림·가격 이력·감사로그(requireRole이 자동 기록)가 단건과 똑같이 남는다
+//  - 품절과 영구 삭제는 구분한다: 품절 = status 'discontinued'(손님 화면에 "품절"로 남음, 판매재개 가능)
+//  - 영구 삭제(purge, confirm:'영구 삭제' 필수): 주문·리뷰·라이브 판매 등 이력이 전혀 없으면 행을 실제로 지운다
+//    (옵션·찜·재입고 알림·가격이력 등 딸린 행은 FK CASCADE로 함께 삭제). 주문 이력(orders_with.items JSONB — FK 없음,
+//    주문에는 상품명·가격 스냅샷이 남음)이나 LIVE+ 판매 등 이력이 있으면 그 기록을 지키기 위해 행은 남기고
+//    status='inactive' + deleted_at 으로 "삭제됨" 종결 처리한다 → 손님·관리자 목록 모두에서 숨기고 복구·수정 불가
+// ============================================
+const BULK_PRODUCT_MAX = 500;
+const BULK_PRODUCT_STATUSES = ['active', 'inactive', 'discontinued']; // DB CHECK 제약과 동일 (LIVE+와 공유하므로 값 자체는 바꾸지 않는다)
+const BULK_PRODUCT_STATUS_LABEL = { active: '판매중', inactive: '판매중지(숨김)', discontinued: '품절' };
+// 상품을 참조하는 이력 테이블 — 여기에 행이 있으면 완전 삭제하지 않는다(CASCADE로 이력이 같이 사라지거나 FK 오류가 나는 것 방지)
+const PRODUCT_HISTORY_TABLES = [
+  ['product_reviews', 'product_id', '리뷰'],
+  ['channel_sales_with', 'product_id', '채널 판매'],
+  ['product_subscriptions_with', 'product_id', '정기배송'],
+  ['channel_products_live', 'product_id', 'LIVE+ 판매 등록'],
+  ['live_session_inventory_live', 'product_id', '라이브 재고'],
+  ['live_session_reservations_live', 'product_id', '라이브 예약'],
+  ['live_flash_sales_live', 'product_id', '라이브 타임특가'],
+  ['live_auctions_live', 'product_id', '라이브 경매'],
+  ['live_sessions_live', 'pinned_product_id', '라이브 고정상품'],
+  ['agv_tasks_with', 'product_id', '물류 작업']
+];
+
+// ids 중 주문/판매 이력이 있는 상품 → { productId: '사유' }
+async function findProductHistoryRefs(ids) {
+  const refs = {};
+  const mark = (pid, reason) => { if (pid && ids.includes(pid) && !refs[pid]) refs[pid] = reason; };
+  for (let i = 0; i < ids.length; i += 40) {
+    const chunk = ids.slice(i, i + 40);
+    // 주문(orders_with.items jsonb 배열의 product_id)
+    const orFilter = chunk.map(pid => `items.cs.${JSON.stringify([{ product_id: pid }])}`).join(',');
+    const { data: orders, error: oErr } = await supabase.from('orders_with').select('items').or(orFilter);
+    if (oErr) { chunk.forEach(pid => mark(pid, '주문 확인 실패')); continue; }
+    (orders || []).forEach(o => (Array.isArray(o.items) ? o.items : []).forEach(it => mark(it && it.product_id, '주문')));
+    for (const [table, col, label] of PRODUCT_HISTORY_TABLES) {
+      const { data: rows, error } = await supabase.from(table).select(col).in(col, chunk);
+      if (error) { chunk.forEach(pid => mark(pid, label + ' 확인 실패')); continue; }
+      (rows || []).forEach(r => mark(r[col], label));
+    }
+  }
+  return refs;
+}
+
+function roundToUnit(value, unit) {
+  return Math.round(value / unit) * unit;
+}
+
+app.post('/api/admin/products/bulk', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
+  const bad = (message) => res.status(400).json({ error: 'Bad Request', message, timestamp: new Date().toISOString() });
+  try {
+    const { ids, action, value, mode, round } = req.body || {};
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!Array.isArray(ids) || ids.length === 0) return bad('처리할 상품을 선택해주세요');
+    const uniqueIds = [...new Set(ids.map(String))];
+    if (uniqueIds.length > BULK_PRODUCT_MAX) return bad(`한 번에 최대 ${BULK_PRODUCT_MAX}개까지 처리할 수 있습니다`);
+    if (!uniqueIds.every(id => UUID_RE.test(id))) return bad('올바르지 않은 상품 ID가 포함되어 있습니다');
+    if (!['purge', 'status', 'category', 'stock', 'price'].includes(action)) return bad('지원하지 않는 일괄 작업입니다');
+    if (action === 'purge' && (req.body || {}).confirm !== '영구 삭제') return bad('영구 삭제는 확인 문구("영구 삭제")가 필요합니다');
+
+    // 작업별 입력값 검증 (상품별 처리 전에 한 번에 걸러낸다)
+    let stockValue, priceMode, priceValue, roundUnit, categoryValue;
+    if (action === 'status' && !BULK_PRODUCT_STATUSES.includes(value)) return bad('판매상태 값이 올바르지 않습니다');
+    if (action === 'category') {
+      categoryValue = typeof value === 'string' ? value.trim() : '';
+      if (!categoryValue || categoryValue.length > 100) return bad('카테고리를 선택해주세요');
+    }
+    if (action === 'stock') {
+      stockValue = Number(value);
+      if (!Number.isInteger(stockValue) || stockValue < 0 || stockValue > 1000000) return bad('재고는 0 ~ 1,000,000 사이의 정수여야 합니다');
+    }
+    if (action === 'price') {
+      priceMode = mode === 'percent' ? 'percent' : mode === 'amount' ? 'amount' : null;
+      priceValue = Number(value);
+      roundUnit = [1, 10, 100, 1000].includes(Number(round)) ? Number(round) : 10;
+      if (!priceMode) return bad('가격 조정 방식(정액/정률)을 선택해주세요');
+      if (!Number.isFinite(priceValue) || priceValue === 0) return bad('조정할 금액 또는 비율을 입력해주세요');
+      if (priceMode === 'percent' && (priceValue < -90 || priceValue > 500)) return bad('정률 조정은 -90% ~ +500% 사이만 가능합니다');
+      if (priceMode === 'amount' && (Math.abs(priceValue) > 10000000 || !Number.isInteger(priceValue))) return bad('정액 조정은 ±10,000,000원 이내의 정수여야 합니다');
+    }
+
+    const { data: rows, error: fErr } = await supabase
+      .from('products_with')
+      .select('id, name, supplier_id, status, price, discount_price, supply_amount, vat_amount')
+      .in('id', uniqueIds)
+      .is('deleted_at', null); // 이미 영구 삭제(종결) 처리된 상품은 다시 손댈 수 없다
+    if (fErr) throw fErr;
+    const byId = {};
+    (rows || []).forEach(p => { byId[p.id] = p; });
+
+    const results = [];
+    const targets = [];
+    for (const id of uniqueIds) {
+      const p = byId[id];
+      if (!p) { results.push({ id, name: null, result: 'failed', message: '상품을 찾을 수 없습니다' }); continue; }
+      if (!isAdminRole(req.userRole) && p.supplier_id !== req.user.id) {
+        results.push({ id, name: p.name, result: 'forbidden', message: '본인 상품만 처리할 수 있습니다' });
+        continue;
+      }
+      targets.push(p);
+    }
+
+    if (action === 'purge') {
+      const targetIds = targets.map(p => p.id);
+      const refs = targetIds.length ? await findProductHistoryRefs(targetIds) : {};
+      const keepIds = targetIds.filter(id => refs[id]);
+      const hardIds = targetIds.filter(id => !refs[id]);
+      const keepReason = {};
+      keepIds.forEach(id => { keepReason[id] = /확인 실패$/.test(refs[id]) ? refs[id] + ' — 안전하게 삭제됨(숨김) 처리' : refs[id] + ' 이력 보존을 위해 삭제됨(숨김) 처리'; });
+
+      // 이력 없는 상품은 행을 실제로 지운다 — 확인하지 못한 FK 참조로 실패하면 개별로 다시 시도하고, 그래도 안 되면 종결 처리로 대신한다
+      const deleted = new Set();
+      if (hardIds.length) {
+        const { error: dErr } = await supabase.from('products_with').delete().in('id', hardIds);
+        if (!dErr) hardIds.forEach(id => deleted.add(id));
+        else {
+          for (const id of hardIds) {
+            const { error: oneErr } = await supabase.from('products_with').delete().eq('id', id);
+            if (!oneErr) deleted.add(id);
+            else { keepIds.push(id); keepReason[id] = '연결된 기록이 있어 삭제됨(숨김) 처리'; }
+          }
+        }
+      }
+      if (keepIds.length) {
+        const { error: sErr } = await supabase.from('products_with')
+          .update({ status: 'inactive', deleted_at: new Date().toISOString(), deleted_by: req.user.id })
+          .in('id', keepIds);
+        if (sErr) throw sErr;
+        // 이력이 아닌 딸린 데이터(찜·재입고 알림·재구매 알림·커뮤니티 노출)는 지운다 — 주문·리뷰·재고원장·판매기록은 보존
+        for (const t of ['wishlist_with', 'restock_subscriptions_with', 'repurchase_reminders_with', 'community_products']) {
+          const { error: cErr } = await supabase.from(t).delete().in('product_id', keepIds);
+          if (cErr) console.warn('영구 삭제 정리 실패(' + t + '):', cErr.message);
+        }
+      }
+      for (const p of targets) {
+        if (deleted.has(p.id)) results.push({ id: p.id, name: p.name, result: 'deleted', message: '영구 삭제됨' });
+        else results.push({ id: p.id, name: p.name, result: 'archived', message: keepReason[p.id] || '삭제됨(숨김) 처리' });
+      }
+    } else {
+      // 옵션 상품은 재고가 옵션별 재고의 합으로 자동 관리되므로 일괄 재고 설정 대상에서 뺀다 (단건 수정과 같은 규칙)
+      let variantProductIds = new Set();
+      if (action === 'stock' && targets.length) {
+        for (let i = 0; i < targets.length; i += 200) {
+          const { data: vRows } = await supabase.from('product_variants_with').select('product_id')
+            .in('product_id', targets.slice(i, i + 200).map(p => p.id)).eq('is_active', true);
+          (vRows || []).forEach(v => variantProductIds.add(v.product_id));
+        }
+      }
+
+      // 상품별 처리는 단건 수정 로직(updateProductCore)을 그대로 쓴다. DB 부담을 줄이려 4개씩만 동시에 처리한다
+      const runOne = async (p) => {
+        let body;
+        if (action === 'status') {
+          if (p.status === value) return { id: p.id, name: p.name, result: 'skipped', message: '이미 ' + BULK_PRODUCT_STATUS_LABEL[value] };
+          body = { status: value };
+        } else if (action === 'category') {
+          body = { category: categoryValue };
+        } else if (action === 'stock') {
+          if (variantProductIds.has(p.id)) return { id: p.id, name: p.name, result: 'skipped', message: '옵션 상품은 옵션/재고 화면에서 옵션별로 조정해주세요' };
+          body = { stock: stockValue };
+        } else if (action === 'price') {
+          const adjust = (v) => {
+            const n = Number(v);
+            const raw = priceMode === 'percent' ? n * (1 + priceValue / 100) : n + priceValue;
+            return roundToUnit(raw, roundUnit);
+          };
+          const newPrice = adjust(p.price);
+          const hasDiscount = p.discount_price !== null && p.discount_price !== undefined && Number(p.discount_price) > 0;
+          const newDiscount = hasDiscount ? adjust(p.discount_price) : null;
+          if (!(newPrice > 0) || (hasDiscount && !(newDiscount > 0))) {
+            return { id: p.id, name: p.name, result: 'failed', message: '조정 후 가격이 0원 이하가 됩니다' };
+          }
+          body = { price: newPrice, discount_price: hasDiscount ? (newDiscount < newPrice ? newDiscount : null) : null };
+          // 공급가액/부가세가 "판매가 기준 자동계산" 값이었던 상품만 새 판매가로 다시 계산한다(직접 입력한 값은 보존)
+          const autoOld = computeVatSplit(p.price);
+          if (p.supply_amount === null || (Number(p.supply_amount) === autoOld.supply_amount && Number(p.vat_amount) === autoOld.vat_amount)) {
+            const autoNew = computeVatSplit(newPrice);
+            body.supply_amount = autoNew.supply_amount;
+            body.vat_amount = autoNew.vat_amount;
+          }
+        }
+        try {
+          const { httpStatus, payload } = await updateProductCore(req, p.id, body);
+          if (httpStatus >= 400) return { id: p.id, name: p.name, result: httpStatus === 403 ? 'forbidden' : 'failed', message: payload.message || '처리 실패' };
+          const d = payload.data || {};
+          return { id: p.id, name: p.name, result: 'updated', message: '변경됨', data: { status: d.status, category: d.category, stock: d.stock, price: d.price, discount_price: d.discount_price } };
+        } catch (e) {
+          return { id: p.id, name: p.name, result: 'failed', message: e.message || '처리 실패' };
+        }
+      };
+      for (let i = 0; i < targets.length; i += 4) {
+        const batch = await Promise.all(targets.slice(i, i + 4).map(runOne));
+        results.push(...batch);
+      }
+    }
+
+    const summary = { total: uniqueIds.length };
+    ['deleted', 'archived', 'updated', 'skipped', 'forbidden', 'failed'].forEach(k => { summary[k] = results.filter(r => r.result === k).length; });
+    res.json({ success: true, data: { action, summary, results }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error in bulk product action:', err);
+    res.status(500).json({ error: 'Failed to process bulk action', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
@@ -6486,7 +6715,8 @@ app.patch('/api/products/:id/supplier', authenticate, requireRole(['admin', 'sup
 // 관리자/공급자용 상품 목록 (상태 무관 전체 조회 - 관리자는 전체, 공급자는 본인 상품만)
 app.get('/api/admin/products', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
-    let query = supabase.from('products_with').select(PRODUCT_SAFE_COLUMNS).order('created_at', { ascending: false });
+    // 영구 삭제(종결) 처리된 상품은 관리자 목록에서도 숨긴다
+    let query = supabase.from('products_with').select(PRODUCT_SAFE_COLUMNS).is('deleted_at', null).order('created_at', { ascending: false });
 
     if (!isAdminRole(req.userRole)) {
       query = query.eq('supplier_id', req.user.id);
@@ -9003,8 +9233,8 @@ app.get('/api/admin/inventory/find-product-location', authenticate, requireRole(
       return res.json({ success: true, data: [], message: '검색어를 입력해주세요', timestamp: new Date().toISOString() });
     }
     const [{ data: byName, error: nameErr }, { data: byBarcode, error: barcodeErr }] = await Promise.all([
-      supabase.from('products_with').select('id, name, barcode, supplier_id').ilike('name', `%${q}%`).limit(20),
-      supabase.from('products_with').select('id, name, barcode, supplier_id').ilike('barcode', `%${q}%`).limit(20)
+      supabase.from('products_with').select('id, name, barcode, supplier_id').is('deleted_at', null).ilike('name', `%${q}%`).limit(20),
+      supabase.from('products_with').select('id, name, barcode, supplier_id').is('deleted_at', null).ilike('barcode', `%${q}%`).limit(20)
     ]);
     if (nameErr) throw nameErr;
     if (barcodeErr) throw barcodeErr;
@@ -11335,7 +11565,7 @@ const BAND_STOP = new Set(['세트', '기획', '대용량', '특가', '증정', 
 async function buildBandMatcher() {
   const products = [];
   for (let from = 0; ; from += 1000) {
-    const { data, error } = await supabase.from('products_with').select('id, name, brand, status').neq('status', 'discontinued').range(from, from + 999);
+    const { data, error } = await supabase.from('products_with').select('id, name, brand, status').neq('status', 'discontinued').is('deleted_at', null).range(from, from + 999);
     if (error) throw error;
     products.push(...data);
     if (data.length < 1000) break;
