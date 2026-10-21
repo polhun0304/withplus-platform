@@ -1494,6 +1494,20 @@
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
+    <link rel="stylesheet" href="/flash-deals.css?v=1">
+    <style>
+        /* ⭐ 베스트 상품 — 휴대폰에서는 가로 스크롤 대신 2열로 펼쳐서, 8/16/24/전체 버튼을 누르면 늘어난 상품이 바로 보이게 */
+        .best-more-link { display: block; width: max-content; max-width: 100%; margin: 22px auto 0; padding: 11px 26px; border-radius: 999px; border: 1px solid var(--primary-color); color: var(--primary-color); text-decoration: none; font-weight: 700; }
+        .best-more-link[hidden] { display: none; }
+        @media (max-width: 768px) {
+            #best-section .section-header { flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+            #best-section .section-header-actions { flex: 1 1 100%; justify-content: space-between; flex-wrap: nowrap; gap: 8px; min-width: 0; }
+            #best-section .count-selector { overflow-x: auto; scrollbar-width: none; min-width: 0; }
+            #best-section .count-btn { padding: 7px 12px; }
+            #best-section .view-all { white-space: nowrap; font-size: .92em; }
+            #best-section .product-grid { grid-auto-flow: row; grid-template-rows: none; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-columns: auto; overflow-x: visible; scroll-snap-type: none; margin-right: 0; padding-right: 0; gap: 22px 10px; }
+        }
+    </style>
 </head>
 <body>
     <!-- HEADER (WITH+ 기본틀: ☰ · 로고 · 검색 · 🔔 · 🛒) -->
@@ -1671,178 +1685,29 @@
         <div class="product-grid" id="ranking-grid"></div>
     </section>
 
-    <!-- BEST PRODUCTS -->
-    <section class="products-section">
+    <!-- ⚡ 한정수량 초특가 (진행중인 초특가가 있을 때만 보임 — /api/flash-deals 실제 데이터) -->
+    <section class="wp-flash" id="flash-section" hidden aria-label="한정수량 초특가">
+        <div class="fd-head">
+            <h2>🔥 한정수량 초특가</h2>
+            <span class="fd-timer" role="timer" aria-label="초특가 종료까지 남은 시간"></span>
+            <a href="/deals" class="fd-more">전체보기 ›</a>
+        </div>
+        <div class="fd-row"></div>
+    </section>
+
+    <!-- BEST PRODUCTS (판매·후기·평점·장바구니·찜 자동 점수 + 관리자 고정/제외 — /api/home/best) -->
+    <section class="products-section" id="best-section">
         <div class="section-header">
             <h2 class="section-title">⭐ 베스트 상품</h2>
             <div class="section-header-actions">
                 <div class="count-selector" id="best-products-count"></div>
-                <a href="/api/products" class="view-all">전체보기 →</a>
+                <a href="/best" class="view-all">전체보기 →</a>
             </div>
         </div>
         <div class="product-grid" id="best-products-grid">
-            <!-- Product 1 -->
-            <div class="product-card">
-                <div class="product-image">
-                    <div class="mileage-badge">
-                        <span class="individual">적립 1%</span>
-                        <span class="bonus">+2%</span>
-                    </div>
-                    <div class="product-actions">
-                        <button class="action-btn">❤️</button>
-                        <button class="action-btn">🛒</button>
-                    </div>
-                    💊
-                </div>
-                <div class="product-info">
-                    <h3 class="product-name">프리미엄 비타민 B 컴플렉스</h3>
-                    <div class="product-price">
-                        <span class="current-price">28,000원</span>
-                        <span class="original-price">35,000원</span>
-                        <span class="discount-rate">20%</span>
-                    </div>
-                    <div class="product-meta">
-                        ⭐ 4.8 (284개 리뷰) | 배송비 무료
-                    </div>
-                    <button class="add-to-cart-btn">장바구니 담기</button>
-                </div>
-            </div>
-
-            <!-- Product 2 -->
-            <div class="product-card">
-                <div class="product-image">
-                    <div class="mileage-badge">
-                        <span class="individual">적립 1%</span>
-                        <span class="bonus">+2%</span>
-                    </div>
-                    <div class="product-actions">
-                        <button class="action-btn">❤️</button>
-                        <button class="action-btn">🛒</button>
-                    </div>
-                    🧬
-                </div>
-                <div class="product-info">
-                    <h3 class="product-name">유산균 프로바이오틱스 30포</h3>
-                    <div class="product-price">
-                        <span class="current-price">35,900원</span>
-                        <span class="original-price">44,900원</span>
-                        <span class="discount-rate">20%</span>
-                    </div>
-                    <div class="product-meta">
-                        ⭐ 4.9 (512개 리뷰) | 배송비 무료
-                    </div>
-                    <button class="add-to-cart-btn">장바구니 담기</button>
-                </div>
-            </div>
-
-            <!-- Product 3 -->
-            <div class="product-card">
-                <div class="product-image">
-                    <div class="mileage-badge">
-                        <span class="individual">적립 1%</span>
-                        <span class="bonus">+2%</span>
-                    </div>
-                    <div class="product-actions">
-                        <button class="action-btn">❤️</button>
-                        <button class="action-btn">🛒</button>
-                    </div>
-                    🥗
-                </div>
-                <div class="product-info">
-                    <h3 class="product-name">다이어트 쉐이크 1kg</h3>
-                    <div class="product-price">
-                        <span class="current-price">42,000원</span>
-                        <span class="original-price">56,000원</span>
-                        <span class="discount-rate">25%</span>
-                    </div>
-                    <div class="product-meta">
-                        ⭐ 4.7 (198개 리뷰) | 배송비 무료
-                    </div>
-                    <button class="add-to-cart-btn">장바구니 담기</button>
-                </div>
-            </div>
-
-            <!-- Product 4 -->
-            <div class="product-card">
-                <div class="product-image">
-                    <div class="mileage-badge">
-                        <span class="individual">적립 1%</span>
-                        <span class="bonus">+2%</span>
-                    </div>
-                    <div class="product-actions">
-                        <button class="action-btn">❤️</button>
-                        <button class="action-btn">🛒</button>
-                    </div>
-                    💄
-                </div>
-                <div class="product-info">
-                    <h3 class="product-name">프리미엄 콜라겐 팩 100ml</h3>
-                    <div class="product-price">
-                        <span class="current-price">32,000원</span>
-                        <span class="original-price">45,000원</span>
-                        <span class="discount-rate">29%</span>
-                    </div>
-                    <div class="product-meta">
-                        ⭐ 4.9 (389개 리뷰) | 배송비 무료
-                    </div>
-                    <button class="add-to-cart-btn">장바구니 담기</button>
-                </div>
-            </div>
-
-            <!-- Product 5 -->
-            <div class="product-card">
-                <div class="product-image">
-                    <div class="mileage-badge">
-                        <span class="individual">적립 1%</span>
-                        <span class="bonus">+2%</span>
-                    </div>
-                    <div class="product-actions">
-                        <button class="action-btn">❤️</button>
-                        <button class="action-btn">🛒</button>
-                    </div>
-                    🌿
-                </div>
-                <div class="product-info">
-                    <h3 class="product-name">오가닉 녹차 30티백</h3>
-                    <div class="product-price">
-                        <span class="current-price">18,900원</span>
-                        <span class="original-price">24,900원</span>
-                        <span class="discount-rate">24%</span>
-                    </div>
-                    <div class="product-meta">
-                        ⭐ 4.8 (156개 리뷰) | 배송비 2,500원
-                    </div>
-                    <button class="add-to-cart-btn">장바구니 담기</button>
-                </div>
-            </div>
-
-            <!-- Product 6 -->
-            <div class="product-card">
-                <div class="product-image">
-                    <div class="mileage-badge">
-                        <span class="individual">적립 1%</span>
-                        <span class="bonus">+2%</span>
-                    </div>
-                    <div class="product-actions">
-                        <button class="action-btn">❤️</button>
-                        <button class="action-btn">🛒</button>
-                    </div>
-                    🏠
-                </div>
-                <div class="product-info">
-                    <h3 class="product-name">프리미엄 아로마 디퓨저</h3>
-                    <div class="product-price">
-                        <span class="current-price">19,900원</span>
-                        <span class="original-price">29,900원</span>
-                        <span class="discount-rate">33%</span>
-                    </div>
-                    <div class="product-meta">
-                        ⭐ 4.6 (127개 리뷰) | 배송비 무료
-                    </div>
-                    <button class="add-to-cart-btn">장바구니 담기</button>
-                </div>
-            </div>
+            <p style="grid-column:1/-1; text-align:center; color:var(--text-gray); padding:40px 0;">베스트 상품을 불러오는 중...</p>
         </div>
+        <a href="/best" class="best-more-link" id="best-more-link" hidden>베스트 상품 전체 보기 →</a>
     </section>
 
     <!-- PERSONALIZED HOME SECTIONS -->
@@ -1952,6 +1817,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
     <script src="/withplus-common.js"></script>
+    <script src="/flash-deals.js?v=1"></script>
     <script>
         (async function () {
             WithPlus.initHeader();
@@ -2050,7 +1916,7 @@
             })();
 
             // ============================================
-            // 베스트 상품: 실제 API에서 로드 (평점순)
+            // 상품 섹션 공통 설정
             // ============================================
             // 상품이 계속 이어지는 섹션들에 공통으로 쓸 "개수 선택" 옵션.
             // 각 섹션의 전체 상품 수가 이보다 적으면 해당 버튼은 자동으로 숨겨진다(mountCountControl 참고).
@@ -2215,28 +2081,42 @@
                 const upd = document.getElementById('rank-updated');
                 if (upd) upd.textContent = '실시간 자동 집계';
             }
+            // 오늘의 특가 슬라이더 + 실시간 랭킹 (전체 상품 목록 기반). 베스트 상품은 loadBestProducts가 따로 불러온다.
             async function loadProductSections() {
-                const bestGrid = document.getElementById('best-products-grid');
-                const bestCount = document.getElementById('best-products-count');
                 try {
                     const { ok, json } = await WithPlus.fetchJSON(WithPlus.withCommunityParam('/api/products'));
                     if (!ok || !json.success || !Array.isArray(json.data)) throw new Error('상품 목록을 불러오지 못했습니다');
-
                     const products = json.data;
-                    if (products.length === 0) {
+                    if (products.length === 0) return;
+                    mountDealSlider(products);
+                    mountRanking(products);
+                } catch (err) { /* 랭킹·특가 배너는 비어 있는 채로 둔다(베스트 상품은 별도 로딩) */ }
+            }
+
+            // ============================================
+            // ⭐ 베스트 상품: 서버 자동 순위(/api/home/best — 최근 판매수량·후기·평점·장바구니·찜 + 관리자 고정/제외)
+            // 처음엔 8개, 버튼으로 16/24/전체(최대 48개)까지 펼쳐보고, 더 있으면 /best 전체 페이지로 안내한다.
+            // ============================================
+            async function loadBestProducts() {
+                const bestGrid = document.getElementById('best-products-grid');
+                const bestCount = document.getElementById('best-products-count');
+                const moreLink = document.getElementById('best-more-link');
+                try {
+                    const { ok, json } = await WithPlus.fetchJSON(WithPlus.withCommunityParam('/api/home/best?limit=48'));
+                    if (!ok || !json.success || !Array.isArray(json.data)) throw new Error((json && json.message) || '베스트 상품을 불러오지 못했습니다');
+                    if (json.data.length === 0) {
                         if (bestCount) bestCount.innerHTML = '';
                         if (bestGrid) bestGrid.innerHTML = '<p style="grid-column:1/-1; text-align:center; color:var(--text-gray); padding:40px 0;">등록된 상품이 아직 없습니다.</p>';
                         return;
                     }
-
-                    mountDealSlider(products);
-                    mountRanking(products);
-                    const byRating = [...products].sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0));
-                    // 평점순 전체를 넘겨두고, 처음엔 일부만(기본 8개) 보여준 뒤 버튼으로 늘려볼 수 있게 한다
-                    WithPlus.mountCountControl(bestCount, bestGrid, byRating, {
+                    WithPlus.mountCountControl(bestCount, bestGrid, json.data, {
                         counts: COUNT_OPTIONS,
                         storageKey: 'wp_count_best'
                     });
+                    if (moreLink) {
+                        moreLink.hidden = !(json.total > json.data.length);
+                        moreLink.textContent = `베스트 상품 전체 보기 (${Number(json.total).toLocaleString('ko-KR')}개) →`;
+                    }
                 } catch (err) {
                     if (bestGrid) bestGrid.innerHTML = `<p style="grid-column:1/-1; text-align:center; color:var(--text-gray); padding:40px 0;">상품을 불러오는 중 문제가 발생했습니다: ${WithPlus.escapeHtml(err.message)}</p>`;
                 }
@@ -2435,6 +2315,8 @@
 
             await Promise.all([
                 loadProductSections(),
+                loadBestProducts(),
+                (window.WPFlash ? WPFlash.mountHomeSection('flash-section') : Promise.resolve()),
                 loadRecommendedProducts(),
                 loadRecentlyViewed(),
                 loadLivePulse(),

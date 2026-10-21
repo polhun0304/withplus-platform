@@ -494,9 +494,11 @@
                         }
                     }
                     const adj = variant ? Number(variant.price_adjustment || 0) : 0;
-                    const price = WithPlus.getEffectiveUnitPrice(p) + adj;
+                    // ⚡ 진행중 한정수량 초특가가 더 싸면 초특가 가격(묶음가 미적용) — 서버가 주문 생성 시 같은 규칙으로 다시 계산
+                    const flash = p.flash_deal && Number(p.flash_deal.deal_price) < WithPlus.getEffectiveUnitPrice(p) ? p.flash_deal : null;
+                    const price = (flash ? Number(flash.deal_price) : WithPlus.getEffectiveUnitPrice(p)) + adj;
                     // 구매수량별 가격 옵션: 수량이 묶음 수량과 같으면 묶음 총액 (서버와 동일 규칙, 실제 금액은 서버가 재계산)
-                    const lt = WithPlus.computeLineTotal(p, ci.quantity, adj);
+                    const lt = flash ? { lineTotal: price * ci.quantity, tierApplied: false } : WithPlus.computeLineTotal(p, ci.quantity, adj);
                     lineItems.push({ product: p, variant, quantity: ci.quantity, price, lineTotal: lt.lineTotal, tierApplied: lt.tierApplied });
                 });
 
@@ -593,6 +595,7 @@
                             <div class="price">${li.tierApplied
                                 ? `${WithPlus.formatPrice(Math.round(li.lineTotal / li.quantity))} <span style="font-size:0.8em; color:#C62828; font-weight:600;">· ${li.quantity}개 묶음가 적용</span>`
                                 : WithPlus.formatPrice(li.price)}</div>
+                            ${li.product.flash_deal ? `<div style="font-size:0.82em; color:#E8125C; font-weight:700;">⚡ 한정수량 초특가 · 잔여 ${Number(li.product.flash_deal.remaining).toLocaleString('ko-KR')}개${li.quantity > Number(li.product.flash_deal.remaining) ? ' — 잔여 수량을 넘어 주문할 수 없어요. 수량을 줄여주세요' : ''}</div>` : ''}
                         </div>
                         <div class="qty-control">
                             <button type="button" class="qty-minus">−</button>

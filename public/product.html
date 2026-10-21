@@ -280,6 +280,7 @@
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
+    <link rel="stylesheet" href="/flash-deals.css?v=1">
 </head>
 <body data-wp-no-tabbar>
     <header class="header">
@@ -313,6 +314,7 @@
     <script src="/vendor/supabase.min.js"></script>
     <script src="/withplus-common.js"></script>
     <script src="/soldout-popup.js"></script>
+    <script src="/flash-deals.js?v=1"></script>
     <script>
         (async function () {
             WithPlus.initHeader();
@@ -357,9 +359,11 @@
                 const emoji = WithPlus.CATEGORY_EMOJI[p.category] || WithPlus.CATEGORY_EMOJI.default;
                 const images = Array.isArray(p.images_urls) ? p.images_urls.filter(Boolean) : [];
                 const imageUrl = images.length > 0 ? images[0] : null;
-                const hasDiscount = p.discount_price && Number(p.discount_price) < Number(p.price);
-                const currentPrice = hasDiscount ? p.discount_price : p.price;
-                const discountRate = hasDiscount ? Math.round((1 - Number(p.discount_price) / Number(p.price)) * 100) : 0;
+                // ⚡ 진행중인 한정수량 초특가가 있으면 초특가 가격(서버가 주문 시 같은 가격으로 계산) + 카운트다운 + 잔여 수량
+                const flash = p.flash_deal && Number(p.flash_deal.deal_price) < Number(p.price) ? p.flash_deal : null;
+                const hasDiscount = !!flash || (p.discount_price && Number(p.discount_price) < Number(p.price));
+                const currentPrice = flash ? flash.deal_price : (hasDiscount ? p.discount_price : p.price);
+                const discountRate = hasDiscount ? Math.round((1 - Number(currentPrice) / Number(p.price)) * 100) : 0;
                 const rating = Number(p.rating || 0).toFixed(1);
                 const reviewCount = p.review_count || 0;
                 const outOfStock = WithPlus.isProductSoldOut ? WithPlus.isProductSoldOut(p) : Number(p.stock) <= 0; // 품절 상태값·옵션 재고까지 반영
@@ -428,6 +432,7 @@
                             ${brandHtml}
                             <h1>${WithPlus.escapeHtml(p.name)}</h1>
                             <div class="detail-rating ss-rating">${WithPlus.renderRatingSummary(p.rating, reviewCount, p.review_satisfaction ? p.review_satisfaction.satisfied_count : 0, '#reviews')}<span class="ss-band-count" id="ss-band-count"></span></div>
+                            ${flash && window.WPFlash ? WPFlash.detailBoxHtml(flash) : ''}
                             <div class="detail-price-box ss-price">
                                 ${hasDiscount ? `<div class="ss-was"><span class="detail-original-price">${WithPlus.formatPrice(p.price)}</span></div>` : ''}
                                 <div class="ss-now">${hasDiscount ? `<span class="detail-discount">${discountRate}%</span>` : ''}<span class="detail-price">${WithPlus.formatPrice(currentPrice)}</span></div>
@@ -577,6 +582,7 @@
                     </div>
                 `;
                 initContinueShopping(p);
+                if (flash && window.WPFlash) WPFlash.startTicker(() => setTimeout(() => location.reload(), 1500)); // 종료되면 정상가로 다시 표시
                 initSmartstoreLayout(p, images, Number(currentPrice), sections);
                 loadBandReviews(p.id);
 
@@ -919,7 +925,8 @@
                 let selectedVariantId = null;
                 let selectedVariantStock = Number(p.stock) || 99;
                 function currentMaxQty() {
-                    return hasVariants ? selectedVariantStock : (Number(p.stock) || 99);
+                    const stockMax = hasVariants ? selectedVariantStock : (Number(p.stock) || 99);
+                    return flash ? Math.max(1, Math.min(stockMax, Number(flash.remaining) || 1)) : stockMax; // 초특가는 잔여 수량까지만
                 }
                 document.getElementById('qty-minus').addEventListener('click', () => {
                     qtyInput.value = Math.max(1, parseInt(qtyInput.value, 10) - 1);

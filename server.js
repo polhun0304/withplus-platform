@@ -3067,6 +3067,7 @@ app.post('/api/payments/toss/confirm', authenticate, async (req, res) => {
     if (tossResp.ok) {
       await supabase.from('order_payments').insert([{ order_id: order.id, provider_key: 'toss', payment_key: paymentKey, amount: Number(amount), status: 'approved', raw_response: tossJson }]);
       await supabase.from('orders_with').update({ status: 'paid', payment_method: 'toss' }).eq('id', order.id);
+      await markFlashDealClaimsPaid(order.id);
       return res.json({ success: true, data: { order_number: order.order_number, status: 'paid' }, timestamp: new Date().toISOString() });
     } else {
       await supabase.from('order_payments').insert([{ order_id: order.id, provider_key: 'toss', payment_key: paymentKey, amount: Number(amount), status: 'failed', raw_response: tossJson }]);
@@ -3293,6 +3294,7 @@ app.get('/api/payments/kakaopay/approve', async (req, res) => {
     if (resp.ok) {
       await supabase.from('order_payments').update({ status: 'approved', raw_response: json }).eq('id', payment.id);
       await supabase.from('orders_with').update({ status: 'paid', payment_method: 'kakaopay' }).eq('id', order.id);
+      await markFlashDealClaimsPaid(order.id);
       return res.redirect(`/payment-result.html?provider=kakaopay&status=success&order=${encodeURIComponent(order.order_number)}`);
     } else {
       await supabase.from('order_payments').update({ status: 'failed', raw_response: json }).eq('id', payment.id);
@@ -3379,6 +3381,7 @@ app.get('/api/payments/naverpay/approve', async (req, res) => {
     if (resp.ok && json?.code === 'Success') {
       await supabase.from('order_payments').update({ status: 'approved', raw_response: json }).eq('id', payment.id);
       await supabase.from('orders_with').update({ status: 'paid', payment_method: 'naverpay' }).eq('id', order.id);
+      await markFlashDealClaimsPaid(order.id);
       return res.redirect(`/payment-result.html?provider=naverpay&status=success&order=${encodeURIComponent(order.order_number)}`);
     } else {
       await supabase.from('order_payments').update({ status: 'failed', raw_response: json }).eq('id', payment.id);
@@ -5936,6 +5939,9 @@ app.get('/api/products', optionalAuth, async (req, res) => {
       } catch (logErr) { /* 검색 로그 기록 실패는 검색 자체를 막지 않는다 */ }
     }
 
+    // ⚡ 진행중인 한정수량 초특가 정보(flash_deal)를 붙인다 - 장바구니·목록 화면 표시용(결제 가격은 주문 생성 시 서버가 다시 계산)
+    await attachFlashDeals(data || []);
+
     res.json({
       success: true,
       data: data || [],
@@ -6099,6 +6105,8 @@ app.get('/api/products/:id', async (req, res) => {
         ? Math.round((verifiedReviews.filter(r => Number(r.rating) >= 4).length / verifiedReviews.length) * 100)
         : null
     };
+
+    await attachFlashDeals(data); // ⚡ 진행중 초특가(가격·잔여 수량·종료 시각)
 
     const isSoldOut = isProductSoldOut(data, variants || []);
     res.json({
@@ -10711,6 +10719,22 @@ app.post('/api/orders', authenticate, async (req, res) => {
       (wsPrices || []).forEach(r => { wholesalePriceMap[r.product_id] = Number(r.price); });
     }
 
+    // ⚡ 한정수량 초특가 - 진행중이고 잔여 수량이 있는 상품은 서버가 초특가로 계산한다(getFlashDealPrice, 캐시 없이 최신값).
+    // 한 주문에서 같은 상품(옵션 여러 개 포함)의 합계 수량이 잔여 수량을 넘으면 정상가로 몰래 바꾸지 않고 명확히 거절한다.
+    const flashDealMap = await getFlashDealPrice(productIds, { fresh: true });
+    const flashQtyByProduct = {};
+    items.forEach(it => {
+      if (it && it.product_id && flashDealMap[it.product_id]) flashQtyByProduct[it.product_id] = (flashQtyByProduct[it.product_id] || 0) + (Number(it.quantity) || 1);
+    });
+    for (const [pid, qtySum] of Object.entries(flashQtyByProduct)) {
+      const d = flashDealMap[pid];
+      const remaining = Math.max(0, Number(d.limit_qty) - Number(d.sold_count));
+      if (qtySum > remaining) {
+        const pname = productMap[pid] ? productMap[pid].name : pid;
+        return res.status(400).json({ error: 'Bad Request', message: `⚡ 한정수량 초특가 잔여 수량(${remaining}개)을 넘었습니다: ${pname}. ${remaining}개 이하로 주문해주세요.`, flash_deal: { product_id: pid, remaining }, timestamp: new Date().toISOString() });
+      }
+    }
+
     // 🔒 보안: 상품 가격은 절대 클라이언트(브라우저)가 보낸 값을 신뢰하지 않는다. 여기서 검증하면서
     // 동시에 DB의 실제 판매가(옵션이 있으면 옵션 가격조정 포함)로 다시 계산한 "검증된 주문항목"을
     // 새로 만들어, 이후 총액 계산·주문 저장에는 이 값만 사용한다. (이전에는 item.price를 그대로 믿어서
@@ -10733,6 +10757,10 @@ app.post('/api/orders', authenticate, async (req, res) => {
       const useWholesale = isWholesaleBuyer && wholesalePriceMap[item.product_id] !== undefined;
       let unitPrice = useWholesale ? wholesalePriceMap[item.product_id] : effectivePriceOf(product);
       let priceAdjustment = 0;
+      // ⚡ 진행중 한정수량 초특가가 더 싸면 초특가 가격 (초특가 적용 시 수량별 묶음가는 쓰지 않는다)
+      const flashDeal = flashDealMap[item.product_id];
+      let usedFlashDealId = null;
+      if (flashDeal && Number(flashDeal.deal_price) < unitPrice) { unitPrice = Number(flashDeal.deal_price); usedFlashDealId = flashDeal.id; }
       let variantLabel = '';
 
       if (variants.length > 0) {
@@ -10753,13 +10781,14 @@ app.post('/api/orders', authenticate, async (req, res) => {
       }
 
       // 구매수량별 가격 옵션: 수량이 등록된 묶음 수량과 정확히 같으면 묶음 총액, 아니면 단가 x 수량 (도매가에는 미적용)
-      const line = computeProductLineTotal(product, qty, { unitPrice, priceAdjustment, allowTier: !useWholesale });
+      const line = computeProductLineTotal(product, qty, { unitPrice, priceAdjustment, allowTier: !useWholesale && !usedFlashDealId });
       const verifiedItem = {
         product_id: item.product_id,
         variant_id: item.variant_id || null,
         name: product.name + variantLabel + (line.tier && line.tier.label ? ` [${line.tier.label}]` : ''),
         price: line.tier ? Math.round((line.lineTotal / qty) * 100) / 100 : unitPrice + priceAdjustment,
-        quantity: qty
+        quantity: qty,
+        ...(usedFlashDealId ? { flash_deal_id: usedFlashDealId } : {})
       };
       if (line.tier) {
         verifiedItem.line_total = line.lineTotal;
@@ -10864,7 +10893,27 @@ app.post('/api/orders', authenticate, async (req, res) => {
 
     if (error) throw error;
 
-    // 재고 원자적 차감 - 사전 검증을 통과했더라도 그 사이 다른 주문이 먼저 재고를 가져갔을 수 있으므로
+    // ⚡ 초특가 수량 원자적 점유 - 사전 확인 이후 다른 주문이 먼저 가져갔으면(또는 그 사이 종료됐으면) RPC가 false를 돌려준다.
+    // 이 경우 이미 점유한 다른 초특가는 반환하고 방금 만든 주문을 지운 뒤(재고는 아직 건드리기 전) 명확히 거절한다.
+    const flashClaims = {};
+    verifiedItems.forEach(it => {
+      if (!it.flash_deal_id) return;
+      const c = (flashClaims[it.flash_deal_id] = flashClaims[it.flash_deal_id] || { product_id: it.product_id, qty: 0, name: (productMap[it.product_id] || {}).name || it.name });
+      c.qty += Number(it.quantity) || 1;
+    });
+    for (const [dealId, c] of Object.entries(flashClaims)) {
+      const { data: claimed, error: claimErr } = await supabase.rpc('claim_flash_deal_with', { p_deal_id: dealId, p_order_id: data.id, p_product_id: c.product_id, p_qty: c.qty });
+      if (claimErr || !claimed) {
+        if (claimErr) console.error('초특가 수량 점유 실패:', claimErr.message);
+        await releaseFlashDealClaims(data.id);
+        await supabase.from('orders_with').delete().eq('id', data.id);
+        invalidateFlashDealCache();
+        return res.status(409).json({ error: 'Conflict', message: `⚡ 한정수량 초특가가 방금 소진(또는 종료)되었습니다: ${c.name}. 장바구니를 새로고침해 바뀐 가격을 확인해주세요.`, timestamp: new Date().toISOString() });
+      }
+    }
+    if (Object.keys(flashClaims).length) invalidateFlashDealCache();
+
+    // 재고 원자적 차감 -사전 검증을 통과했더라도 그 사이 다른 주문이 먼저 재고를 가져갔을 수 있으므로
     // DB 함수(adjust_stock_with)로 다시 한번 원자적으로 확인하며 차감한다. 도중에 하나라도 부족하면
     // 이미 차감된 항목들은 원복(보상)하고 방금 만든 주문도 삭제해 재고 불일치가 남지 않도록 한다.
     // 채널별 재고 분리 할당(옵트인) - product_channel_stock_with에 이 상품/옵션의 'online' 채널 행이
@@ -10924,6 +10973,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
           }
         } catch (compensateErr) { /* 재고 원복은 최선을 다해 시도하되, 실패해도 요청 처리를 막지 않는다 */ }
       }
+      await releaseFlashDealClaims(data.id);
       await supabase.from('orders_with').delete().eq('id', data.id);
       return res.status(409).json({
         error: 'Conflict',
@@ -10964,6 +11014,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
             await supabase.rpc('release_channel_stock', { p_product_id: d.product_id, p_variant_id: d.variant_id, p_channel: 'online', p_qty: d.qty });
           } catch (compensateErr) { /* 재고 원복은 최선을 다해 시도하되, 실패해도 요청 처리를 막지 않는다 */ }
         }
+        await releaseFlashDealClaims(data.id);
         await supabase.from('orders_with').delete().eq('id', data.id);
         return res.status(409).json({
           error: 'Conflict',
@@ -11002,6 +11053,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
             await supabase.rpc('release_channel_stock', { p_product_id: d.product_id, p_variant_id: d.variant_id, p_channel: 'online', p_qty: d.qty });
           } catch (compensateErr) { /* 재고 원복은 최선을 다해 시도하되, 실패해도 요청 처리를 막지 않는다 */ }
         }
+        await releaseFlashDealClaims(data.id);
         await supabase.from('orders_with').delete().eq('id', data.id);
         return res.status(409).json({
           error: 'Conflict',
@@ -11099,15 +11151,18 @@ async function cancelStalePendingOrders() {
 
       // 참고: orders_with 테이블에는 취소 시각을 별도로 남기는 컬럼(cancelled_at)이 없어 status만 갱신한다
       // (다른 취소 관련 코드에서 보이는 cancelled_at은 orders_with가 아닌 channel_sales_with 등 다른 테이블의 컬럼).
-      const { error: updateErr } = await supabase
+      const { data: cancelledRows, error: updateErr } = await supabase
         .from('orders_with')
         .update({ status: 'cancelled' })
         .eq('id', order.id)
-        .eq('status', 'pending'); // 그 사이 결제가 완료됐을 수 있으므로 여전히 pending일 때만 취소 (레이스 컨디션 방지)
+        .eq('status', 'pending') // 그 사이 결제가 완료됐을 수 있으므로 여전히 pending일 때만 취소 (레이스 컨디션 방지)
+        .select('id');
       if (updateErr) {
         console.error(`Error cancelling stale order ${order.order_number}:`, updateErr);
         continue;
       }
+      // ⚡ 실제로 취소된 경우에만 초특가 점유 수량을 반환한다(그 사이 결제됐으면 그대로 둔다)
+      if (cancelledRows && cancelledRows.length) await releaseFlashDealClaims(order.id);
       cancelledCount++;
     } catch (orderErr) {
       console.error(`Error processing stale pending order ${order.order_number}:`, orderErr);
@@ -11211,6 +11266,10 @@ app.patch('/api/admin/orders/:id/status', authenticate, requireRole(['admin', 's
     if (!data) {
       return res.status(404).json({ error: 'Not Found', message: 'Order not found', timestamp: new Date().toISOString() });
     }
+
+    // ⚡ 한정수량 초특가: 결제완료 처리 시 점유를 paid로, 취소/환불 처리 시 점유 수량을 반환(멱등)
+    if (status === 'paid') await markFlashDealClaimsPaid(data.id);
+    if (status === 'cancelled' || status === 'refunded') await releaseFlashDealClaims(data.id);
 
     // 주문 상태(status)가 실제로 바뀐 경우에만 알림 이메일을 보낸다 (운송장 정보만 저장한 경우는 발송하지 않음 - shipped로 바뀔 때 함께 안내됨)
     if (status !== undefined) {
@@ -13841,6 +13900,13 @@ app.get('/api/reviews/all', async (req, res) => {
 app.get('/reviews', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'reviews.html'));
 });
+// ⚡ 한정수량 초특가 전체 목록 / ⭐ 베스트 상품 전체 목록
+app.get('/deals', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'deals.html'), { dotfiles: 'allow' }); // 고정 경로 — 작업 폴더 경로에 점(.)으로 시작하는 폴더가 있어도 열리도록
+});
+app.get('/best', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'best.html'), { dotfiles: 'allow' }); // 고정 경로 — 작업 폴더 경로에 점(.)으로 시작하는 폴더가 있어도 열리도록
+});
 
 app.get('/api/stats/summary', async (req, res) => {
   try {
@@ -16208,6 +16274,477 @@ app.get('/api/ranking/scores', async (req, res) => {
 });
 
 // ============================================
+// ⚡ 한정수량 초특가 (flash_deals_with) — 관리자가 상품·초특가 가격·한정 수량·기간을 정하면
+// 기간 중이고 잔여 수량이 남아 있는 동안에만 서버가 주문 가격을 초특가로 계산한다(getFlashDealPrice).
+// - 수량 점유: 주문 생성 시 claim_flash_deal_with RPC로 원자적으로 sold_count를 올린다(한도 초과 불가, 동시 주문 안전).
+//   결제 완료 시 점유 기록을 paid로 표시, 취소/환불/24시간 미결제 자동취소/주문 실패 시 release_flash_deal_claims_with로 반환.
+// - WITH+와 LIVE+가 같은 DB를 쓰므로 site 컬럼(withplus/liveplus)으로 사이트별로 분리한다.
+// ============================================
+const FLASH_SITE = UPLOAD_PLATFORM === 'liveplus' ? 'liveplus' : 'withplus';
+const FLASH_DEAL_CACHE_MS = 10 * 1000;
+let flashDealCache = { at: 0, rows: null, pending: null };
+
+function flashDealStatusOf(d, nowMs) {
+  const now = nowMs || Date.now();
+  if (!d.is_active) return 'inactive';
+  if (now >= new Date(d.ends_at).getTime()) return 'ended';
+  if (Number(d.sold_count) >= Number(d.limit_qty)) return 'soldout';
+  if (now < new Date(d.starts_at).getTime()) return 'upcoming';
+  return 'active';
+}
+function publicFlashDeal(d, product) {
+  const base = product ? Number(product.price) || 0 : 0;
+  const dealPrice = Number(d.deal_price) || 0;
+  return {
+    id: d.id,
+    product_id: d.product_id,
+    deal_price: dealPrice,
+    original_price: base || null,
+    discount_rate: base > 0 && dealPrice < base ? Math.round((1 - dealPrice / base) * 100) : 0,
+    limit_qty: Number(d.limit_qty),
+    sold_count: Number(d.sold_count),
+    remaining: Math.max(0, Number(d.limit_qty) - Number(d.sold_count)),
+    starts_at: d.starts_at,
+    ends_at: d.ends_at,
+    sort_order: Number(d.sort_order) || 0,
+    status: flashDealStatusOf(d)
+  };
+}
+// 진행중·예정 초특가(사용 중인 것만)를 짧게 캐시해 목록 화면에 붙인다. 주문 가격 계산은 캐시 없이 getFlashDealPrice(fresh)로.
+async function loadOpenFlashDeals() {
+  const { data, error } = await supabase
+    .from('flash_deals_with')
+    .select('id, product_id, deal_price, limit_qty, sold_count, starts_at, ends_at, sort_order, is_active')
+    .eq('site', FLASH_SITE)
+    .eq('is_active', true)
+    .gt('ends_at', new Date().toISOString())
+    .order('sort_order', { ascending: true })
+    .order('ends_at', { ascending: true })
+    .limit(500);
+  if (error) throw error;
+  return data || [];
+}
+async function getOpenFlashDealsCached() {
+  if (flashDealCache.rows && Date.now() - flashDealCache.at < FLASH_DEAL_CACHE_MS) return flashDealCache.rows;
+  if (!flashDealCache.pending) {
+    flashDealCache.pending = loadOpenFlashDeals()
+      .then(rows => { flashDealCache = { at: Date.now(), rows, pending: null }; return rows; })
+      .catch(e => { flashDealCache.pending = null; throw e; });
+  }
+  return flashDealCache.pending;
+}
+function invalidateFlashDealCache() { flashDealCache = { at: 0, rows: null, pending: null }; }
+
+// 상품별 "지금 적용 가능한" 초특가 1건(진행중 + 잔여 > 0). 같은 상품에 여러 건이 겹치면 가장 싼 것.
+// 반환: { [product_id]: dealRow } — 가격 계산(주문/결제)의 단일 진입점.
+async function getFlashDealPrice(productIds, opts) {
+  const ids = [...new Set((productIds || []).filter(Boolean))];
+  if (ids.length === 0) return {};
+  let rows;
+  if (opts && opts.fresh) {
+    const nowIso = new Date().toISOString();
+    const { data, error } = await supabase
+      .from('flash_deals_with')
+      .select('id, product_id, deal_price, limit_qty, sold_count, starts_at, ends_at, sort_order, is_active')
+      .eq('site', FLASH_SITE)
+      .eq('is_active', true)
+      .lte('starts_at', nowIso)
+      .gt('ends_at', nowIso)
+      .in('product_id', ids);
+    if (error) throw error;
+    rows = data || [];
+  } else {
+    const idSet = new Set(ids);
+    rows = (await getOpenFlashDealsCached()).filter(d => idSet.has(d.product_id));
+  }
+  const map = {};
+  rows.forEach(d => {
+    if (flashDealStatusOf(d) !== 'active') return;
+    const cur = map[d.product_id];
+    if (!cur || Number(d.deal_price) < Number(cur.deal_price)) map[d.product_id] = d;
+  });
+  return map;
+}
+// 상품 목록/상세 응답에 진행중 초특가 정보를 붙인다(화면 표시용 — 실제 결제 가격은 주문 생성 시 서버가 다시 계산).
+async function attachFlashDeals(products) {
+  const list = Array.isArray(products) ? products : (products ? [products] : []);
+  if (list.length === 0) return products;
+  try {
+    const map = await getFlashDealPrice(list.map(p => p && p.id));
+    list.forEach(p => {
+      const d = p && map[p.id];
+      if (d && Number(d.deal_price) < Number(p.price)) p.flash_deal = publicFlashDeal(d, p);
+    });
+  } catch (e) { /* 초특가 조회 실패해도 상품 목록 자체는 정상 응답 */ }
+  return products;
+}
+async function releaseFlashDealClaims(orderId) {
+  if (!orderId) return 0;
+  try {
+    const { data, error } = await supabase.rpc('release_flash_deal_claims_with', { p_order_id: orderId });
+    if (error) throw error;
+    if (data) invalidateFlashDealCache();
+    return Number(data) || 0;
+  } catch (e) {
+    console.error('초특가 수량 반환 실패:', orderId, e.message);
+    return 0;
+  }
+}
+async function markFlashDealClaimsPaid(orderId) {
+  if (!orderId) return;
+  try {
+    await supabase.from('flash_deal_claims_with').update({ status: 'paid', paid_at: new Date().toISOString() }).eq('order_id', orderId).eq('status', 'held');
+  } catch (e) { console.error('초특가 결제완료 표시 실패:', orderId, e.message); }
+}
+
+const FLASH_PRODUCT_COLUMNS = 'id, name, price, discount_price, images_urls, stock, category, rating, review_count, status, brand';
+// 공개: 진행중(+예정) 초특가 목록 — 홈 섹션·/deals 페이지에서 사용
+app.get('/api/flash-deals', async (req, res) => {
+  try {
+    const includeUpcoming = req.query.include_upcoming === '1' || req.query.include_upcoming === 'true';
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 60, 1), 200);
+    const rows = await getOpenFlashDealsCached();
+    const now = Date.now();
+    const wanted = rows.filter(d => {
+      const st = flashDealStatusOf(d, now);
+      return st === 'active' || st === 'soldout' || (includeUpcoming && st === 'upcoming');
+    });
+    const productIds = [...new Set(wanted.map(d => d.product_id))];
+    const productMap = {};
+    if (productIds.length) {
+      const { data: prods, error } = await supabase.from('products_with').select(FLASH_PRODUCT_COLUMNS).in('id', productIds).eq('status', 'active');
+      if (error) throw error;
+      (prods || []).forEach(p => { productMap[p.id] = p; });
+    }
+    const order = { active: 0, soldout: 1, upcoming: 2 };
+    const items = wanted
+      .filter(d => productMap[d.product_id])
+      .map(d => ({ ...publicFlashDeal(d, productMap[d.product_id]), product: productMap[d.product_id] }))
+      .sort((a, b) => (order[a.status] - order[b.status]) || (a.sort_order - b.sort_order) || (new Date(a.ends_at) - new Date(b.ends_at)))
+      .slice(0, limit);
+    const activeEnds = items.filter(i => i.status === 'active').map(i => new Date(i.ends_at).getTime());
+    res.set('Cache-Control', 'no-cache');
+    res.json({
+      success: true,
+      data: items,
+      soonest_end: activeEnds.length ? new Date(Math.min(...activeEnds)).toISOString() : null,
+      server_time: new Date().toISOString(),
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error loading flash deals:', err);
+    res.status(500).json({ error: 'Failed to load flash deals', message: '초특가 목록을 불러오지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 초특가 목록(판매/잔여/상태 + 결제완료·결제대기 점유 수량)
+app.get('/api/admin/flash-deals', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: deals, error } = await supabase
+      .from('flash_deals_with')
+      .select('*')
+      .eq('site', FLASH_SITE)
+      .order('sort_order', { ascending: true })
+      .order('starts_at', { ascending: false })
+      .limit(500);
+    if (error) throw error;
+    const productIds = [...new Set((deals || []).map(d => d.product_id))];
+    const productMap = {};
+    if (productIds.length) {
+      const { data: prods } = await supabase.from('products_with').select(FLASH_PRODUCT_COLUMNS).in('id', productIds);
+      (prods || []).forEach(p => { productMap[p.id] = p; });
+    }
+    const dealIds = (deals || []).map(d => d.id);
+    const claimSum = {};
+    if (dealIds.length) {
+      const claims = await fetchAllRows(() => supabase.from('flash_deal_claims_with').select('deal_id, quantity, status').in('deal_id', dealIds).in('status', ['held', 'paid']), 20000);
+      claims.forEach(c => {
+        const s = (claimSum[c.deal_id] = claimSum[c.deal_id] || { held: 0, paid: 0 });
+        s[c.status] += Number(c.quantity) || 0;
+      });
+    }
+    const data = (deals || []).map(d => ({
+      ...publicFlashDeal(d, productMap[d.product_id]),
+      is_active: d.is_active,
+      created_at: d.created_at,
+      paid_qty: (claimSum[d.id] || {}).paid || 0,
+      pending_qty: (claimSum[d.id] || {}).held || 0,
+      product: productMap[d.product_id] || null
+    }));
+    res.json({ success: true, data, server_time: new Date().toISOString(), timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error loading admin flash deals:', err);
+    res.status(500).json({ error: 'Failed to load flash deals', message: '초특가 목록을 불러오지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+async function validateFlashDealInput(body, existing) {
+  const b = body || {};
+  const out = {};
+  const productId = b.product_id !== undefined ? b.product_id : (existing && existing.product_id);
+  if (!productId || !/^[0-9a-f-]{36}$/i.test(String(productId))) return { error: '상품을 선택해주세요' };
+  const { data: product } = await supabase.from('products_with').select('id, name, price, status').eq('id', productId).maybeSingle();
+  if (!product) return { error: '상품을 찾을 수 없습니다' };
+  if (b.product_id !== undefined) out.product_id = productId;
+
+  const dealPrice = b.deal_price !== undefined ? Number(b.deal_price) : Number(existing && existing.deal_price);
+  if (!Number.isFinite(dealPrice) || dealPrice < 0 || Math.round(dealPrice) !== dealPrice) return { error: '초특가 가격은 0 이상의 정수(원)로 입력해주세요' };
+  if (dealPrice >= Number(product.price)) return { error: `초특가 가격은 판매가(${Number(product.price).toLocaleString('ko-KR')}원)보다 낮아야 합니다` };
+  if (b.deal_price !== undefined) out.deal_price = dealPrice;
+
+  const limitQty = b.limit_qty !== undefined ? Number(b.limit_qty) : Number(existing && existing.limit_qty);
+  if (!Number.isInteger(limitQty) || limitQty < 1 || limitQty > 1000000) return { error: '한정 수량은 1 이상의 정수로 입력해주세요' };
+  if (existing && limitQty < Number(existing.sold_count)) return { error: `이미 ${existing.sold_count}개가 판매(점유)되어 그보다 적게 줄일 수 없습니다` };
+  if (b.limit_qty !== undefined) out.limit_qty = limitQty;
+
+  const startsAt = b.starts_at !== undefined ? new Date(b.starts_at) : new Date(existing && existing.starts_at);
+  const endsAt = b.ends_at !== undefined ? new Date(b.ends_at) : new Date(existing && existing.ends_at);
+  if (isNaN(startsAt.getTime()) || isNaN(endsAt.getTime())) return { error: '시작/종료 일시를 입력해주세요' };
+  if (endsAt <= startsAt) return { error: '종료 일시는 시작 일시보다 뒤여야 합니다' };
+  if (b.starts_at !== undefined) out.starts_at = startsAt.toISOString();
+  if (b.ends_at !== undefined) out.ends_at = endsAt.toISOString();
+
+  if (b.sort_order !== undefined) {
+    const so = Number(b.sort_order);
+    if (!Number.isInteger(so) || so < -100000 || so > 100000) return { error: '노출 순서는 정수로 입력해주세요' };
+    out.sort_order = so;
+  }
+  if (b.is_active !== undefined) out.is_active = !!b.is_active;
+  return { values: out, product };
+}
+
+app.post('/api/admin/flash-deals', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const body = req.body || {};
+    for (const k of ['product_id', 'deal_price', 'limit_qty', 'starts_at', 'ends_at']) {
+      if (body[k] === undefined || body[k] === null || body[k] === '') return res.status(400).json({ error: 'Bad Request', message: '상품·초특가 가격·한정 수량·시작/종료 일시를 모두 입력해주세요', timestamp: new Date().toISOString() });
+    }
+    const v = await validateFlashDealInput(body, null);
+    if (v.error) return res.status(400).json({ error: 'Bad Request', message: v.error, timestamp: new Date().toISOString() });
+    const row = { ...v.values, site: FLASH_SITE, created_by: req.user.id, is_active: body.is_active === undefined ? true : !!body.is_active };
+    const { data, error } = await supabase.from('flash_deals_with').insert([row]).select().single();
+    if (error) throw error;
+    invalidateFlashDealCache();
+    res.status(201).json({ success: true, data: publicFlashDeal(data, v.product), timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error creating flash deal:', err);
+    res.status(500).json({ error: 'Failed to create flash deal', message: '초특가 등록에 실패했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+app.put('/api/admin/flash-deals/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: existing, error: findErr } = await supabase.from('flash_deals_with').select('*').eq('id', req.params.id).eq('site', FLASH_SITE).maybeSingle();
+    if (findErr) throw findErr;
+    if (!existing) return res.status(404).json({ error: 'Not Found', message: '초특가를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const body = { ...(req.body || {}) };
+    if (body.product_id !== undefined && body.product_id !== existing.product_id && Number(existing.sold_count) > 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '이미 판매된 초특가는 상품을 바꿀 수 없습니다. 새 초특가로 등록해주세요', timestamp: new Date().toISOString() });
+    }
+    const v = await validateFlashDealInput(body, existing);
+    if (v.error) return res.status(400).json({ error: 'Bad Request', message: v.error, timestamp: new Date().toISOString() });
+    if (Object.keys(v.values).length === 0) return res.status(400).json({ error: 'Bad Request', message: '변경할 값이 없습니다', timestamp: new Date().toISOString() });
+    // limit_qty 축소는 판매(점유) 수량 이상일 때만 — 동시에 주문이 들어와도 DB 제약(sold_count <= limit_qty)이 최종 방어
+    const { data, error } = await supabase.from('flash_deals_with').update({ ...v.values, updated_at: new Date().toISOString() }).eq('id', existing.id).select().single();
+    if (error) {
+      if (String(error.message || '').includes('flash_deals_with_sold_chk')) return res.status(409).json({ error: 'Conflict', message: '그 사이 판매 수량이 늘어 한정 수량을 그만큼 줄일 수 없습니다. 새로고침 후 다시 시도해주세요', timestamp: new Date().toISOString() });
+      throw error;
+    }
+    invalidateFlashDealCache();
+    res.json({ success: true, data: publicFlashDeal(data, v.product), timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating flash deal:', err);
+    res.status(500).json({ error: 'Failed to update flash deal', message: '초특가 수정에 실패했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+app.delete('/api/admin/flash-deals/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data: existing } = await supabase.from('flash_deals_with').select('id, sold_count').eq('id', req.params.id).eq('site', FLASH_SITE).maybeSingle();
+    if (!existing) return res.status(404).json({ error: 'Not Found', message: '초특가를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const { count } = await supabase.from('flash_deal_claims_with').select('id', { count: 'exact', head: true }).eq('deal_id', existing.id);
+    if (Number(existing.sold_count) > 0 || (count || 0) > 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '주문 기록이 있는 초특가는 삭제할 수 없습니다. "사용 안 함"으로 꺼주세요', timestamp: new Date().toISOString() });
+    }
+    const { error } = await supabase.from('flash_deals_with').delete().eq('id', existing.id);
+    if (error) throw error;
+    invalidateFlashDealCache();
+    res.json({ success: true, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting flash deal:', err);
+    res.status(500).json({ error: 'Failed to delete flash deal', message: '초특가 삭제에 실패했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// ⭐ 베스트 상품 자동 순위 — 최근 N일 판매수량·후기 수·평점·장바구니 담기·찜 수를 항목별 최댓값으로 0~1 정규화한 뒤
+// 관리자가 정한 가중치로 합산한다. 수동 고정 상품은 지정한 순서대로 맨 위, 제외 상품은 빠진다.
+// 설정은 platform_settings(key=best_products_settings[+_live])에 사이트별로 저장(WITH+/LIVE+가 서로 덮어쓰지 않게).
+// ============================================
+const BEST_SETTINGS_KEY = 'best_products_settings' + LAYOUT_KEY_SUFFIX;
+const BEST_DEFAULTS = { period_days: 30, weights: { sales: 40, reviews: 20, rating: 10, cart: 15, wish: 15 }, pinned: [], excluded: [] };
+const BEST_TTL_MS = 2 * 60 * 1000;
+let bestCache = { at: 0, data: null, pending: null };
+const UUID_ONLY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function normalizeBestSettings(v) {
+  const src = (v && typeof v === 'object') ? v : {};
+  const pd = parseInt(src.period_days, 10);
+  const w = (src.weights && typeof src.weights === 'object') ? src.weights : {};
+  const weights = {};
+  Object.keys(BEST_DEFAULTS.weights).forEach(k => {
+    const n = Number(w[k]);
+    weights[k] = Number.isFinite(n) ? Math.min(Math.max(n, 0), 100) : BEST_DEFAULTS.weights[k];
+  });
+  const ids = (arr) => [...new Set((Array.isArray(arr) ? arr : []).map(String).filter(id => UUID_ONLY_RE.test(id)))].slice(0, 100);
+  const excluded = ids(src.excluded);
+  return {
+    period_days: Number.isInteger(pd) && pd >= 1 && pd <= 365 ? pd : BEST_DEFAULTS.period_days,
+    weights,
+    pinned: ids(src.pinned).filter(id => !excluded.includes(id)),
+    excluded
+  };
+}
+async function getBestSettings() {
+  const { data } = await supabase.from('platform_settings').select('value').eq('key', BEST_SETTINGS_KEY).maybeSingle();
+  return normalizeBestSettings(data && data.value);
+}
+async function computeBestRanking(settings) {
+  const s = normalizeBestSettings(settings);
+  const sinceIso = new Date(Date.now() - s.period_days * 24 * 3600 * 1000).toISOString();
+  const [products, orders, carts, wishes] = await Promise.all([
+    fetchAllRows(() => supabase.from('products_with').select(PRODUCT_SAFE_COLUMNS).eq('status', 'active').order('created_at', { ascending: false }), 10000),
+    fetchAllRows(() => supabase.from('orders_with').select('items, status, created_at').gte('created_at', sinceIso).not('status', 'in', '(cancelled,refunded,pending)').order('created_at', { ascending: false }), 20000),
+    fetchAllRows(() => supabase.from('product_interactions_with').select('product_id').eq('event_type', 'cart_add').gte('created_at', sinceIso).order('created_at', { ascending: false }), 30000),
+    fetchAllRows(() => supabase.from('wishlist_with').select('product_id').order('created_at', { ascending: false }), 30000)
+  ]);
+  const sales = {}, cart = {}, wish = {};
+  orders.forEach(o => (Array.isArray(o.items) ? o.items : []).forEach(it => {
+    if (it && it.product_id) sales[it.product_id] = (sales[it.product_id] || 0) + (Number(it.quantity) || 1);
+  }));
+  carts.forEach(c => { if (c.product_id) cart[c.product_id] = (cart[c.product_id] || 0) + 1; });
+  wishes.forEach(c => { if (c.product_id) wish[c.product_id] = (wish[c.product_id] || 0) + 1; });
+
+  const excluded = new Set(s.excluded);
+  const pool = products.filter(p => !excluded.has(p.id));
+  const metric = (p) => ({
+    sales: sales[p.id] || 0,
+    reviews: Number(p.review_count) || 0,
+    // 평점은 후기 수가 적으면 신뢰도가 낮으므로 후기 5건 이상일 때 온전히 반영
+    rating: (Number(p.rating) || 0) / 5 * Math.min(1, (Number(p.review_count) || 0) / 5),
+    cart: cart[p.id] || 0,
+    wish: wish[p.id] || 0
+  });
+  const rows = pool.map(p => ({ product: p, m: metric(p) }));
+  const max = {};
+  Object.keys(BEST_DEFAULTS.weights).forEach(k => { max[k] = Math.max(0, ...rows.map(r => r.m[k])); });
+  rows.forEach(r => {
+    let score = 0;
+    Object.keys(s.weights).forEach(k => { if (max[k] > 0) score += s.weights[k] * (r.m[k] / max[k]); });
+    r.score = Math.round(score * 100) / 100;
+  });
+  const pinnedOrder = new Map(s.pinned.map((id, i) => [id, i]));
+  rows.sort((a, b) => {
+    const pa = pinnedOrder.has(a.product.id), pb = pinnedOrder.has(b.product.id);
+    if (pa || pb) return pa && pb ? pinnedOrder.get(a.product.id) - pinnedOrder.get(b.product.id) : (pa ? -1 : 1);
+    return (b.score - a.score) || (b.m.reviews - a.m.reviews) || ((Number(b.product.rating) || 0) - (Number(a.product.rating) || 0)) || (new Date(b.product.created_at) - new Date(a.product.created_at));
+  });
+  return {
+    settings: s,
+    updated_at: new Date().toISOString(),
+    ranking: rows.map((r, i) => ({
+      product: r.product,
+      rank: i + 1,
+      score: r.score,
+      pinned: pinnedOrder.has(r.product.id),
+      metrics: { sales: r.m.sales, reviews: r.m.reviews, rating: Number(r.product.rating) || 0, cart: r.m.cart, wish: r.m.wish }
+    }))
+  };
+}
+async function getBestRankingCached() {
+  if (bestCache.data && Date.now() - bestCache.at < BEST_TTL_MS) return bestCache.data;
+  if (!bestCache.pending) {
+    bestCache.pending = getBestSettings().then(computeBestRanking)
+      .then(d => { bestCache = { at: Date.now(), data: d, pending: null }; return d; })
+      .catch(e => { bestCache.pending = null; throw e; });
+  }
+  return bestCache.pending;
+}
+// 분양 조직이 "선택한 상품만 노출"이면 그 상품만(GET /api/products와 같은 규칙). 해당 없으면 null.
+async function getCuratedProductIds(communitySlug) {
+  if (!communitySlug) return null;
+  const { data: community } = await supabase.from('communities').select('id, product_visibility').eq('slug', communitySlug).eq('status', 'active').maybeSingle();
+  if (!community || community.product_visibility !== 'curated') return null;
+  const { data: picks } = await supabase.from('community_products').select('product_id').eq('community_id', community.id);
+  return new Set((picks || []).map(p => p.product_id));
+}
+
+app.get('/api/home/best', async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 24, 1), 100);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const best = await getBestRankingCached();
+    let ranking = best.ranking;
+    const curated = await getCuratedProductIds(req.query.community ? String(req.query.community) : '');
+    if (curated) ranking = ranking.filter(r => curated.has(r.product.id));
+    const page = ranking.slice(offset, offset + limit).map((r, i) => ({ ...r.product, best_rank: offset + i + 1, best_pinned: r.pinned }));
+    await attachFlashDeals(page);
+    res.set('Cache-Control', 'public, max-age=30');
+    res.json({
+      success: true,
+      data: page,
+      total: ranking.length,
+      has_more: offset + limit < ranking.length,
+      period_days: best.settings.period_days,
+      updated_at: best.updated_at,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error loading best products:', err);
+    res.status(500).json({ error: 'Failed to load best products', message: '베스트 상품을 불러오지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+app.get('/api/admin/best-settings', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    res.json({ success: true, data: await getBestSettings(), defaults: BEST_DEFAULTS, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error reading best settings:', err);
+    res.status(500).json({ error: 'Failed to read best settings', message: '베스트 상품 설정을 불러오지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+app.put('/api/admin/best-settings', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const value = normalizeBestSettings(req.body);
+    const { error } = await supabase.from('platform_settings').upsert({ key: BEST_SETTINGS_KEY, value }, { onConflict: 'key' });
+    if (error) throw error;
+    bestCache = { at: 0, data: null, pending: null };
+    res.json({ success: true, data: value, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error saving best settings:', err);
+    res.status(500).json({ error: 'Failed to save best settings', message: '베스트 상품 설정을 저장하지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+// 저장 전 미리보기 — 화면에서 바꾼(아직 저장 안 한) 설정으로 순위를 계산해 상위 N개를 항목별 수치와 함께 돌려준다
+app.post('/api/admin/best-settings/preview', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 30, 1), 100);
+    const result = await computeBestRanking(req.body || {});
+    res.json({
+      success: true,
+      settings: result.settings,
+      total: result.ranking.length,
+      data: result.ranking.slice(0, limit).map(r => ({ id: r.product.id, name: r.product.name, price: r.product.price, image: (r.product.images_urls || [])[0] || null, rank: r.rank, score: r.score, pinned: r.pinned, metrics: r.metrics })),
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error previewing best ranking:', err);
+    res.status(500).json({ error: 'Failed to preview', message: '미리보기를 계산하지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+
+// ============================================
 // ⭐ 자동 리뷰 요청 — 배송완료 후 3일이 지났는데 아직 리뷰가 없는 상품에 대해 한 번만
 // "리뷰를 남겨주세요" 알림(앱 알림함 + 푸시)을 자동으로 보낸다. 리뷰 자체를 지어내지 않는다(실제 구매자에게 요청만).
 // 매일 20:00(KST) 실행, 관리자 화면에서 즉시 실행도 가능.
@@ -17064,7 +17601,7 @@ app.get('/api/me/home-sections', optionalAuth, async (req, res) => {
       });
     }
 
-    // 5) 🔥 관심 카테고리 중 재고가 적거나 할인 중인 상품(한정수량 특가) - 마케팅성 섹션이라 같은 관심도라도 개인화 섹션보다는 살짝 낮게 둔다
+    // 5) 🔥 관심 카테고리 중 재고가 적거나 할인 중인 상품(한정수량 초특가) - 마케팅성 섹션이라 같은 관심도라도 개인화 섹션보다는 살짝 낮게 둔다
     const interestCategories = Object.keys(signals.categoryWeight).length > 0 ? Object.keys(signals.categoryWeight) : Object.keys(signals.browseCategoryWeight);
     if (interestCategories.length > 0) {
       const { data: dealCandidates } = await supabase
@@ -17079,7 +17616,7 @@ app.get('/api/me/home-sections', optionalAuth, async (req, res) => {
         .sort((a, b) => Number(a.stock || 0) - Number(b.stock || 0))
         .slice(0, sectionLimit);
       if (deals.length > 0) {
-        sections.push({ section_key: 'limited_deal', title: '🔥 회원님 취향의 한정수량 특가', subtitle: '얼마 남지 않았어요', products: deals, _priority: sumWeights(signals.categoryWeight) * 0.5 });
+        sections.push({ section_key: 'limited_deal', title: '🔥 회원님 취향의 한정수량 초특가', subtitle: '얼마 남지 않았어요', products: deals, _priority: sumWeights(signals.categoryWeight) * 0.5 });
       }
     }
 
@@ -17574,6 +18111,7 @@ app.patch('/api/admin/return-requests/:id', authenticate, requireRole(['admin', 
         }
         const newOrderStatus = existingRequest.request_type === 'cancel' ? 'cancelled' : 'refunded';
         await supabase.from('orders_with').update({ status: newOrderStatus }).eq('id', order.id);
+        await releaseFlashDealClaims(order.id); // ⚡ 초특가 점유 수량 반환
         sideEffect = { order_status: newOrderStatus, stock_restored_items: items.length };
       }
     }
