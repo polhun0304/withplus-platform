@@ -324,6 +324,7 @@
     </div>
 
     <script src="/vendor/supabase.min.js"></script>
+    <script src="/withplus-pricing.js"></script>
     <script src="/withplus-common.js"></script>
     <script src="//t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>
     <script>
@@ -372,7 +373,9 @@
                     if (!ordersRes.ok || !ordersJson.success) throw new Error(ordersJson.message || '주문 내역을 불러오지 못했습니다');
 
                     const wishlistJson = await wishlistRes.json().catch(() => null);
-                    const wishlist = (wishlistRes.ok && wishlistJson && wishlistJson.success) ? wishlistJson.data : [];
+                    let wishlist = (wishlistRes.ok && wishlistJson && wishlistJson.success) ? wishlistJson.data : [];
+                    // 채널별 자동 가격(공동체가/도매가) - 상품 카드와 같은 가격으로 보여준다
+                    try { wishlist = WithPlus.applyPriceContext(wishlist || [], await WithPlus.loadPriceContext()); } catch (e) {}
 
                     const returnsJson = await returnsRes.json().catch(() => null);
                     const returnRequests = (returnsRes.ok && returnsJson && returnsJson.success) ? returnsJson.data : [];
@@ -599,7 +602,7 @@
                                 <div class="thumb" ${img ? `style="background-image:url('${WithPlus.safeUrlAttr(img)}');"` : ''}>${img ? '' : emoji}</div>
                                 <div class="info">
                                     <div class="name">${WithPlus.escapeHtml(p.name)}</div>
-                                    <div class="price">${WithPlus.formatPrice(p.price)}</div>
+                                    <div class="price">${WithPlus.formatPrice(WithPlus.getEffectiveUnitPrice(p))}${WithPlus.renderPriceLabel(p)}</div>
                                 </div>
                             </a>`;
                         }).join('')}</div>`;

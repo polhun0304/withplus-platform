@@ -1203,6 +1203,293 @@ app.patch('/api/admin/settings/mileage-rates', authenticate, requireRole(['admin
 });
 
 // ============================================
+// 채널별 자동 가격 (분양몰 = 적립율 차이만큼 가감 / 도매 = 공통 도매 할인율 차감)
+// ------------------------------------------------------------
+// 고객 요청: "쇼핑몰 기본가를 정해 두면, 분양몰(공동체)로 들어온 쇼핑몰은 적립율에 따라 가격이 자동으로 바뀌고,
+//            도매로 들어온 쇼핑몰은 기본가보다 싸게 자동으로 바뀌도록"
+// - 공동체가 = 기본가 x (1 + (그 공동체 총 적립율 - 플랫폼 기본 총 적립율)), 상한 ±max_adjust_percent%, rounding_unit 원 단위 반올림
+//   총 적립율 = 개인 적립율 + 커뮤니티 적립율 (getEffectiveMileageRates 와 같은 값 - 공동체가 비워두면 플랫폼 기본값)
+// - 도매가 = 상품별 도매채널가(product_channel_prices_with, channel='wholesale') > 카테고리별 도매 할인율 > 공통 도매 할인율
+// - 계산식/반올림은 public/withplus-pricing.js 한 파일을 서버와 화면이 같이 쓴다 (화면 표시 = 실제 결제 금액)
+// - 설정: platform_settings(key='channel_pricing') - WITH+ 전용 키 (LIVE+는 _live 접미사 키를 쓴다)
+// ============================================
+const ChannelPricing = require('./public/withplus-pricing.js');
+const CHANNEL_PRICING_SETTINGS_KEY = 'channel_pricing';
+const DEFAULT_CHANNEL_PRICING = {
+  community_enabled: true,          // 분양몰 가격 자동조정 사용 (기본 켜짐)
+  rounding_unit: 10,                // 반올림 단위(원)
+  max_adjust_percent: 30,           // 공동체가 최대 가감 폭(±%)
+  excluded_community_ids: [],       // "가격 자동조정 제외" 공동체
+  wholesale_discount_percent: 20,   // 도매 기본 할인율(%)
+  wholesale_category_rates: {}      // 카테고리별 도매 할인율(%) { food: 15 }
+};
+const CHANNEL_PRICING_ROUNDING_UNITS = [1, 10, 100, 1000];
+let channelPricingCache = null;
+let channelPricingCacheAt = 0;
+const CHANNEL_PRICING_CACHE_TTL_MS = 30 * 1000;
+
+function normalizeChannelPricingSettings(value) {
+  const v = value || {};
+  const d = DEFAULT_CHANNEL_PRICING;
+  const pct = (x, max, def) => {
+    if (x === undefined || x === null || x === '') return def;
+    const n = Number(x);
+    return Number.isFinite(n) && n >= 0 && n <= max ? Math.round(n * 100) / 100 : def;
+  };
+  const unit = Number(v.rounding_unit);
+  const catRates = {};
+  if (v.wholesale_category_rates && typeof v.wholesale_category_rates === 'object' && !Array.isArray(v.wholesale_category_rates)) {
+    Object.entries(v.wholesale_category_rates).forEach(([k, r]) => {
+      const key = String(k).trim().slice(0, 60);
+      if (!key || r === null || r === '' || r === undefined) return;
+      const n = Number(r);
+      if (Number.isFinite(n) && n >= 0 && n <= 90) catRates[key] = Math.round(n * 100) / 100;
+    });
+  }
+  return {
+    community_enabled: v.community_enabled === undefined ? d.community_enabled : v.community_enabled !== false,
+    rounding_unit: CHANNEL_PRICING_ROUNDING_UNITS.includes(unit) ? unit : d.rounding_unit,
+    max_adjust_percent: pct(v.max_adjust_percent, 100, d.max_adjust_percent),
+    excluded_community_ids: Array.isArray(v.excluded_community_ids) ? [...new Set(v.excluded_community_ids.map(String).filter(id => /^[0-9a-f-]{36}$/i.test(id)))] : [],
+    wholesale_discount_percent: pct(v.wholesale_discount_percent, 90, d.wholesale_discount_percent),
+    wholesale_category_rates: catRates
+  };
+}
+
+async function getChannelPricingSettings() {
+  const now = Date.now();
+  if (channelPricingCache && (now - channelPricingCacheAt) < CHANNEL_PRICING_CACHE_TTL_MS) return channelPricingCache;
+  try {
+    const { data, error } = await supabase.from('platform_settings').select('value').eq('key', CHANNEL_PRICING_SETTINGS_KEY).maybeSingle();
+    if (error) return channelPricingCache || normalizeChannelPricingSettings(null);
+    channelPricingCache = normalizeChannelPricingSettings(data ? data.value : null);
+    channelPricingCacheAt = now;
+    return channelPricingCache;
+  } catch (err) {
+    console.error('Error fetching channel pricing settings:', err);
+    return channelPricingCache || normalizeChannelPricingSettings(null);
+  }
+}
+
+// 상품별 도매채널가 맵 { product_id: price } - productIds 를 주면 그 상품만 조회
+async function getWholesaleOverrideMap(productIds) {
+  if (Array.isArray(productIds) && productIds.length === 0) return {};
+  let q = supabase.from('product_channel_prices_with').select('product_id, price').eq('channel', 'wholesale');
+  if (Array.isArray(productIds)) q = q.in('product_id', productIds);
+  const { data } = await q;
+  const map = {};
+  (data || []).forEach(r => { if (Number.isFinite(Number(r.price)) && Number(r.price) > 0) map[r.product_id] = Number(r.price); });
+  return map;
+}
+
+async function buildWholesalePriceContext(productIds) {
+  const s = await getChannelPricingSettings();
+  const category_bp = {};
+  Object.entries(s.wholesale_category_rates || {}).forEach(([k, r]) => { category_bp[k] = Math.round(Number(r) * 100); });
+  return {
+    mode: 'wholesale',
+    label: '도매가',
+    rounding_unit: s.rounding_unit,
+    wholesale_bp: Math.round(Number(s.wholesale_discount_percent) * 100),
+    wholesale_discount_percent: s.wholesale_discount_percent,
+    category_bp,
+    overrides: await getWholesaleOverrideMap(productIds)
+  };
+}
+
+// 공동체 가격 컨텍스트 - 조정 없음(꺼짐/제외/적립율 동일)이면 { mode: 'default' }
+async function buildCommunityPriceContext(communityId) {
+  if (!communityId) return { mode: 'default' };
+  const s = await getChannelPricingSettings();
+  if (!s.community_enabled || s.excluded_community_ids.includes(String(communityId))) return { mode: 'default' };
+  const { data: community } = await supabase.from('communities').select('id, name, slug').eq('id', communityId).maybeSingle();
+  if (!community) return { mode: 'default' };
+  const [platformRates, effRates] = await Promise.all([getMileageRates(), getEffectiveMileageRates(communityId)]);
+  const baseTotal = Number(platformRates.personal) + Number(platformRates.community);
+  const communityTotal = Number(effRates.personal) + Number(effRates.community);
+  const bp = ChannelPricing.communityBp(baseTotal, communityTotal, s.max_adjust_percent);
+  if (!bp) return { mode: 'default' };
+  return {
+    mode: 'community',
+    bp,
+    adjust_percent: bp / 100,
+    rounding_unit: s.rounding_unit,
+    community: { id: community.id, name: community.name, slug: community.slug },
+    label: `${community.name} 공동체가`
+  };
+}
+
+// 가격 컨텍스트 결정 (서버 권위) - 도매 회원이면 도매가가 공동체가보다 우선한다.
+// communityId 는 반드시 "주문에 실제로 붙는 community_id"(가입 검증된 값)여야 한다 - 화면 표시는 /api/me/price-context 가 같은 규칙으로 고른다.
+async function resolvePriceContext({ role, communityId, productIds } = {}) {
+  if (role === 'wholesale') return buildWholesalePriceContext(productIds);
+  return buildCommunityPriceContext(communityId || null);
+}
+
+// 이 상품 1개 단가 (옵션 가격조정 제외) - 주문 생성은 반드시 이 함수를 거친다
+function computeChannelUnitPrice(product, priceCtx) {
+  // TODO(타임딜): getFlashDealPrice(product)가 진행 중인 타임딜 고정가를 돌려주면 그 값을 그대로 반환하고
+  //   채널 가감(공동체가/도매가)은 적용하지 않는다 - 타임딜 브랜치 병합 시 여기에 연결.
+  return ChannelPricing.unitPrice(product, priceCtx);
+}
+
+// 화면 표시용 가격 컨텍스트 - 장바구니 결제 시 실제로 붙을 community_id 를 고르는 규칙과 동일하게 고른다.
+//  - 도매 회원 → 도매가
+//  - ?community_id= 가 있으면(장바구니에서 고른 공동체, 빈 값 = 선택 안 함) 가입한 공동체일 때만 그 공동체가
+//  - 아니면 ?community=슬러그(분양몰 랜딩으로 들어온 매장)에 가입돼 있으면 그 공동체, 가입한 (운영 중) 공동체가 정확히 1개면 그 공동체
+//    (장바구니의 공동체 자동 선택 규칙과 같다 - cart.html 참고)
+//  - 비로그인 방문자가 분양몰(슬러그)로 들어왔으면 그 공동체가를 미리 보여준다(preview - 실제 결제는 로그인+가입 후 같은 가격)
+app.get('/api/me/price-context', optionalAuth, async (req, res) => {
+  try {
+    const settings = await getChannelPricingSettings();
+    const slug = req.query.community ? String(req.query.community).slice(0, 100) : null;
+    const hasExplicit = Object.prototype.hasOwnProperty.call(req.query, 'community_id');
+    const explicitId = hasExplicit ? String(req.query.community_id || '') : null;
+    let ctx = { mode: 'default' };
+    if (req.user) {
+      const { data: profile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
+      if (profile && profile.role === 'wholesale') {
+        ctx = await buildWholesalePriceContext();
+      } else {
+        const { data: memberships } = await supabase.from('community_members').select('community_id').eq('user_id', req.user.id).eq('status', 'active');
+        const memberIds = [...new Set((memberships || []).map(m => m.community_id))];
+        let chosen = null;
+        if (hasExplicit) {
+          chosen = explicitId && memberIds.includes(explicitId) ? explicitId : null;
+        } else if (memberIds.length > 0) {
+          const { data: comms } = await supabase.from('communities').select('id, slug').in('id', memberIds).eq('status', 'active');
+          const bySlug = slug ? (comms || []).find(c => c.slug === slug) : null;
+          chosen = bySlug ? bySlug.id : ((comms || []).length === 1 ? comms[0].id : null);
+        }
+        ctx = await buildCommunityPriceContext(chosen);
+      }
+    } else if (slug) {
+      const { data: community } = await supabase.from('communities').select('id').eq('slug', slug).eq('status', 'active').maybeSingle();
+      if (community) {
+        ctx = await buildCommunityPriceContext(community.id);
+        if (ctx.mode === 'community') ctx.preview = true;
+      }
+    }
+    if (!ctx.rounding_unit) ctx.rounding_unit = settings.rounding_unit;
+    res.json({ success: true, data: ctx, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error resolving price context:', err);
+    res.json({ success: true, data: { mode: 'default' }, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 채널별 자동 가격 설정 조회 (+ 공동체별 가감률 미리보기)
+app.get('/api/admin/settings/channel-pricing', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const settings = await getChannelPricingSettings();
+    const platformRates = await getMileageRates();
+    const baseTotal = Number(platformRates.personal) + Number(platformRates.community);
+    const { data: communities } = await supabase.from('communities').select('id, name, slug, status, personal_point_rate, community_point_rate').order('name');
+    const list = (communities || []).map(c => {
+      const personal = c.personal_point_rate !== null && c.personal_point_rate !== undefined ? Number(c.personal_point_rate) : Number(platformRates.personal);
+      const comm = c.community_point_rate !== null && c.community_point_rate !== undefined ? Number(c.community_point_rate) : Number(platformRates.community);
+      const excluded = settings.excluded_community_ids.includes(c.id);
+      const bp = (!settings.community_enabled || excluded) ? 0 : ChannelPricing.communityBp(baseTotal, personal + comm, settings.max_adjust_percent);
+      return { id: c.id, name: c.name, slug: c.slug, status: c.status, total_rate_percent: Math.round((personal + comm) * 10000) / 100, excluded, bp, adjust_percent: bp / 100 };
+    });
+    res.json({
+      success: true,
+      data: { settings, base_total_rate_percent: Math.round(baseTotal * 10000) / 100, communities: list },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error fetching channel pricing settings:', err);
+    res.status(500).json({ error: 'Failed to fetch channel pricing settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 채널별 자동 가격 설정 변경 (보낸 항목만 바뀐다)
+app.patch('/api/admin/settings/channel-pricing', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const current = await getChannelPricingSettings();
+    const merged = Object.assign({}, current, b);
+    const bad = (message) => res.status(400).json({ error: 'Bad Request', message, timestamp: new Date().toISOString() });
+    if (!CHANNEL_PRICING_ROUNDING_UNITS.includes(Number(merged.rounding_unit))) return bad('반올림 단위는 1·10·100·1000원 중 하나여야 합니다');
+    const cap = Number(merged.max_adjust_percent);
+    if (!Number.isFinite(cap) || cap < 0 || cap > 100) return bad('최대 가감 폭은 0% ~ 100% 사이여야 합니다');
+    const ws = Number(merged.wholesale_discount_percent);
+    if (!Number.isFinite(ws) || ws < 0 || ws > 90) return bad('도매 기본 할인율은 0% ~ 90% 사이여야 합니다');
+    if (merged.wholesale_category_rates && typeof merged.wholesale_category_rates === 'object') {
+      for (const [k, r] of Object.entries(merged.wholesale_category_rates)) {
+        if (r === null || r === '' || r === undefined) continue;
+        const n = Number(r);
+        if (!Number.isFinite(n) || n < 0 || n > 90) return bad(`카테고리(${k}) 도매 할인율은 0% ~ 90% 사이여야 합니다`);
+      }
+    }
+    const value = normalizeChannelPricingSettings(merged);
+    const { error } = await supabase.from('platform_settings').upsert({
+      key: CHANNEL_PRICING_SETTINGS_KEY, value, updated_at: new Date().toISOString(), updated_by: req.user.id
+    }, { onConflict: 'key' });
+    if (error) throw error;
+    channelPricingCache = value;
+    channelPricingCacheAt = Date.now();
+    res.json({ success: true, data: value, message: '채널별 자동 가격 설정이 저장되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating channel pricing settings:', err);
+    res.status(500).json({ error: 'Failed to update channel pricing settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 상품 등록/수정 화면 미리보기 - 기본가 / 예시 분양몰가(총 적립율 최고·최저 공동체) / 도매가
+// 저장 전 입력값(price·discount_price·category)으로 계산하고, product_id 가 있으면 그 상품의 도매채널가도 반영한다
+app.post('/api/admin/channel-pricing/preview', authenticate, requireRole(['admin', 'super_admin', 'provider']), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const productId = b.product_id && UUID_RE.test(String(b.product_id)) ? String(b.product_id) : null;
+    const product = {
+      id: productId,
+      price: Number(b.price),
+      discount_price: b.discount_price === undefined || b.discount_price === null || b.discount_price === '' ? null : Number(b.discount_price),
+      category: b.category || null
+    };
+    if (!Number.isFinite(product.price) || product.price <= 0) {
+      return res.json({ success: true, data: null, timestamp: new Date().toISOString() });
+    }
+    const settings = await getChannelPricingSettings();
+    const platformRates = await getMileageRates();
+    const baseTotal = Number(platformRates.personal) + Number(platformRates.community);
+    const { data: communities } = await supabase.from('communities').select('id, name, personal_point_rate, community_point_rate').eq('status', 'active');
+    const ranked = (communities || []).filter(c => !settings.excluded_community_ids.includes(c.id)).map(c => {
+      const personal = c.personal_point_rate !== null && c.personal_point_rate !== undefined ? Number(c.personal_point_rate) : Number(platformRates.personal);
+      const comm = c.community_point_rate !== null && c.community_point_rate !== undefined ? Number(c.community_point_rate) : Number(platformRates.community);
+      return { c, total: personal + comm };
+    }).sort((x, y) => y.total - x.total);
+    const asExample = (r) => {
+      if (!r) return null;
+      const bp = settings.community_enabled ? ChannelPricing.communityBp(baseTotal, r.total, settings.max_adjust_percent) : 0;
+      const ctx = bp ? { mode: 'community', bp, rounding_unit: settings.rounding_unit } : { mode: 'default' };
+      return { community_name: r.c.name, total_rate_percent: Math.round(r.total * 10000) / 100, adjust_percent: bp / 100, unit_price: ChannelPricing.unitPrice(product, ctx) };
+    };
+    const wsCtx = await buildWholesalePriceContext(productId ? [productId] : []);
+    const hasOverride = !!(productId && wsCtx.overrides[productId] !== undefined);
+    res.json({
+      success: true,
+      data: {
+        default_unit_price: ChannelPricing.effectiveUnitPrice(product),
+        base_total_rate_percent: Math.round(baseTotal * 10000) / 100,
+        community_enabled: settings.community_enabled,
+        community_highest: asExample(ranked[0]),
+        community_lowest: ranked.length > 1 ? asExample(ranked[ranked.length - 1]) : null,
+        wholesale_unit_price: ChannelPricing.unitPrice(product, wsCtx),
+        wholesale_source: hasOverride ? 'product' : (product.category && wsCtx.category_bp[product.category] !== undefined ? 'category' : 'default'),
+        wholesale_discount_percent: hasOverride ? null : ChannelPricing.wholesaleBpFor(product, wsCtx) / 100
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error building channel price preview:', err);
+    res.status(500).json({ error: 'Failed to build preview', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
 // 배송비 정책 (관리자가 언제든 변경 가능 - platform_settings(key='shipping_policy'))
 // 다른 쇼핑몰들의 일반적인 방식(기본 배송비 + 조건부 무료배송 + 제주/도서산간 추가배송비)을 참고해 구성했다.
 // 도서산간 추가배송비 구간(surcharge_zones)은 "우편번호 범위 + 추가금액"으로 정의하며, 기본값은
@@ -5356,8 +5643,8 @@ app.put('/api/admin/wholesale-applications/:id/reject', authenticate, requireRol
   }
 });
 
-// 도매몰 카탈로그 - 도매 회원(및 관리자)만 조회 가능. 도매채널가가 지정된 상품이 없으면 온라인 판매가로 폴백해 보여준다
-// (채널가 조회 화면 GET /api/admin/products/:id/channel-prices 와 동일한 폴백 규칙)
+// 도매몰 카탈로그 - 도매 회원(및 관리자)만 조회 가능. 도매채널가가 지정되지 않은 상품은 기본가에서 도매 할인율을 자동으로 뺀 값
+// (채널별 자동 가격 - resolvePriceContext / 주문 생성과 같은 규칙)
 app.get('/api/wholesale/products', authenticate, requireRole(['wholesale', 'admin', 'super_admin']), async (req, res) => {
   try {
     const { data: products, error } = await supabase
@@ -5367,18 +5654,12 @@ app.get('/api/wholesale/products', authenticate, requireRole(['wholesale', 'admi
       .order('created_at', { ascending: false });
     if (error) throw error;
     const productIds = (products || []).map(p => p.id);
-    let wholesalePriceMap = {};
-    if (productIds.length > 0) {
-      const { data: wsPrices } = await supabase
-        .from('product_channel_prices_with')
-        .select('product_id, price')
-        .eq('channel', 'wholesale')
-        .in('product_id', productIds);
-      (wsPrices || []).forEach(r => { wholesalePriceMap[r.product_id] = Number(r.price); });
-    }
+    // 도매가 = 상품별 도매채널가 > 카테고리별 도매 할인율 > 공통 도매 할인율 (주문 생성과 같은 computeChannelUnitPrice)
+    const wsCtx = await buildWholesalePriceContext(productIds);
     const data = (products || []).map(p => ({
       ...p,
-      wholesale_price: wholesalePriceMap[p.id] !== undefined ? wholesalePriceMap[p.id] : Number(p.price)
+      wholesale_price: computeChannelUnitPrice(p, wsCtx),
+      wholesale_price_source: wsCtx.overrides[p.id] !== undefined ? 'product' : (wsCtx.category_bp[p.category] !== undefined ? 'category' : 'default')
     }));
     res.json({ success: true, data, timestamp: new Date().toISOString() });
   } catch (err) {
@@ -5626,7 +5907,7 @@ app.get('/api/search/autocomplete', async (req, res) => {
       catch (fbErr) { /* 보강 검색도 실패하면 아래에서 원래 오류를 처리 */ }
     }
     if (error) throw error;
-    const suggestions = (data || []).map(p => ({ id: p.id, name: p.name, image_url: (p.images_urls && p.images_urls[0]) || null, price: p.price }));
+    const suggestions = (data || []).map(p => ({ id: p.id, name: p.name, image_url: (p.images_urls && p.images_urls[0]) || null, price: p.price, discount_price: p.discount_price !== undefined ? p.discount_price : null, category: p.category }));
     res.json({ success: true, data: suggestions, timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error fetching autocomplete suggestions:', err);
@@ -7064,14 +7345,17 @@ app.put('/api/admin/products/:id/cost', authenticate, requireOwnerStepUp, async 
 app.get('/api/admin/products/:id/channel-prices', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { id } = req.params;
-    const { data: product } = await supabase.from('products_with').select('id, price').eq('id', id).maybeSingle();
+    const { data: product } = await supabase.from('products_with').select('id, price, discount_price, category').eq('id', id).maybeSingle();
     if (!product) return res.status(404).json({ error: 'Not Found', message: '상품을 찾을 수 없습니다', timestamp: new Date().toISOString() });
     const { data: rows } = await supabase.from('product_channel_prices_with').select('channel, price, is_manual_override, updated_at').eq('product_id', id);
     const byChannel = {};
     (rows || []).forEach(r => { byChannel[r.channel] = r; });
+    const wsAutoCtx = await buildWholesalePriceContext([]);
     const data = PRICING_CHANNELS.map(channel => ({
       channel,
-      price: byChannel[channel] ? Number(byChannel[channel].price) : Number(product.price),
+      // 도매채널가가 없으면 주문과 같은 자동 도매가(기본가 - 도매 할인율), 그 외 채널은 판매가로 폴백
+      price: byChannel[channel] ? Number(byChannel[channel].price) : (channel === 'wholesale' ? computeChannelUnitPrice(product, wsAutoCtx) : Number(product.price)),
+      is_auto: !byChannel[channel] && channel === 'wholesale',
       is_manual_override: byChannel[channel] ? !!byChannel[channel].is_manual_override : false,
       updated_at: byChannel[channel] ? byChannel[channel].updated_at : null
     }));
@@ -9674,7 +9958,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
     if (productIds.length > 0) {
       const { data: orderProducts, error: prodErr } = await supabase
         .from('products_with')
-        .select('id, name, price, discount_price, quantity_price_options, stock, status')
+        .select('id, name, price, discount_price, quantity_price_options, category, stock, status')
         .in('id', productIds);
       if (prodErr) throw prodErr;
       (orderProducts || []).forEach(p => { productMap[p.id] = p; });
@@ -9696,15 +9980,10 @@ app.post('/api/orders', authenticate, async (req, res) => {
     //  서버가 로그인한 계정의 실제 role을 다시 조회해서 판단한다)
     const { data: buyerProfile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
     const isWholesaleBuyer = !!(buyerProfile && buyerProfile.role === 'wholesale');
-    let wholesalePriceMap = {};
-    if (isWholesaleBuyer && productIds.length > 0) {
-      const { data: wsPrices } = await supabase
-        .from('product_channel_prices_with')
-        .select('product_id, price')
-        .eq('channel', 'wholesale')
-        .in('product_id', productIds);
-      (wsPrices || []).forEach(r => { wholesalePriceMap[r.product_id] = Number(r.price); });
-    }
+    // 채널별 자동 가격 컨텍스트 (resolvePriceContext 참고) - 도매 회원이면 도매가(상품별 도매채널가 > 카테고리 할인율 > 공통 도매 할인율),
+    // 아니면 위에서 가입 검증한 community_id(= 이 주문에 실제로 붙는 공동체)의 적립율 차이만큼 가감한 공동체가.
+    // 화면(GET /api/me/price-context + public/withplus-pricing.js)도 같은 규칙·같은 계산식으로 보여준다.
+    const priceCtx = await resolvePriceContext({ role: buyerProfile ? buyerProfile.role : null, communityId: community_id || null, productIds });
 
     // 🔒 보안: 상품 가격은 절대 클라이언트(브라우저)가 보낸 값을 신뢰하지 않는다. 여기서 검증하면서
     // 동시에 DB의 실제 판매가(옵션이 있으면 옵션 가격조정 포함)로 다시 계산한 "검증된 주문항목"을
@@ -9722,11 +10001,12 @@ app.post('/api/orders', authenticate, async (req, res) => {
       if (!Number.isInteger(qty) || qty < 1) {
         return res.status(400).json({ error: 'Bad Request', message: `수량이 올바르지 않습니다: ${product.name}`, timestamp: new Date().toISOString() });
       }
-      // 도매 회원이면 도매채널가(설정돼 있으면)로 대체 - 설정된 채널가가 없으면 기존과 동일하게 온라인 판매가를 사용한다
-      // (채널가 조회 화면과 동일한 폴백 규칙 - 관리자가 아직 도매가를 지정하지 않은 상품까지 주문을 막지 않기 위함)
-      // 일반 회원은 화면(상품상세/장바구니)과 동일하게 할인가(discount_price)가 있으면 할인가를 단가로 쓴다 (effectivePriceOf)
-      const useWholesale = isWholesaleBuyer && wholesalePriceMap[item.product_id] !== undefined;
-      let unitPrice = useWholesale ? wholesalePriceMap[item.product_id] : effectivePriceOf(product);
+      // 단가 = 채널별 자동 가격(computeChannelUnitPrice) - 기본가는 할인가(discount_price)가 있으면 할인가.
+      // 도매 회원: 상품별 도매채널가가 있으면 그 값, 없으면 기본가에서 (카테고리/공통) 도매 할인율을 뺀 값
+      // (예전에는 도매채널가가 없으면 온라인 판매가 그대로였는데, 고객 요청으로 자동 도매 할인으로 바꿨다)
+      // 공동체 주문: 기본가 x (1 + 적립율 차이), 그 외: 기본가
+      const useWholesale = isWholesaleBuyer && priceCtx.mode === 'wholesale';
+      const unitPrice = computeChannelUnitPrice(product, priceCtx);
       let priceAdjustment = 0;
       let variantLabel = '';
 
@@ -9748,7 +10028,8 @@ app.post('/api/orders', authenticate, async (req, res) => {
       }
 
       // 구매수량별 가격 옵션: 수량이 등록된 묶음 수량과 정확히 같으면 묶음 총액, 아니면 단가 x 수량 (도매가에는 미적용)
-      const line = computeProductLineTotal(product, qty, { unitPrice, priceAdjustment, allowTier: !useWholesale });
+      // (공동체가는 묶음 총액도 같은 비율로 가감 - priceCtx)
+      const line = computeProductLineTotal(product, qty, { unitPrice, priceAdjustment, allowTier: !useWholesale, priceCtx });
       const verifiedItem = {
         product_id: item.product_id,
         variant_id: item.variant_id || null,
@@ -9759,6 +10040,12 @@ app.post('/api/orders', authenticate, async (req, res) => {
       if (line.tier) {
         verifiedItem.line_total = line.lineTotal;
         verifiedItem.quantity_tier = line.tier;
+      }
+      // 어떤 채널 가격으로 계산됐는지 기록 (정산·CS 확인용) - 기본가 주문은 기존 형식 그대로
+      if (priceCtx.mode !== 'default') {
+        verifiedItem.price_channel = priceCtx.mode;
+        verifiedItem.base_unit_price = effectivePriceOf(product);
+        if (priceCtx.mode === 'community') verifiedItem.price_adjust_bp = priceCtx.bp;
       }
       verifiedItems.push(verifiedItem);
     }
@@ -14803,11 +15090,13 @@ function getQuantityTierPrice(product, qty) {
 
 // 주문 라인 금액 계산 (서버 권위) - unitPrice: 이 상품의 1개 기준 단가(할인가/도매가 반영된 값),
 // priceAdjustment: 옵션(variant) 1개당 가격조정, allowTier: 도매가 등 별도 단가 체계일 때는 false
-function computeProductLineTotal(product, qty, { unitPrice, priceAdjustment = 0, allowTier = true } = {}) {
+function computeProductLineTotal(product, qty, { unitPrice, priceAdjustment = 0, allowTier = true, priceCtx = null } = {}) {
   const q = Number(qty) || 1;
   const base = unitPrice !== undefined ? Number(unitPrice) : effectivePriceOf(product);
   const adj = Number(priceAdjustment) || 0;
-  const tierTotal = allowTier ? getQuantityTierPrice(product, q) : null;
+  const rawTierTotal = allowTier ? getQuantityTierPrice(product, q) : null;
+  // 채널별 자동 가격: 공동체가는 묶음 총액도 같은 비율로 가감(ChannelPricing.tierTotal), 도매는 묶음가 미적용(null)
+  const tierTotal = rawTierTotal !== null && priceCtx ? ChannelPricing.tierTotal(rawTierTotal, priceCtx) : rawTierTotal;
   if (tierTotal !== null) {
     const tier = product.quantity_price_options.find(o => Number(o.qty) === q);
     return { lineTotal: tierTotal + adj * q, tier: { qty: q, price: tierTotal, label: tier.label || '' } };

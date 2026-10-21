@@ -266,10 +266,78 @@
     return (Math.round(n * 100) / 100).toString();
   }
 
+  // 상품 API(/api/products...) 응답은 받자마자 "채널별 자동 가격"(공동체가/도매가)으로 바꿔서 돌려준다 -
+  // 그래서 상품 카드·상세·묶음가·정렬 등 모든 화면이 따로 손대지 않아도 실제 결제 금액과 같은 가격을 보여준다.
+  // 장바구니처럼 공동체를 직접 고르는 화면은 options.skipPriceContext = true 로 받아서 직접 적용한다.
   async function fetchJSON(path, options) {
+    const skip = !!(options && options.skipPriceContext);
     const res = await fetch(API_BASE + path, options);
     const json = await res.json();
+    if (!skip && res.ok && json && json.success && isProductPricePath(path)) {
+      try {
+        const ctx = await loadPriceContext();
+        if (Array.isArray(json.data)) json.data = applyPriceContext(json.data, ctx);
+        else if (json.data && typeof json.data === 'object') json.data = applyPriceContext(json.data, ctx);
+      } catch (e) { /* 가격 컨텍스트 조회 실패 시 기본가 그대로 표시 (결제는 항상 서버가 다시 계산) */ }
+    }
     return { ok: res.ok, status: res.status, json };
+  }
+
+  // ============================================
+  // 채널별 자동 가격 (분양몰 공동체가 / 도매가) - 계산식은 /withplus-pricing.js (서버와 같은 파일)
+  // ============================================
+  function isProductPricePath(path) {
+    const p = String(path || '').split('?')[0];
+    if (!/^\/api\/products(\/|$)/.test(p)) return false;
+    // 가격 이력·후기·알림 등 "상품 목록/상품 객체"가 아닌 하위 경로는 건드리지 않는다
+    return !/\/(price-history|band-reviews|reviews|restock-notify|cost|channel-prices)(\/|$)/.test(p);
+  }
+  const priceContextPromises = {};
+  // opts.communityId: 장바구니에서 고른 공동체(빈 문자열 = 선택 안 함) - 주문에 실제로 붙는 community_id 와 같은 값
+  // 지정하지 않으면 서버가 장바구니 자동 선택과 같은 규칙(들어온 분양몰 매장 → 가입한 공동체가 1개면 그 공동체)으로 고른다
+  function loadPriceContext(opts) {
+    const o = opts || {};
+    const hasExplicit = Object.prototype.hasOwnProperty.call(o, 'communityId');
+    const slug = getPreferredCommunitySlug();
+    const key = (hasExplicit ? 'id:' + (o.communityId || '') : 'slug:' + (slug || '')) + (o.force ? ':' + Date.now() : '');
+    if (!priceContextPromises[key]) {
+      priceContextPromises[key] = (async () => {
+        const headers = {};
+        try {
+          const token = await getAccessToken();
+          if (token) headers['Authorization'] = 'Bearer ' + token;
+        } catch (e) {}
+        const qs = hasExplicit ? 'community_id=' + encodeURIComponent(o.communityId || '') : (slug ? 'community=' + encodeURIComponent(slug) : '');
+        const res = await fetch(API_BASE + '/api/me/price-context' + (qs ? '?' + qs : ''), { headers });
+        const json = await res.json();
+        return (res.ok && json && json.success && json.data) ? json.data : { mode: 'default' };
+      })().catch(() => {
+        delete priceContextPromises[key];
+        return { mode: 'default' };
+      });
+    }
+    return priceContextPromises[key];
+  }
+  function getPricingLib() { return global.WithPlusPricing || null; }
+  // 상품(또는 상품 배열)의 price / discount_price / 묶음가를 컨텍스트 가격으로 바꾼 사본을 돌려준다 (이미 적용된 건 그대로)
+  function applyPriceContext(products, ctx) {
+    const lib = getPricingLib();
+    if (!lib || !ctx || ctx.mode === 'default') return products;
+    const one = (p) => (p && typeof p === 'object' && p.id !== undefined && p.price !== undefined && p.name !== undefined) ? lib.adjustProduct(p, ctx) : p;
+    return Array.isArray(products) ? products.map(one) : one(products);
+  }
+  // 금액 하나를 컨텍스트로 조정 (공동체가: 비율 가감, 도매: 도매 할인율) - 상품 정보가 없을 때만 쓴다
+  function adjustPrice(amount, ctx) {
+    const lib = getPricingLib();
+    if (!lib || !ctx || ctx.mode === 'default') return Number(amount) || 0;
+    return lib.unitPrice({ id: null, price: amount, discount_price: null }, ctx);
+  }
+  // 가격 옆에 붙는 작은 라벨 ("○○ 공동체가" / "도매가")
+  function renderPriceLabel(p) {
+    const label = p && p.price_label;
+    if (!label) return '';
+    const isWs = p._price_ctx_applied === 'wholesale';
+    return `<span class="wp-price-label" style="display:inline-block;font-size:11px;font-weight:600;line-height:1.4;padding:1px 6px;border-radius:4px;margin-left:4px;vertical-align:middle;white-space:nowrap;${isWs ? 'background:#E3F2FD;color:#1565C0;' : 'background:#FFF3E0;color:#E65100;'}">${escapeHtml(label)}</span>`;
   }
 
   function escapeHtml(str) {
@@ -602,6 +670,7 @@
                 ${hasDiscount ? `<span class="discount-rate">${discountRate}%</span>` : ''}
                 <span class="current-price">${formatPrice(currentPrice)}</span>
                 ${hasDiscount ? `<span class="original-price">${formatPrice(product.price)}</span>` : ''}
+                ${renderPriceLabel(product)}
             </div>
             <div class="wp-card-earn">적립 ${formatPercent(rates.personalPercent)}% <span>+${formatPercent(rates.communityPercent)}%</span></div>
             <div class="product-rating-line">${renderStars(rating, 14)} <span class="product-review-count">(${Number(reviewCount).toLocaleString('ko-KR')})</span></div>
@@ -806,12 +875,14 @@
         debounceTimer = setTimeout(async () => {
           try {
             const { json } = await fetchJSON('/api/search/autocomplete?q=' + encodeURIComponent(q));
-            const items = (json && json.data) || [];
+            let items = (json && json.data) || [];
             if (items.length === 0) { dropdown.style.display = 'none'; return; }
+            // 채널별 자동 가격(공동체가/도매가) 반영 - 상품 카드와 같은 가격
+            try { items = applyPriceContext(items, await loadPriceContext()); } catch (e) {}
             dropdown.innerHTML = items.map(it => `
               <div class="wp-autocomplete-item" data-id="${it.id}" style="padding:10px 14px; cursor:pointer; font-size:0.88em; display:flex; justify-content:space-between; align-items:center; gap:10px; border-bottom:1px solid #F5F5F5; text-align:left; color:#333;">
                 <span>${escapeHtml(it.name)}</span>
-                ${it.price ? `<span style="color:#999; white-space:nowrap;">${formatPrice(it.price)}원</span>` : ''}
+                ${it.price ? `<span style="color:#999; white-space:nowrap;">${formatPrice(getEffectiveUnitPrice(it))}</span>` : ''}
               </div>`).join('');
             dropdown.style.display = 'block';
             dropdown.querySelectorAll('.wp-autocomplete-item').forEach(el => {
@@ -1947,6 +2018,10 @@
     initCategoryNav,
     formatPrice,
     getEffectiveUnitPrice,
+    loadPriceContext,
+    applyPriceContext,
+    adjustPrice,
+    renderPriceLabel,
     getQuantityPriceOptions,
     getQuantityTierPrice,
     computeLineTotal,

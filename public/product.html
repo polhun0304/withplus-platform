@@ -311,6 +311,7 @@
     </div>
 
     <script src="/vendor/supabase.min.js"></script>
+    <script src="/withplus-pricing.js"></script>
     <script src="/withplus-common.js"></script>
     <script>
         (async function () {
@@ -427,7 +428,7 @@
                             <div class="detail-rating ss-rating">${WithPlus.renderRatingSummary(p.rating, reviewCount, p.review_satisfaction ? p.review_satisfaction.satisfied_count : 0, '#reviews')}<span class="ss-band-count" id="ss-band-count"></span></div>
                             <div class="detail-price-box ss-price">
                                 ${hasDiscount ? `<div class="ss-was"><span class="detail-original-price">${WithPlus.formatPrice(p.price)}</span></div>` : ''}
-                                <div class="ss-now">${hasDiscount ? `<span class="detail-discount">${discountRate}%</span>` : ''}<span class="detail-price">${WithPlus.formatPrice(currentPrice)}</span></div>
+                                <div class="ss-now">${hasDiscount ? `<span class="detail-discount">${discountRate}%</span>` : ''}<span class="detail-price">${WithPlus.formatPrice(currentPrice)}</span>${WithPlus.renderPriceLabel(p)}</div>
                             </div>
                             <p id="price-history-badge" style="font-size:0.85em; margin:-8px 0 12px; color:var(--text-gray);"></p>
                             <dl class="ss-rows">
@@ -1157,9 +1158,9 @@
                 // 🛒 함께 구매한 상품 (동시구매 분석) - 데이터가 충분하지 않으면 섹션 자체를 숨김
                 (async () => {
                     try {
-                        const res = await fetch(`/api/products/${p.id}/frequently-bought-together?limit=6`);
-                        const json = await res.json();
-                        if (!res.ok || !json.success || !json.data || json.data.length === 0) return;
+                        // WithPlus.fetchJSON: 채널별 자동 가격(공동체가/도매가) 반영
+                        const { ok: resOk, json } = await WithPlus.fetchJSON(`/api/products/${p.id}/frequently-bought-together?limit=6`);
+                        if (!resOk || !json.success || !json.data || json.data.length === 0) return;
                         const section = document.getElementById('fbt-section');
                         const scroll = document.getElementById('fbt-scroll');
                         scroll.innerHTML = json.data.map(fp => {
@@ -1181,9 +1182,9 @@
                 // 🔎 비슷한 상품 (카테고리+가격대+브랜드 기반 규칙 유사도) - 주문 이력이 없는 신상품에도 바로 동작함
                 (async () => {
                     try {
-                        const res = await fetch(`/api/products/${p.id}/similar?limit=8`);
-                        const json = await res.json();
-                        if (!res.ok || !json.success || !json.data || json.data.length === 0) return;
+                        // WithPlus.fetchJSON: 채널별 자동 가격(공동체가/도매가) 반영
+                        const { ok: resOk, json } = await WithPlus.fetchJSON(`/api/products/${p.id}/similar?limit=8`);
+                        if (!resOk || !json.success || !json.data || json.data.length === 0) return;
                         const section = document.getElementById('similar-products-section');
                         const scroll = document.getElementById('similar-products-scroll');
                         scroll.innerHTML = json.data.map(sp => {
@@ -1212,6 +1213,9 @@
                         const badge = document.getElementById('price-history-badge');
                         if (!badge) return;
                         const { is_lowest, lowest_price, current_price, history } = json.data;
+                        // 가격 이력은 기본가 기준 - 공동체가는 같은 비율로 환산해 보여주고, 도매가는 별도 가격 체계라 배지를 띄우지 않는다
+                        const priceCtx = await WithPlus.loadPriceContext();
+                        if (priceCtx && priceCtx.mode === 'wholesale') return;
                         if (history.length === 0 && is_lowest) return; // 비교할 과거 이력 자체가 없으면 굳이 배지를 띄우지 않는다
                         if (is_lowest) {
                             badge.textContent = '📉 최근 90일 중 최저가예요!';
@@ -1219,7 +1223,7 @@
                             badge.style.fontWeight = '600';
                         } else if (Number(lowest_price) > 0) {
                             const diffPercent = Math.round(((Number(current_price) - Number(lowest_price)) / Number(lowest_price)) * 100);
-                            badge.textContent = `최근 90일 최저가(${WithPlus.formatPrice(lowest_price)}) 대비 ${diffPercent}% 높아요`;
+                            badge.textContent = `최근 90일 최저가(${WithPlus.formatPrice(WithPlus.adjustPrice(lowest_price, priceCtx))}) 대비 ${diffPercent}% 높아요`;
                         }
                     } catch (err) { /* 실패해도 상품 상세 화면 전체에는 지장 없음 */ }
                 })();
@@ -1228,9 +1232,9 @@
                 // 그리고 그 공급자의 판매중인 다른 상품이 실제로 있을 때만 섹션을 보여준다.
                 (async () => {
                     try {
-                        const res = await fetch(`/api/products/${p.id}/supplier-products?limit=8`);
-                        const json = await res.json();
-                        if (!res.ok || !json.success || !json.supplier || !json.data || json.data.length === 0) return;
+                        // WithPlus.fetchJSON: 채널별 자동 가격(공동체가/도매가) 반영
+                        const { ok: resOk, json } = await WithPlus.fetchJSON(`/api/products/${p.id}/supplier-products?limit=8`);
+                        if (!resOk || !json.success || !json.supplier || !json.data || json.data.length === 0) return;
                         const section = document.getElementById('supplier-products-section');
                         const titleEl = document.getElementById('supplier-products-title');
                         const scroll = document.getElementById('supplier-products-scroll');
