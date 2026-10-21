@@ -2342,7 +2342,7 @@ const MODULE_REGISTRY = [
   { key: 'naverpay', category: '판매·상품 관리', icon: '🟢', name: '네이버페이 간편결제', desc: '네이버페이로 결제를 받습니다. (실제 승인에는 판매자의 Client-Id/Secret/파트너ID가 필요 - 네이버페이 가맹 심사 통과 후 발급됨)', status: 'active', tabTarget: 'settings' },
   { key: 'cart_reminder', category: '판매·상품 관리', icon: '🛒', name: '장바구니 이탈 리마인더', desc: '장바구니에 담아두고 결제하지 않은 회원에게 일정 시간 후 이메일/인앱 알림을 보냅니다. (node-cron으로 30분마다 자동 스캔 - SMTP 미설정 시 인앱 알림만 발송됩니다)', status: 'active', tabTarget: 'settings' },
   { key: 'referral_program', category: '적립·혜택', icon: '🎁', name: '추천인(리퍼럴) 프로그램', desc: '회원마다 고유 추천코드를 발급하고, 그 코드로 가입한 신규 회원이 첫 주문을 하면 추천인·피추천인 양쪽에 마일리지를 지급합니다.', status: 'active', tabTarget: 'settings' },
-  { key: 'social_login', category: '회원·커뮤니티', icon: '📱', name: '소셜 로그인', desc: '구글/카카오/네이버 계정으로 간편 로그인하는 기능입니다. 구글·카카오는 Supabase 대시보드에서, 네이버는 이 화면(설정 탭)에서 클라이언트ID/시크릿을 등록해야 실제로 동작합니다.', status: 'active', tabTarget: 'settings' },
+  { key: 'social_login', category: '회원·커뮤니티', icon: '📱', name: '소셜 로그인', desc: '카카오/네이버(/구글) 계정으로 간편 로그인·가입하는 기능입니다. 카카오·네이버는 이 화면(설정 탭 > 소셜 로그인)에서 키를 입력하면 바로 동작합니다(구글은 Supabase 대시보드에서 설정).', status: 'active', tabTarget: 'settings' },
   { key: 'phone_verify', category: '앞으로 추가될 모듈', icon: '🔒', name: '휴대폰 본인인증', desc: '가입/비밀번호 찾기 시 휴대폰 인증(PASS/NICE)입니다. 화면은 준비되어 있으나 본인인증 서비스사(PASS/NICE 등)와의 실제 제휴·계약이 필요해 보류 중입니다.', status: 'planned', tabTarget: null },
   { key: 'product_import', category: '판매·상품 관리', icon: '📥', name: '외부 상품 가져오기', desc: '도매매(도매꾹) 오픈API로 실시간 검색 후 우리 플랫폼 상품으로 가져옵니다. (요청 형식 최종 검증에는 실제 API 키가 필요)', status: 'active', tabTarget: 'import' },
   { key: 'point_redeem', category: '적립·혜택', icon: '💸', name: '마일리지 사용(차감)', desc: '장바구니에서 보유 마일리지를 결제에 사용할 수 있습니다(직접입력/전액사용, 취소 시 자동 원복). 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
@@ -3359,16 +3359,24 @@ app.get('/api/payments/naverpay/approve', async (req, res) => {
 });
 
 // ============================================
-// 🔑 소셜 로그인(OAuth) - 구글/카카오/네이버
-// - 구글/카카오는 Supabase Auth가 기본 제공하는 OAuth Provider라 서버 코드가 필요 없다. 관리자가
-//   Supabase 대시보드(Authentication > Providers)에서 각 서비스의 클라이언트ID/시크릿을 등록해두면
-//   프론트엔드의 supabase.auth.signInWithOAuth({ provider: 'google' | 'kakao' }) 호출만으로 전체
-//   흐름(동의화면 → 콜백 → 세션발급)이 Supabase 쪽에서 자동으로 처리된다.
-// - 네이버는 Supabase가 기본 제공하지 않는 제공자라, 토스페이먼츠/카카오페이와 동일한 패턴(관리자가
-//   아래 관리자 화면에서 클라이언트ID/시크릿을 직접 등록)으로 서버가 OAuth 인가코드 흐름을 직접
-//   처리한다. 네이버 프로필 조회까지 마친 뒤에는 우리가 직접 비밀번호나 세션 토큰을 만들지 않고,
-//   Supabase의 매직링크 발급(admin.generateLink)을 재사용해 그 링크로 그대로 리다이렉트한다 -
-//   Supabase가 링크를 검증하고 세션을 만들어 프론트엔드로 돌려준다.
+// 🔑 소셜 로그인(OAuth) - 카카오/네이버(서버 직접 처리) + 구글(Supabase)
+// - 카카오·네이버는 우리 서버가 OAuth 인가코드 흐름을 직접 처리한다(2026-10-21 카카오도 이 방식으로 전환).
+//   관리자 > 설정 탭에서 키를 저장하면 그걸로 끝 - Supabase 대시보드의 Provider 설정이 필요 없다.
+//   카카오: 인가(kauth.kakao.com/oauth/authorize) → 토큰(kauth.kakao.com/oauth/token) → 회원정보(kapi.kakao.com/v2/user/me)
+//   네이버: 인가(nid.naver.com/oauth2.0/authorize) → 토큰(nid.naver.com/oauth2.0/token) → 회원정보(openapi.naver.com/v1/nid/me)
+// - 카카오 서버 키가 없고 Supabase 대시보드에 Kakao Provider가 켜져 있으면 예전처럼 프론트의
+//   signInWithOAuth로 대체 동작한다(/api/auth/social-status의 kakao_via='supabase').
+// - 키는 oauth_configs(provider_key='kakao'|'naver') 한 행을 WITH+·LIVE+가 함께 쓴다(같은 DB). 한 앱에
+//   두 사이트의 Redirect URI를 모두 등록하는 방식 - 같은 앱이어야 두 사이트에서 같은 회원번호로 인식된다.
+//   Redirect URI는 요청이 들어온 사이트 주소로 자동 계산된다(관리자 화면에 사이트별 주소 표시).
+// - 회원 연결 순서: ① social_identities_with(제공자 회원번호→회원) ② 제공자가 '인증된 이메일'이라고
+//   알려준 경우에만 같은 이메일의 기존 회원에 연결 ③ 그 외에는 신규 가입(이메일 미제공/미인증이면
+//   제공자 회원번호 기반 가상 이메일 계정). 탈퇴(is_active=false)·이용정지(ban) 계정은 로그인 거부.
+// - 세션 전달: 우리가 직접 토큰을 만들지 않는다. Supabase 매직링크 토큰을 발급(admin.generateLink)해
+//   서버에서 바로 검증(verifyOtp)한 정식 세션을 URL 해시(#wp_sso=1&at=..&rt=..)로 넘긴다 - 해시는 서버로
+//   전송되지 않고 withplus-common.js의 consumeSsoHandoff가 즉시 지운 뒤 심는다(GMWOS SSO와 같은 방식).
+//   예전에는 매직링크 주소로 리다이렉트했는데, Supabase 'Redirect URLs' 허용목록에 이 사이트 주소가 없으면
+//   다른 사이트(Site URL)로 튕기는 문제가 있어 서버 검증 방식으로 바꿨다.
 // ============================================
 async function getOauthConfig(providerKey) {
   const { data, error } = await supabase.from('oauth_configs').select('*').eq('provider_key', providerKey).maybeSingle();
@@ -3376,33 +3384,268 @@ async function getOauthConfig(providerKey) {
   return data;
 }
 
-// state 파라미터: 별도의 서버 세션/쿠키 저장소 없이 JWT_SECRET으로 서명한 값을 그대로 왕복시켜
-// CSRF를 방지한다(발급 후 10분 이내에만 유효 - 위조 방지는 HMAC 서명, 재생공격 방지는 만료시간).
-function signNaverState() {
-  const nonce = crypto.randomBytes(16).toString('hex');
-  const ts = Date.now().toString();
-  const payload = `${nonce}.${ts}`;
-  const sig = crypto.createHmac('sha256', process.env.JWT_SECRET || RUNTIME_FALLBACK_SECRET).update(payload).digest('hex');
-  return `${payload}.${sig}`;
+const SOCIAL_PROVIDERS = {
+  kakao: {
+    name: '카카오',
+    requireSecret: false, // 카카오 Client Secret은 앱에서 '사용함'으로 켠 경우에만 필수 - 저장돼 있으면 항상 함께 보낸다
+    authorizeUrl: 'https://kauth.kakao.com/oauth/authorize',
+    tokenUrl: 'https://kauth.kakao.com/oauth/token',
+    profileUrl: 'https://kapi.kakao.com/v2/user/me'
+  },
+  naver: {
+    name: '네이버',
+    requireSecret: true,
+    authorizeUrl: 'https://nid.naver.com/oauth2.0/authorize',
+    tokenUrl: 'https://nid.naver.com/oauth2.0/token',
+    profileUrl: 'https://openapi.naver.com/v1/nid/me'
+  }
+};
+const SOCIAL_CALLBACK_PATH = (provider) => `/api/auth/${provider}/callback`;
+
+// 테스트 전용 모드(scripts/test-social-login.js): 개발 환경 + 환경변수 + 이 서버 자신(127.0.0.1)에서 온 요청일
+// 때만 켜진다. 운영(Render)에서는 NODE_ENV=production이거나 요청이 프록시를 거쳐 들어오므로 절대 켜지지 않는다.
+function isSocialTestMode(req) {
+  if (process.env.SOCIAL_LOGIN_TEST_MODE !== '1' || process.env.NODE_ENV === 'production') return false;
+  const ip = (req && req.socket && req.socket.remoteAddress) || '';
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip)) return false;
+  return !req.headers['x-forwarded-for'];
 }
-function verifyNaverState(state) {
-  if (!state || typeof state !== 'string') return false;
-  const parts = state.split('.');
-  if (parts.length !== 3) return false;
-  const [nonce, ts, sig] = parts;
-  const payload = `${nonce}.${ts}`;
-  const expected = crypto.createHmac('sha256', process.env.JWT_SECRET || RUNTIME_FALLBACK_SECRET).update(payload).digest('hex');
-  if (sig.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return false;
-  const age = Date.now() - Number(ts);
-  if (!Number.isFinite(age) || age < 0 || age > 10 * 60 * 1000) return false; // 10분 초과 시 만료
+
+async function getSocialProviderConfig(provider, req) {
+  if (isSocialTestMode(req)) {
+    return { provider_key: provider, client_id: `test-${provider}-client-id`, client_secret: `test-${provider}-secret`, enabled: true, _test: true };
+  }
+  return getOauthConfig(provider);
+}
+function isSocialConfigReady(provider, config) {
+  if (!config || !config.enabled || !config.client_id) return false;
+  if (SOCIAL_PROVIDERS[provider].requireSecret && !config.client_secret) return false;
   return true;
 }
 
-// 관리자: 네이버 로그인 연동 상태 조회 (시크릿 원문은 절대 응답에 포함하지 않음)
-app.get('/api/admin/oauth-config/naver', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+// 제공자 HTTP 호출. 테스트 모드에서는 실제 카카오/네이버 대신 인가코드 안에 담아 보낸 가짜 프로필로 응답한다
+// (토큰 교환·프로필 파싱·회원 연결·세션 발급 코드는 운영과 똑같이 실행된다).
+async function socialProviderFetch(req, url, options) {
+  if (!isSocialTestMode(req)) return fetch(url, { ...options, signal: AbortSignal.timeout(15000) });
+  const respond = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
+  const isToken = /\/oauth(2\.0)?\/token/.test(url);
+  if (isToken) {
+    const bodyStr = options && options.body ? String(options.body) : new URL(url).search.slice(1);
+    const params = new URLSearchParams(bodyStr);
+    const code = params.get('code') || '';
+    if (!code.startsWith('stub.')) return respond(400, { error: 'invalid_grant', error_code: 'KOE320', error_description: 'authorization code not found' });
+    return respond(200, { access_token: 'stubtoken.' + code.slice(5), token_type: 'bearer' });
+  }
+  const auth = (options && options.headers && options.headers.Authorization) || '';
+  const encoded = auth.replace(/^Bearer stubtoken\./, '');
+  let body;
+  try { body = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')); } catch (e) { return respond(401, { msg: 'invalid token' }); }
+  return respond(200, body);
+}
+
+// state: 별도 세션 저장소 없이 JWT_SECRET으로 서명한 값을 왕복시킨다. 안에 제공자·nonce·발급시각·복귀경로·
+// 출발화면을 담는다. nonce는 같은 값을 HttpOnly 쿠키로도 심어 콜백에서 대조한다 - 남이 만든 로그인 링크로
+// 피해자를 공격자 계정에 로그인시키는 '로그인 CSRF'를 막는다. 유효시간 10분.
+const SOCIAL_STATE_TTL_MS = 10 * 60 * 1000;
+function socialStateSecret() { return process.env.JWT_SECRET || RUNTIME_FALLBACK_SECRET; }
+function signSocialState(data) {
+  const payload = Buffer.from(JSON.stringify(data), 'utf8').toString('base64url');
+  const sig = crypto.createHmac('sha256', socialStateSecret()).update('v1.' + payload).digest('base64url');
+  return `v1.${payload}.${sig}`;
+}
+function verifySocialState(state, provider) {
+  if (!state || typeof state !== 'string' || state.length > 2048) return null;
+  const parts = state.split('.');
+  if (parts.length !== 3 || parts[0] !== 'v1') return null;
+  const expected = crypto.createHmac('sha256', socialStateSecret()).update('v1.' + parts[1]).digest('base64url');
+  const a = Buffer.from(parts[2]);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  let data;
+  try { data = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')); } catch (e) { return null; }
+  if (!data || data.p !== provider || typeof data.n !== 'string') return null;
+  const age = Date.now() - Number(data.t);
+  if (!Number.isFinite(age) || age < 0 || age > SOCIAL_STATE_TTL_MS) return null;
+  return data;
+}
+
+// 로그인 후 돌아갈 주소: 같은 사이트 안의 상대경로만 허용(외부 주소·//host·역슬래시·제어문자 차단).
+function sanitizeNextPath(raw) {
+  if (typeof raw !== 'string') return '/';
+  const s = raw.trim();
+  if (!s || s.length > 512 || !s.startsWith('/') || s.startsWith('//') || /[\\\u0000-\u001f\u007f]/.test(s)) return '/';
+  let u;
+  try { u = new URL(s, 'http://same-site.invalid'); } catch (e) { return '/'; }
+  if (u.origin !== 'http://same-site.invalid') return '/';
+  const out = u.pathname + u.search; // 해시는 버린다(세션 전달용 해시를 뒤에 붙이므로)
+  if (/^\/(login|join|reset-password|api\/auth)(\.html)?(\/|$)/i.test(u.pathname)) return '/';
+  return out;
+}
+
+function socialCookieName(provider) { return `wp_oauth_${provider}`; }
+function readCookie(req, name) {
+  const header = req.headers.cookie || '';
+  for (const part of header.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    if (part.slice(0, idx).trim() === name) return decodeURIComponent(part.slice(idx + 1).trim());
+  }
+  return null;
+}
+function socialCookieAttrs(req) {
+  const https = (req.headers['x-forwarded-proto'] || req.protocol) === 'https';
+  return `Path=/api/auth; HttpOnly; SameSite=Lax${https ? '; Secure' : ''}`;
+}
+
+// 로그인/가입 화면으로 오류 안내와 함께 돌려보낸다(출발 화면이 가입 화면이면 가입 화면으로)
+function socialFailRedirect(res, msg, from, next) {
+  const page = from === 'join' ? '/join' : '/login';
+  const qs = new URLSearchParams({ social_error: msg });
+  if (next && next !== '/') qs.set('next', next);
+  res.set('Cache-Control', 'no-store');
+  return res.redirect(`${page}?${qs.toString()}`);
+}
+
+// 제공자 응답 → 공통 형태 { id, email, emailVerified, name, phone }
+function normalizeSocialProfile(provider, body) {
+  if (provider === 'kakao') {
+    if (!body || body.id === undefined || body.id === null) return null;
+    const acc = body.kakao_account || {};
+    const email = acc.email && !acc.email_needs_agreement ? String(acc.email).trim().toLowerCase() : null;
+    return {
+      id: String(body.id),
+      email,
+      // 카카오는 이메일이 '유효하고(is_email_valid) 인증된(is_email_verified)' 경우에만 본인 이메일로 신뢰한다
+      emailVerified: !!(email && acc.is_email_valid === true && acc.is_email_verified === true),
+      name: acc.name || (acc.profile && acc.profile.nickname) || (body.properties && body.properties.nickname) || null,
+      phone: acc.phone_number || null
+    };
+  }
+  const r = body && body.response;
+  if (!r || !r.id) return null;
+  const email = r.email ? String(r.email).trim().toLowerCase() : null;
+  return {
+    id: String(r.id),
+    email,
+    // 네이버 회원정보의 이메일은 네이버가 인증을 거친 연락처 이메일만 내려준다(별도 인증 플래그 없음)
+    emailVerified: !!email,
+    name: r.name || r.nickname || null,
+    phone: r.mobile || null
+  };
+}
+
+class SocialLoginError extends Error {}
+
+// 회원 찾기/연결/생성 → { userId, email, created, linkedBy }
+async function resolveSocialUser(provider, prof) {
+  const nowIso = new Date().toISOString();
+  const assertUsable = async (userId) => {
+    const { data: p } = await supabase.from('profiles').select('id, is_active').eq('id', userId).maybeSingle();
+    if (p && p.is_active === false) throw new SocialLoginError('탈퇴한 계정입니다. 같은 소셜 계정으로 다시 가입하려면 고객센터로 문의해주세요.');
+    const { data: u, error } = await supabase.auth.admin.getUserById(userId);
+    if (error || !u || !u.user) return null;
+    if (u.user.banned_until && new Date(u.user.banned_until).getTime() > Date.now()) {
+      throw new SocialLoginError('이용이 제한된 계정입니다. 고객센터로 문의해주세요.');
+    }
+    return u.user;
+  };
+
+  // ① 이미 연결된 소셜 계정
+  const { data: ident } = await supabase.from('social_identities_with').select('id, user_id').eq('provider', provider).eq('provider_user_id', prof.id).maybeSingle();
+  if (ident) {
+    const user = await assertUsable(ident.user_id);
+    if (user) {
+      await supabase.from('social_identities_with').update({ last_login_at: nowIso }).eq('id', ident.id);
+      return { userId: user.id, email: user.email, created: false, linkedBy: 'existing' };
+    }
+    // 연결된 회원이 사라졌으면(FK cascade로 보통 같이 지워지지만 방어적으로) 연결을 새로 만든다
+  }
+
+  // ② 제공자가 '인증된 이메일'이라고 한 경우에만 같은 이메일의 기존 회원에 연결
+  let userId = null;
+  let linkedBy = null;
+  let created = false;
+  if (prof.email && prof.emailVerified) {
+    const escaped = prof.email.replace(/[\\%_]/g, (c) => '\\' + c);
+    const { data: matches } = await supabase.from('profiles').select('id, is_active').ilike('email', escaped).limit(2);
+    if (matches && matches.length === 1) {
+      userId = matches[0].id;
+      linkedBy = 'email_match';
+    }
+  }
+
+  const syntheticEmail = `${provider}_${prof.id}@social.withplus.local`;
+  if (!userId) {
+    // 인증된 이메일이면 그 이메일로, 아니면 제공자 회원번호 기반 가상 이메일로 가입(마이페이지에서 실제 이메일로 변경 가능)
+    const email = prof.email && prof.emailVerified ? prof.email : syntheticEmail;
+    const meta = { full_name: prof.name || null, oauth_provider: provider, [`${provider}_id`]: prof.id };
+    if (prof.phone) meta.social_phone = prof.phone;
+    const { data: createdUser, error: createErr } = await supabase.auth.admin.createUser({ email, email_confirm: true, user_metadata: meta });
+    if (createErr) {
+      // 같은 이메일의 인증 계정은 있는데 profiles 행이 없는 경우(같은 DB를 쓰는 다른 서비스 가입자 등) - 그 계정에 연결
+      const exists = createErr.code === 'email_exists' || /already (been )?registered|already exists/i.test(createErr.message || '');
+      if (!exists) throw createErr;
+      const { data: linkData, error: linkErr } = await supabase.auth.admin.generateLink({ type: 'magiclink', email });
+      if (linkErr || !linkData || !linkData.user) throw (linkErr || new Error('기존 계정 조회 실패'));
+      userId = linkData.user.id;
+      linkedBy = email === syntheticEmail ? 'existing' : 'email_match';
+    } else {
+      userId = createdUser.user.id;
+      linkedBy = 'created';
+      created = true;
+    }
+  }
+
+  const user = await assertUsable(userId);
+  if (!user) throw new Error('회원 정보를 확인하지 못했습니다');
+
+  // profiles 행 선제 생성(authenticate 미들웨어도 만들어주지만 로그인 직후 화면에서 바로 쓰는 경우 대비)
+  await supabase.from('profiles').upsert([{ id: user.id, email: user.email, full_name: prof.name || null, role: 'member', member_type: 'general' }], { onConflict: 'id', ignoreDuplicates: true });
+
+  const { error: identErr } = await supabase.from('social_identities_with').upsert([{
+    provider, provider_user_id: prof.id, user_id: user.id, email: prof.email || null, email_verified: !!prof.emailVerified,
+    linked_by: linkedBy || 'existing', site: UPLOAD_PLATFORM, last_login_at: nowIso
+  }], { onConflict: 'provider,provider_user_id' });
+  if (identErr) console.error('social_identities_with 저장 실패(로그인은 계속):', identErr.message);
+
+  return { userId: user.id, email: user.email, created, linkedBy };
+}
+
+// 회원 이메일로 매직링크 토큰을 발급받아 서버에서 바로 검증 → 정식 Supabase 세션(access/refresh 토큰)
+async function issueSupabaseSession(email) {
+  const { data, error } = await supabase.auth.admin.generateLink({ type: 'magiclink', email });
+  const tokenHash = data && data.properties && data.properties.hashed_token;
+  if (error || !tokenHash) throw (error || new Error('로그인 토큰 발급 실패'));
+  // 서버 공용 클라이언트(service_role)에 사용자 세션이 섞이지 않도록 매번 일회용 클라이언트로 검증한다
+  const ephemeral = createClient(supabaseUrl, supabaseAnonKey, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+  const { data: verified, error: verifyErr } = await ephemeral.auth.verifyOtp({ type: 'magiclink', token_hash: tokenHash });
+  if (verifyErr || !verified || !verified.session) throw (verifyErr || new Error('세션 발급 실패'));
+  return verified.session;
+}
+
+function socialRedirectUris(req, provider) {
+  const p = SOCIAL_CALLBACK_PATH(provider);
+  const strip = (u) => String(u || '').trim().replace(/\/+$/, '');
+  const list = [];
+  const add = (label, base) => {
+    if (!base || !/^https?:\/\//i.test(base)) return;
+    const url = strip(base) + p;
+    if (!list.some(x => x.url === url)) list.push({ label, url });
+  };
+  add('이 사이트(SITE_URL)', process.env.SITE_URL);
+  add('지금 접속한 주소', getBaseUrl(req));
+  if (UPLOAD_PLATFORM !== 'liveplus') add('LIVE+(LIVEPLUS_URL)', process.env.LIVEPLUS_URL);
+  return list;
+}
+
+// 관리자: 카카오/네이버 로그인 연동 상태 조회 (시크릿 원문은 절대 응답에 포함하지 않음)
+app.get('/api/admin/oauth-config/:provider', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  const provider = req.params.provider;
+  if (!SOCIAL_PROVIDERS[provider]) return res.status(404).json({ error: 'Not Found', message: '지원하지 않는 로그인 방식입니다', timestamp: new Date().toISOString() });
   try {
-    const config = await getOauthConfig('naver');
-    if (!config) return res.status(404).json({ error: 'Not Found', message: '네이버 로그인 연동 정보를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const config = await getOauthConfig(provider);
+    if (!config) return res.status(404).json({ error: 'Not Found', message: `${SOCIAL_PROVIDERS[provider].name} 로그인 연동 정보를 찾을 수 없습니다`, timestamp: new Date().toISOString() });
+    const redirectUris = socialRedirectUris(req, provider);
     res.json({
       success: true,
       data: {
@@ -3411,7 +3654,11 @@ app.get('/api/admin/oauth-config/naver', authenticate, requireRole(['admin', 'su
         client_id: config.client_id || null,
         has_client_secret: !!config.client_secret,
         enabled: config.enabled,
-        callback_url: `${getBaseUrl(req)}/api/auth/naver/callback`,
+        ready: isSocialConfigReady(provider, config),
+        callback_url: `${getBaseUrl(req)}${SOCIAL_CALLBACK_PATH(provider)}`,
+        redirect_uris: redirectUris,
+        service_url: getBaseUrl(req),
+        updated_at: config.updated_at,
         last_tested_at: config.last_tested_at,
         last_test_status: config.last_test_status,
         last_test_message: config.last_test_message
@@ -3419,150 +3666,174 @@ app.get('/api/admin/oauth-config/naver', authenticate, requireRole(['admin', 'su
       timestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error('Error fetching naver oauth config:', err);
+    console.error(`Error fetching ${provider} oauth config:`, err);
     res.status(500).json({ error: 'Failed to fetch oauth config', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
-// 관리자: 네이버 로그인 클라이언트ID/시크릿 저장 (시크릿은 입력값이 있을 때만 갱신 - 빈 값이면 기존 값 유지)
-app.put('/api/admin/oauth-config/naver', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+// 관리자: 키 저장 (시크릿은 입력값이 있을 때만 갱신 - 빈 값이면 기존 값 유지, clear_client_secret=true면 삭제)
+app.put('/api/admin/oauth-config/:provider', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  const provider = req.params.provider;
+  if (!SOCIAL_PROVIDERS[provider]) return res.status(404).json({ error: 'Not Found', message: '지원하지 않는 로그인 방식입니다', timestamp: new Date().toISOString() });
   try {
-    const { client_id, client_secret, enabled } = req.body;
+    const { client_id, client_secret, enabled, clear_client_secret } = req.body || {};
     const updates = { updated_at: new Date().toISOString() };
-    if (client_id !== undefined) updates.client_id = client_id ? String(client_id).trim() : null;
-    if (client_secret !== undefined && client_secret !== '') updates.client_secret = String(client_secret).trim();
+    if (client_id !== undefined) {
+      const v = client_id ? String(client_id).trim() : null;
+      if (v && (v.length > 200 || /\s/.test(v))) return res.status(400).json({ error: 'Bad Request', message: '키 형식이 올바르지 않습니다(공백 없이 붙여넣어 주세요)', timestamp: new Date().toISOString() });
+      updates.client_id = v;
+    }
+    if (clear_client_secret === true) updates.client_secret = null;
+    else if (client_secret !== undefined && client_secret !== null && client_secret !== '') {
+      const v = String(client_secret).trim();
+      if (v.length > 300 || /\s/.test(v)) return res.status(400).json({ error: 'Bad Request', message: 'Client Secret 형식이 올바르지 않습니다(공백 없이 붙여넣어 주세요)', timestamp: new Date().toISOString() });
+      updates.client_secret = v;
+    }
     if (enabled !== undefined) updates.enabled = !!enabled;
-    const { data, error } = await supabase.from('oauth_configs').update(updates).eq('provider_key', 'naver').select().maybeSingle();
+    const { data, error } = await supabase.from('oauth_configs').update(updates).eq('provider_key', provider).select().maybeSingle();
     if (error) throw error;
-    if (!data) return res.status(404).json({ error: 'Not Found', message: '네이버 로그인 연동 정보를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    if (!data) return res.status(404).json({ error: 'Not Found', message: `${SOCIAL_PROVIDERS[provider].name} 로그인 연동 정보를 찾을 수 없습니다`, timestamp: new Date().toISOString() });
+    socialStatusCache = { at: 0, data: null }; // 로그인 버튼 상태 즉시 반영
+    const ready = isSocialConfigReady(provider, data);
     res.json({
       success: true,
-      data: { provider_key: data.provider_key, client_id: data.client_id, has_client_secret: !!data.client_secret, enabled: data.enabled },
-      message: '저장되었습니다',
+      data: { provider_key: data.provider_key, client_id: data.client_id, has_client_secret: !!data.client_secret, enabled: data.enabled, ready },
+      message: data.enabled && !ready
+        ? (SOCIAL_PROVIDERS[provider].requireSecret ? '저장되었습니다. Client ID와 Client Secret을 모두 입력해야 로그인이 동작합니다.' : '저장되었습니다. REST API 키를 입력해야 로그인이 동작합니다.')
+        : '저장되었습니다',
       timestamp: new Date().toISOString()
     });
   } catch (err) {
-    console.error('Error saving naver oauth config:', err);
+    console.error(`Error saving ${provider} oauth config:`, err);
     res.status(500).json({ error: 'Failed to save oauth config', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
-// 네이버 로그인 시작: 로그인 화면의 "네이버로 로그인" 버튼이 location.href로 이 URL에 직접 진입한다
 // 소셜 로그인 준비 상태 — 화면 버튼이 '준비중'인지 바로 쓸 수 있는지 판단하는 데 쓴다(키 값은 내려주지 않음)
-// 카카오·구글: Supabase 인증 설정(external providers), 네이버: oauth_configs(관리자 > 설정에서 등록)
+// 카카오: 서버 키(oauth_configs) 우선, 없으면 Supabase Provider 설정 / 네이버: oauth_configs / 구글: Supabase
 let socialStatusCache = { at: 0, data: null };
 app.get('/api/auth/social-status', async (req, res) => {
   try {
-    if (!socialStatusCache.data || Date.now() - socialStatusCache.at > 5 * 60 * 1000) {
+    if (isSocialTestMode(req)) {
+      return res.json({ success: true, data: { kakao: true, kakao_via: 'server', naver: true, google: false }, timestamp: new Date().toISOString() });
+    }
+    if (!socialStatusCache.data || Date.now() - socialStatusCache.at > 60 * 1000) {
       let external = {};
       try {
-        const r = await fetch(`${supabaseUrl}/auth/v1/settings`, { headers: { apikey: supabaseAnonKey } });
+        const r = await fetch(`${supabaseUrl}/auth/v1/settings`, { headers: { apikey: supabaseAnonKey }, signal: AbortSignal.timeout(5000) });
         if (r.ok) external = (await r.json()).external || {};
       } catch (e) { /* 조회 실패 시 꺼진 것으로 취급 */ }
-      const naver = await getOauthConfig('naver').catch(() => null);
-      socialStatusCache = { at: Date.now(), data: { kakao: !!external.kakao, google: !!external.google, naver: !!(naver && naver.enabled && naver.client_id) } };
+      const [kakao, naver] = await Promise.all([getOauthConfig('kakao').catch(() => null), getOauthConfig('naver').catch(() => null)]);
+      const kakaoServer = isSocialConfigReady('kakao', kakao);
+      socialStatusCache = {
+        at: Date.now(),
+        data: {
+          kakao: kakaoServer || !!external.kakao,
+          kakao_via: kakaoServer ? 'server' : (external.kakao ? 'supabase' : null),
+          google: !!external.google,
+          naver: isSocialConfigReady('naver', naver)
+        }
+      };
     }
     res.json({ success: true, data: socialStatusCache.data, timestamp: new Date().toISOString() });
   } catch (err) {
-    res.json({ success: true, data: { kakao: false, google: false, naver: false }, timestamp: new Date().toISOString() });
+    res.json({ success: true, data: { kakao: false, kakao_via: null, google: false, naver: false }, timestamp: new Date().toISOString() });
   }
 });
 
-app.get('/api/auth/naver/login', async (req, res) => {
+// 로그인 시작: 로그인/가입 화면의 버튼이 location.href로 진입한다 (?next=돌아갈경로&from=login|join)
+app.get('/api/auth/:provider/login', async (req, res, next) => {
+  const provider = req.params.provider;
+  const spec = SOCIAL_PROVIDERS[provider];
+  if (!spec) return next();
+  const nextPath = sanitizeNextPath(req.query.next);
+  const from = req.query.from === 'join' ? 'join' : 'login';
   try {
-    const config = await getOauthConfig('naver');
-    if (!config || !config.enabled || !config.client_id || !config.client_secret) {
-      return res.redirect('/login?social_error=' + encodeURIComponent('네이버 로그인이 아직 설정되지 않았습니다. 이메일로 로그인해주세요.'));
+    const config = await getSocialProviderConfig(provider, req);
+    if (!isSocialConfigReady(provider, config)) {
+      return socialFailRedirect(res, `${spec.name} 로그인이 아직 설정되지 않았습니다. 이메일로 로그인해주세요.`, from, nextPath);
     }
-    const state = signNaverState();
-    const redirectUri = `${getBaseUrl(req)}/api/auth/naver/callback`;
-    const authorizeUrl = 'https://nid.naver.com/oauth2.0/authorize?' + new URLSearchParams({
-      response_type: 'code',
-      client_id: config.client_id,
-      redirect_uri: redirectUri,
-      state
-    }).toString();
-    res.redirect(authorizeUrl);
+    const nonce = crypto.randomBytes(16).toString('base64url');
+    const state = signSocialState({ p: provider, n: nonce, t: Date.now(), r: nextPath, f: from });
+    const redirectUri = `${getBaseUrl(req)}${SOCIAL_CALLBACK_PATH(provider)}`;
+    const params = { response_type: 'code', client_id: config.client_id, redirect_uri: redirectUri, state };
+    res.set('Cache-Control', 'no-store');
+    res.append('Set-Cookie', `${socialCookieName(provider)}=${nonce}; Max-Age=${SOCIAL_STATE_TTL_MS / 1000}; ${socialCookieAttrs(req)}`);
+    res.redirect(`${spec.authorizeUrl}?${new URLSearchParams(params).toString()}`);
   } catch (err) {
-    console.error('Error starting naver oauth:', err);
-    res.redirect('/login?social_error=' + encodeURIComponent('네이버 로그인을 시작하지 못했습니다. 잠시 후 다시 시도해주세요.'));
+    console.error(`Error starting ${provider} oauth:`, err);
+    socialFailRedirect(res, `${spec.name} 로그인을 시작하지 못했습니다. 잠시 후 다시 시도해주세요.`, from, nextPath);
   }
 });
 
-// 네이버 로그인 콜백: 인가코드 → 토큰 교환 → 프로필 조회 → 이메일로 기존회원 매칭(없으면 신규가입,
-// 비밀번호 없는 소셜 전용 계정) → Supabase 매직링크 발급받아 그 링크로 그대로 리다이렉트
-app.get('/api/auth/naver/callback', async (req, res) => {
-  const { code, state, error: naverError } = req.query;
-  const failRedirect = (msg) => res.redirect('/login?social_error=' + encodeURIComponent(msg));
+// 로그인 콜백: 인가코드 → 토큰 → 회원정보 → 회원 연결/가입 → 세션 발급 → 로그인 화면(해시로 세션 전달) → 원래 페이지
+app.get('/api/auth/:provider/callback', async (req, res, next) => {
+  const provider = req.params.provider;
+  const spec = SOCIAL_PROVIDERS[provider];
+  if (!spec) return next();
+  const { code, state, error: providerError, error_description: providerErrorDesc } = req.query;
+  const cookieNonce = readCookie(req, socialCookieName(provider));
+  res.append('Set-Cookie', `${socialCookieName(provider)}=; Max-Age=0; ${socialCookieAttrs(req)}`); // 일회용
+  const stateData = verifySocialState(state, provider);
+  const from = stateData && stateData.f === 'join' ? 'join' : 'login';
+  const nextPath = stateData ? sanitizeNextPath(stateData.r) : '/';
+  const fail = (msg) => socialFailRedirect(res, msg, from, nextPath);
   try {
-    if (naverError) return failRedirect('네이버 로그인이 취소되었거나 거부되었습니다.');
-    if (!verifyNaverState(state)) return failRedirect('로그인 요청이 만료되었거나 올바르지 않습니다. 다시 시도해주세요.');
-    if (!code) return failRedirect('네이버 로그인 인가코드를 받지 못했습니다.');
-
-    const config = await getOauthConfig('naver');
-    if (!config || !config.enabled || !config.client_id || !config.client_secret) {
-      return failRedirect('네이버 로그인이 아직 설정되지 않았습니다.');
+    if (providerError) {
+      const cancelled = providerError === 'access_denied' || /cancel/i.test(String(providerErrorDesc || ''));
+      return fail(cancelled ? `${spec.name} 로그인을 취소했습니다.` : `${spec.name} 로그인이 거부되었습니다. (${String(providerError).slice(0, 60)})`);
     }
+    if (!stateData) return fail('로그인 요청이 만료되었거나 올바르지 않습니다. 다시 시도해주세요.');
+    if (!cookieNonce || cookieNonce !== stateData.n) {
+      return fail('로그인을 시작한 브라우저와 다른 곳에서 돌아왔거나 쿠키가 차단되어 있습니다. 같은 브라우저에서 다시 시도해주세요.');
+    }
+    if (!code || typeof code !== 'string' || code.length > 2048) return fail(`${spec.name} 로그인 인가코드를 받지 못했습니다.`);
 
-    const redirectUri = `${getBaseUrl(req)}/api/auth/naver/callback`;
-    const tokenResp = await fetch('https://nid.naver.com/oauth2.0/token?' + new URLSearchParams({
-      grant_type: 'authorization_code',
-      client_id: config.client_id,
-      client_secret: config.client_secret,
-      code: String(code),
-      state: String(state),
-      redirect_uri: redirectUri
-    }).toString(), { method: 'GET', signal: AbortSignal.timeout(15000) });
+    const config = await getSocialProviderConfig(provider, req);
+    if (!isSocialConfigReady(provider, config)) return fail(`${spec.name} 로그인이 아직 설정되지 않았습니다.`);
+
+    const redirectUri = `${getBaseUrl(req)}${SOCIAL_CALLBACK_PATH(provider)}`;
+    const tokenParams = { grant_type: 'authorization_code', client_id: config.client_id, redirect_uri: redirectUri, code };
+    if (config.client_secret) tokenParams.client_secret = config.client_secret;
+    if (provider === 'naver') tokenParams.state = state;
+    const tokenResp = await socialProviderFetch(req, spec.tokenUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
+      body: new URLSearchParams(tokenParams).toString()
+    });
     const tokenJson = await tokenResp.json().catch(() => null);
-    if (!tokenResp.ok || !tokenJson?.access_token) {
-      console.error('Naver token exchange failed:', tokenJson);
-      return failRedirect('네이버 인증 서버 응답에 실패했습니다. 잠시 후 다시 시도해주세요.');
+    if (!tokenResp.ok || !tokenJson || !tokenJson.access_token) {
+      console.error(`${provider} token exchange failed:`, tokenResp.status, tokenJson && (tokenJson.error_code || tokenJson.error), tokenJson && tokenJson.error_description);
+      const ec = tokenJson && (tokenJson.error_code || tokenJson.error);
+      if (ec === 'KOE010' || ec === 'invalid_client') return fail(`${spec.name} 로그인 키(Client Secret)가 올바르지 않습니다. 관리자에게 문의해주세요.`);
+      if (ec === 'KOE303' || ec === 'KOE006') return fail(`${spec.name} 개발자센터에 등록된 Redirect URI가 이 사이트 주소와 다릅니다. 관리자에게 문의해주세요.`);
+      return fail(`${spec.name} 인증 서버 응답에 실패했습니다. 잠시 후 다시 시도해주세요.`);
     }
 
-    const profileResp = await fetch('https://openapi.naver.com/v1/nid/me', {
-      headers: { Authorization: `Bearer ${tokenJson.access_token}` },
-      signal: AbortSignal.timeout(15000)
+    const profileResp = await socialProviderFetch(req, spec.profileUrl, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${tokenJson.access_token}`, 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' }
     });
     const profileJson = await profileResp.json().catch(() => null);
-    const naverProfile = profileJson?.response;
-    if (!profileResp.ok || !naverProfile?.id) {
-      console.error('Naver profile fetch failed:', profileJson);
-      return failRedirect('네이버 프로필 정보를 가져오지 못했습니다.');
-    }
-    const email = naverProfile.email;
-    if (!email) {
-      return failRedirect('네이버 계정에 이메일 제공 동의가 필요합니다. 네이버 개인정보 설정에서 이메일 제공에 동의한 뒤 다시 시도해주세요.');
+    const prof = profileResp.ok ? normalizeSocialProfile(provider, profileJson) : null;
+    if (!prof) {
+      console.error(`${provider} profile fetch failed:`, profileResp.status);
+      return fail(`${spec.name} 회원 정보를 가져오지 못했습니다. 잠시 후 다시 시도해주세요.`);
     }
 
-    // 이미 가입된 이메일이면 그 계정 그대로 로그인, 처음이면 신규가입(비밀번호 없이 - 소셜 전용 계정)
-    const { data: existingProfile } = await supabase.from('profiles').select('id').eq('email', email).maybeSingle();
-    let userId = existingProfile?.id;
-    if (!userId) {
-      const { data: created, error: createErr } = await supabase.auth.admin.createUser({
-        email,
-        email_confirm: true,
-        user_metadata: { full_name: naverProfile.name || null, oauth_provider: 'naver', naver_id: naverProfile.id }
-      });
-      if (createErr) {
-        console.error('Error creating user from naver profile:', createErr);
-        return failRedirect('회원 생성 중 오류가 발생했습니다: ' + createErr.message);
-      }
-      userId = created.user.id;
-      // authenticate 미들웨어의 ensureProfileExists가 첫 API 호출 시에도 만들어주지만, 로그인 직후
-      // 화면에서 바로 프로필 정보를 쓰는 경우를 대비해 여기서 선제적으로 만들어둔다.
-      await supabase.from('profiles').upsert([{ id: userId, email, full_name: naverProfile.name || null, role: 'member', member_type: 'general' }], { onConflict: 'id', ignoreDuplicates: true });
-    }
+    const result = await resolveSocialUser(provider, prof);
+    const session = await issueSupabaseSession(result.email);
 
-    const redirectTo = `${getBaseUrl(req)}/`;
-    const { data: linkData, error: linkErr } = await supabase.auth.admin.generateLink({ type: 'magiclink', email, options: { redirectTo } });
-    if (linkErr || !linkData?.properties?.action_link) {
-      console.error('Error generating magic link for naver login:', linkErr);
-      return failRedirect('로그인 세션 발급에 실패했습니다. 잠시 후 다시 시도해주세요.');
-    }
-    return res.redirect(linkData.properties.action_link);
+    const qs = new URLSearchParams({ social_done: provider, next: nextPath });
+    if (result.created) qs.set('social_new', '1');
+    const hash = new URLSearchParams({ wp_sso: '1', at: session.access_token, rt: session.refresh_token });
+    res.set('Cache-Control', 'no-store');
+    res.set('Referrer-Policy', 'no-referrer');
+    return res.redirect(`/login?${qs.toString()}#${hash.toString()}`);
   } catch (err) {
-    console.error('Error in naver oauth callback:', err);
-    return failRedirect('네이버 로그인 처리 중 오류가 발생했습니다.');
+    if (err instanceof SocialLoginError) return fail(err.message);
+    console.error(`Error in ${provider} oauth callback:`, err && err.message);
+    return fail(`${spec.name} 로그인 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.`);
   }
 });
 

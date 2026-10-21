@@ -679,7 +679,7 @@
       const session = await getSession();
       if (!session) {
         if (confirm('찜하기는 로그인 후 이용할 수 있습니다. 로그인 화면으로 이동할까요?')) {
-          location.href = '/login';
+          location.href = loginUrl();
         }
         return;
       }
@@ -1897,11 +1897,63 @@
 
   // ============================================
   // 🔑 카카오·네이버 간편 로그인 — 준비된(키 등록된) 방식만 바로 동작하고, 아니면 '준비중' 안내
+  // - 카카오·네이버: 서버가 직접 처리(/api/auth/{provider}/login → 카카오/네이버 동의화면 → 콜백 → 로그인 화면이
+  //   세션을 받아 원래 보던 페이지로 이동). 카카오 서버 키가 없고 Supabase에 Kakao가 켜져 있으면 Supabase 방식.
+  // - 로그인 후 돌아갈 곳: ?next= → 직전 페이지(같은 사이트) → 이번 탭에서 기억해둔 값 순서. 같은 사이트의
+  //   상대경로만 허용(외부 주소로 튕기는 오픈 리다이렉트 방지 - 서버 sanitizeNextPath와 같은 규칙).
   // ============================================
+  function safeReturnPath(raw) {
+    if (typeof raw !== 'string') return '/';
+    const s = raw.trim();
+    if (!s || s.length > 512 || s.charAt(0) !== '/' || s.indexOf('//') === 0 || /[\\\u0000-\u001f\u007f]/.test(s)) return '/';
+    let u;
+    try { u = new URL(s, 'http://same-site.invalid'); } catch (e) { return '/'; }
+    if (u.origin !== 'http://same-site.invalid') return '/';
+    if (/^\/(login|join|reset-password|api\/auth)(\.html)?(\/|$)/i.test(u.pathname)) return '/';
+    return u.pathname + u.search;
+  }
+  function getLoginReturnPath() {
+    let cand = null;
+    try { cand = new URLSearchParams(location.search).get('next'); } catch (e) { /* ignore */ }
+    if (safeReturnPath(cand) === '/' && document.referrer) {
+      try {
+        const r = new URL(document.referrer);
+        if (r.origin === location.origin) cand = r.pathname + r.search;
+      } catch (e) { /* ignore */ }
+    }
+    if (safeReturnPath(cand) === '/') { try { cand = sessionStorage.getItem('wp_login_next'); } catch (e) { /* ignore */ } }
+    const safe = safeReturnPath(cand);
+    try { if (safe !== '/') sessionStorage.setItem('wp_login_next', safe); } catch (e) { /* ignore */ }
+    return safe;
+  }
+  // 로그인 완료 후 원래 페이지로 (가입 화면에서 미뤄둔 마케팅 동의도 이때 반영)
+  async function goAfterLogin(delayMs) {
+    const dest = getLoginReturnPath();
+    try { sessionStorage.removeItem('wp_login_next'); } catch (e) { /* ignore */ }
+    try {
+      if (localStorage.getItem('withplus_pending_marketing_consent') === '1') {
+        const session = await getSession();
+        if (session) {
+          await fetch(API_BASE + '/api/me/profile', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + session.access_token },
+            body: JSON.stringify({ marketing_consent: true })
+          });
+          localStorage.removeItem('withplus_pending_marketing_consent');
+        }
+      }
+    } catch (e) { /* 로그인은 이미 성공 - 동의 반영 실패는 조용히 무시 */ }
+    setTimeout(() => { location.replace(dest); }, delayMs || 0);
+  }
+  // 로그인이 필요한 곳에서 로그인 화면으로 보낼 때 - 지금 페이지로 돌아오도록 next를 붙인다
+  function loginUrl(nextPath) {
+    const next = safeReturnPath(nextPath === undefined ? (location.pathname + location.search) : nextPath);
+    return next === '/' ? '/login' : '/login?next=' + encodeURIComponent(next);
+  }
   let socialStatusPromise = null;
   function getSocialStatus() {
     if (!socialStatusPromise) {
-      socialStatusPromise = fetch(API_BASE + '/api/auth/social-status').then(r => r.json()).then(j => (j && j.data) || {}).catch(() => ({}));
+      socialStatusPromise = fetch(API_BASE + '/api/auth/social-status', { cache: 'no-store' }).then(r => r.json()).then(j => (j && j.data) || {}).catch(() => ({}));
     }
     return socialStatusPromise;
   }
@@ -1909,13 +1961,21 @@
     const status = await getSocialStatus();
     const name = { kakao: '카카오', naver: '네이버', google: '구글' }[provider] || provider;
     if (!status[provider]) throw new Error(`${name} 로그인은 아직 준비 중입니다. 이메일로 계속해주세요.`);
-    if (provider === 'naver') { location.href = API_BASE + '/api/auth/naver/login'; return; }
+    const next = getLoginReturnPath();
+    const from = /^\/join(\.html)?$/.test(location.pathname) ? 'join' : 'login';
+    if (provider === 'naver' || (provider === 'kakao' && status.kakao_via !== 'supabase')) {
+      location.href = API_BASE + '/api/auth/' + provider + '/login?' + new URLSearchParams({ next, from }).toString();
+      return;
+    }
     const client = await getClient();
-    const { error } = await client.auth.signInWithOAuth({ provider, options: { redirectTo: location.origin + '/' } });
+    const redirectTo = location.origin + '/login' + (next !== '/' ? '?next=' + encodeURIComponent(next) : '');
+    const { error } = await client.auth.signInWithOAuth({ provider, options: { redirectTo } });
     if (error) throw new Error(`${name} 로그인을 시작하지 못했습니다: ${error.message}`);
   }
   // 버튼에 준비 상태를 표시하고 클릭을 연결한다. buttons: { kakao: el, naver: el }, msgEl: 안내 문구 영역
-  async function bindSocialButtons(buttons, msgEl) {
+  // options.beforeNavigate: 이동 직전에 호출(가입 화면의 추천인코드·마케팅 동의를 임시 저장하는 용도)
+  async function bindSocialButtons(buttons, msgEl, options) {
+    options = options || {};
     const status = await getSocialStatus();
     Object.entries(buttons).forEach(([provider, btn]) => {
       if (!btn) return;
@@ -1924,8 +1984,16 @@
       btn.classList.remove('disabled');
       btn.addEventListener('click', async (e) => {
         e.preventDefault();
-        try { await socialLogin(provider); }
-        catch (err) { if (msgEl) { msgEl.textContent = err.message; msgEl.classList.add('show'); msgEl.style.display = 'block'; } }
+        if (btn.dataset.busy === '1') return;
+        try {
+          if (status[provider] && typeof options.beforeNavigate === 'function') options.beforeNavigate(provider);
+          btn.dataset.busy = '1';
+          await socialLogin(provider);
+          setTimeout(() => { btn.dataset.busy = ''; }, 4000); // 뒤로가기로 돌아온 경우 다시 누를 수 있게
+        } catch (err) {
+          btn.dataset.busy = '';
+          if (msgEl) { msgEl.textContent = err.message; msgEl.classList.add('show', 'error'); msgEl.classList.remove('success'); msgEl.style.display = 'block'; }
+        }
       });
     });
   }
@@ -2005,6 +2073,10 @@
     mountSlideToPay,
     getSocialStatus,
     socialLogin,
+    safeReturnPath,
+    getLoginReturnPath,
+    goAfterLogin,
+    loginUrl,
     bindSocialButtons,
     renderRatingSummary,
     renderReviewItem,
