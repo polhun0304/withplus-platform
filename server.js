@@ -1288,6 +1288,217 @@ async function getEffectiveMileageRates(communityId) {
   return { personal, community: communityRate };
 }
 
+// ============================================
+// 🔴 라이브 전용 구매 캐시백(적립금) - 네이버쇼핑라이브 "라이브적립금"과 동일한 컨셉.
+// ============================================
+// 일반 마일리지 적립(getMileageRates/getEffectiveMileageRates, 주문에 이미 박제된 personal_earned_points)은
+// 절대 건드리지 않고, 완전히 별개의 보너스 레이어로 mileage_adjustments_with 원장에 추가 적립만 얹는다
+// (시리얼쿠폰/출석체크 보너스와 동일한 패턴) - 그래서 이 기능이 꺼져있거나 실패해도 기존 마일리지 계산/주문
+// 로직에는 아무 영향이 없다. "실제로 라이브 중 예약을 거쳐 산 것"만 인정한다(reservation_ids가 있는 주문만 -
+// 단순히 채널에서 유입된 주문 전체가 아니라, 방송 중 상품을 담아 산 경우로 좁혀야 "라이브 전용"이라는 이름에 맞다).
+let liveCashbackRateCache = null;
+let liveCashbackRateCacheAt = 0;
+const LIVE_CASHBACK_RATE_CACHE_TTL_MS = 30 * 1000;
+
+async function getLiveCashbackRate() {
+  const now = Date.now();
+  if (liveCashbackRateCache !== null && (now - liveCashbackRateCacheAt) < LIVE_CASHBACK_RATE_CACHE_TTL_MS) {
+    return liveCashbackRateCache;
+  }
+  try {
+    const { data, error } = await supabase.from('platform_settings').select('value').eq('key', liveSettingKey('live_cashback_rate')).maybeSingle();
+    const rate = (!error && data && typeof data.value?.rate === 'number') ? data.value.rate : 0;
+    liveCashbackRateCache = rate;
+    liveCashbackRateCacheAt = now;
+    return rate;
+  } catch (err) {
+    console.error('Error fetching live cashback rate:', err);
+    return liveCashbackRateCache || 0;
+  }
+}
+
+async function awardLiveCashbackBonus(userId, orderId, finalPrice) {
+  const rate = await getLiveCashbackRate();
+  if (!rate || rate <= 0) return;
+  const bonus = Math.floor(Number(finalPrice) * rate);
+  if (bonus <= 0) return;
+  await creditMileageAdjustment(userId, bonus, 'live_purchase_cashback', orderId);
+}
+
+// ============================================
+// 🎁 바이럴 공유쿠폰(소문내면 할인) - 카카오톡딜 "소문내면 할인"과 동일한 컨셉.
+// ============================================
+// 시청자가 자신만의 공유링크(share_code)를 만들어 친구에게 보내고, 그 친구가 그 링크로 들어와 같은
+// 세션에서 실제로 구매를 완료하면 공유한 사람과 구매한 사람 양쪽 모두에게 할인쿠폰이 지급된다.
+// - 셀프 공유(자기 링크로 자기가 구매) 방지, 한 세션당 한 사람(피추천인)은 딱 한 번만 보상 대상이 된다
+//   (live_share_redemptions_live(session_id, referred_user_id) 유니크 제약으로 이중 방어).
+// - 마일리지가 아니라 실제 할인쿠폰(coupons 테이블, 마케팅 캠페인과 동일한 issueCouponForBatch 재사용)을
+//   지급하며, target_user_ids로 해당 회원 본인만 쓸 수 있게 제한한다. 라이브 전용 구매 캐시백과 달리
+//   "다음 구매에 쓰라고 주는 것"이라 특정 세션에 묶지 않는다(방송이 끝나도 유효기간 내엔 사용 가능).
+let liveShareCouponSettingsCache = null;
+let liveShareCouponSettingsCacheAt = 0;
+const LIVE_SHARE_COUPON_SETTINGS_CACHE_TTL_MS = 30 * 1000;
+const DEFAULT_LIVE_SHARE_COUPON_SETTINGS = { discount_percent: 0, valid_days: 14 };
+
+function normalizeLiveShareCouponSettings(value) {
+  const v = value && typeof value === 'object' ? value : {};
+  const pct = Number(v.discount_percent);
+  const days = Number(v.valid_days);
+  return {
+    discount_percent: Number.isFinite(pct) ? Math.min(50, Math.max(0, pct)) : 0,
+    valid_days: Number.isFinite(days) && days > 0 ? Math.floor(days) : 14
+  };
+}
+
+async function getLiveShareCouponSettings() {
+  const now = Date.now();
+  if (liveShareCouponSettingsCache && (now - liveShareCouponSettingsCacheAt) < LIVE_SHARE_COUPON_SETTINGS_CACHE_TTL_MS) {
+    return liveShareCouponSettingsCache;
+  }
+  try {
+    const { data, error } = await supabase.from('platform_settings').select('value').eq('key', liveSettingKey('live_share_coupon_settings')).maybeSingle();
+    const settings = normalizeLiveShareCouponSettings(error || !data ? null : data.value);
+    liveShareCouponSettingsCache = settings;
+    liveShareCouponSettingsCacheAt = now;
+    return settings;
+  } catch (err) {
+    console.error('Error fetching live share coupon settings:', err);
+    return liveShareCouponSettingsCache || DEFAULT_LIVE_SHARE_COUPON_SETTINGS;
+  }
+}
+
+function generateShareCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = 'SH';
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+// 이 세션에서 이 사용자의 공유코드를 가져오거나(이미 만든 적 있으면 그대로 재사용) 새로 만든다.
+async function getOrCreateShareLink(sessionId, channelId, userId) {
+  const { data: existing } = await supabase.from(liveTable('live_share_links')).select('share_code').eq('session_id', sessionId).eq('sharer_user_id', userId).maybeSingle();
+  if (existing) return existing.share_code;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const code = generateShareCode();
+    const { data: inserted, error } = await supabase.from(liveTable('live_share_links'))
+      .insert([{ session_id: sessionId, channel_id: channelId, sharer_user_id: userId, share_code: code }])
+      .select('share_code').maybeSingle();
+    if (!error && inserted) return inserted.share_code;
+    // 코드 중복 충돌이거나 동시요청으로 이미 만들어졌을 수 있음 - 다시 조회해서 있으면 그걸 반환
+    const { data: raceCheck } = await supabase.from(liveTable('live_share_links')).select('share_code').eq('session_id', sessionId).eq('sharer_user_id', userId).maybeSingle();
+    if (raceCheck) return raceCheck.share_code;
+  }
+  throw new Error('공유 링크 생성에 실패했습니다');
+}
+
+// 주문 완료 시 호출 - liveAttribution.share_code가 유효한 공유링크를 가리키고, 자기 자신의 링크가 아니며,
+// 이 세션에서 아직 보상을 받은 적 없는 구매자라면 공유한 사람과 구매한 사람 양쪽에 할인쿠폰을 지급한다.
+// 실패해도(중복/자기공유/설정꺼짐/코드무효 등) 조용히 무시하고 절대 주문 자체를 막지 않는다.
+async function awardShareViralCouponIfEligible(buyerId, sessionId, orderId, shareCode) {
+  if (!shareCode) return;
+  const settings = await getLiveShareCouponSettings();
+  if (!settings.discount_percent || settings.discount_percent <= 0) return;
+
+  const { data: link } = await supabase.from(liveTable('live_share_links')).select('*').eq('share_code', String(shareCode).trim().toUpperCase()).maybeSingle();
+  if (!link || link.session_id !== sessionId) return;
+  if (link.sharer_user_id === buyerId) return; // 셀프 공유 방지
+
+  const { data: already } = await supabase.from(liveTable('live_share_redemptions')).select('id').eq('session_id', sessionId).eq('referred_user_id', buyerId).maybeSingle();
+  if (already) return; // 이 세션에서는 이미 보상 대상이 된 적 있음(다른 공유코드로든 이 코드로든)
+
+  const { data: redemption, error: insertErr } = await supabase.from(liveTable('live_share_redemptions')).insert([{
+    share_link_id: link.id, session_id: sessionId, sharer_user_id: link.sharer_user_id, referred_user_id: buyerId,
+    status: 'pending', order_id: orderId
+  }]).select().maybeSingle();
+  if (insertErr || !redemption) return; // 유니크 제약 충돌(동시 주문 등) - 조용히 무시
+
+  try {
+    const template = {
+      label: `친구 공유 할인 쿠폰 (${settings.discount_percent}%)`,
+      discount_type: 'percent', discount_value: settings.discount_percent, valid_days: settings.valid_days, per_user_limit: 1
+    };
+    const sharerCoupon = await issueCouponForBatch([link.sharer_user_id], template, 'live_share_viral_sharer', {
+      codePrefix: 'SHARE', notifyTitle: '🎁 공유 할인쿠폰 도착!',
+      notifyMessage: `공유한 링크로 친구가 구매를 완료해 ${settings.discount_percent}% 할인쿠폰을 받았어요!`
+    });
+    const referredCoupon = await issueCouponForBatch([buyerId], template, 'live_share_viral_referred', {
+      codePrefix: 'SHARE', notifyTitle: '🎁 공유 할인쿠폰 도착!',
+      notifyMessage: `공유받은 링크로 구매하셔서 ${settings.discount_percent}% 할인쿠폰을 받았어요! 다음 구매 때 사용해보세요.`
+    });
+    await supabase.from(liveTable('live_share_redemptions')).update({
+      status: 'rewarded', rewarded_at: new Date().toISOString(),
+      sharer_coupon_code: sharerCoupon ? sharerCoupon.code : null,
+      referred_coupon_code: referredCoupon ? referredCoupon.code : null
+    }).eq('id', redemption.id);
+  } catch (err) {
+    console.error('바이럴 공유쿠폰 발급 오류:', err.message);
+    // 실패해도 redemption 행은 'pending'으로 남는다(주문 자체는 이미 정상 완료됨 - 필요 시 수동 조치 가능)
+  }
+}
+
+// 공개: 현재 공유쿠폰 할인율 조회 (누구나, 로그인 불필요 - 라이브 화면에 "공유하고 둘 다 N% 할인" 버튼 노출 여부 판단용)
+app.get('/api/settings/live-share-coupon', async (req, res) => {
+  try {
+    const settings = await getLiveShareCouponSettings();
+    res.json({ success: true, data: settings, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch live share coupon settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.patch('/api/admin/settings/live-share-coupon', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const pctNum = Number(req.body.discount_percent);
+    const daysNum = req.body.valid_days !== undefined ? Number(req.body.valid_days) : 14;
+    if (!Number.isFinite(pctNum) || pctNum < 0 || pctNum > 50) {
+      return res.status(400).json({ error: 'Bad Request', message: '할인율은 0% ~ 50% 사이여야 합니다', timestamp: new Date().toISOString() });
+    }
+    if (!Number.isFinite(daysNum) || daysNum < 1 || daysNum > 365) {
+      return res.status(400).json({ error: 'Bad Request', message: '유효기간은 1일 ~ 365일 사이여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const settings = { discount_percent: pctNum, valid_days: Math.floor(daysNum) };
+    const { error } = await supabase.from('platform_settings').upsert({
+      key: liveSettingKey('live_share_coupon_settings'), value: settings, updated_at: new Date().toISOString(), updated_by: req.user.id
+    }, { onConflict: 'key' });
+    if (error) throw error;
+    liveShareCouponSettingsCache = settings;
+    liveShareCouponSettingsCacheAt = Date.now();
+    res.json({ success: true, data: settings, message: '공유쿠폰 설정이 변경되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating live share coupon settings:', err);
+    res.status(500).json({ error: 'Failed to update live share coupon settings', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 공개: 현재 라이브 캐시백율 조회 (누구나, 로그인 불필요 - 라이브 화면에 "구매 시 N% 추가 적립" 배지로 노출하기 위함)
+app.get('/api/settings/live-cashback-rate', async (req, res) => {
+  try {
+    const rate = await getLiveCashbackRate();
+    res.json({ success: true, data: { rate }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch live cashback rate', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.patch('/api/admin/settings/live-cashback-rate', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const rateNum = Number(req.body.rate);
+    if (!Number.isFinite(rateNum) || rateNum < 0 || rateNum > 0.5) {
+      return res.status(400).json({ error: 'Bad Request', message: '적립율은 0% ~ 50% 사이여야 합니다', timestamp: new Date().toISOString() });
+    }
+    const { error } = await supabase.from('platform_settings').upsert({
+      key: liveSettingKey('live_cashback_rate'), value: { rate: rateNum }, updated_at: new Date().toISOString(), updated_by: req.user.id
+    }, { onConflict: 'key' });
+    if (error) throw error;
+    liveCashbackRateCache = rateNum;
+    liveCashbackRateCacheAt = Date.now();
+    res.json({ success: true, data: { rate: rateNum }, message: '라이브 캐시백율이 변경되었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error updating live cashback rate:', err);
+    res.status(500).json({ error: 'Failed to update live cashback rate', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 // 공개: 현재 마일리지 적립율 조회 (누구나, 로그인 불필요 - 상품 카드/상세페이지에 표시하기 위함)
 app.get('/api/settings/mileage-rates', async (req, res) => {
   try {
@@ -10329,11 +10540,29 @@ app.patch('/api/admin/wms/agv-tasks/:id/advance', authenticate, requireRole(['ad
 async function evaluateCouponEligibility(coupon, userId, orderAmount) {
   if (!coupon.is_active) return { valid: false, reason: '더 이상 사용할 수 없는 쿠폰입니다' };
 
+  // 📺 라이브 전용 한정 쿠폰 - 그 세션이 지금 실제로 방송 중(live)일 때만 유효, 방송이 끝나면 자동 만료된다.
+  // coupons 테이블은 WITH+/LIVE+ 공유라, 세션은 이 사이트의 라이브 세션 테이블(liveTable)에서만 찾는다 -
+  // 다른 사이트(LIVE+)의 라이브 쿠폰은 여기서 세션이 없으므로 자동으로 사용 불가가 된다.
+  if (coupon.live_session_id) {
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('status').eq('id', coupon.live_session_id).maybeSingle();
+    if (!session || session.status !== 'live') {
+      return { valid: false, reason: '이 쿠폰은 라이브 방송 중에만 사용할 수 있습니다' };
+    }
+  }
+
   // 마케팅자동화(세그먼트 캠페인/등급유지/구매마일스톤)로 특정 회원에게만 발급된 쿠폰인 경우,
   // target_user_ids에 포함되지 않은 회원은 코드를 알아도 사용할 수 없다(target_user_ids가 없거나
   // 빈 배열이면 기존 쿠폰처럼 조건만 맞으면 누구나 사용 가능 - 완전히 하위호환).
   if (Array.isArray(coupon.target_user_ids) && coupon.target_user_ids.length > 0 && !coupon.target_user_ids.includes(userId)) {
     return { valid: false, reason: '본인에게 발급된 쿠폰이 아닙니다' };
+  }
+
+  // 🎟️ 선착순 다운로드 쿠폰(라이브 쿠폰함) - claim_limit이 걸린 공개 쿠폰은 미리 "쿠폰함"에서 다운로드해
+  // 본인 몫을 선점한 사람만 실제로 사용할 수 있다(다운로드 기록은 사이트별 coupon_claims 테이블).
+  // claim_limit이 NULL이면 기존 쿠폰과 완전히 동일하게 동작(하위호환).
+  if (coupon.claim_limit !== null && coupon.claim_limit !== undefined) {
+    const { data: claimRow } = await supabase.from(liveTable('coupon_claims')).select('id').eq('coupon_id', coupon.id).eq('user_id', userId).maybeSingle();
+    if (!claimRow) return { valid: false, reason: '먼저 쿠폰함에서 다운로드해야 사용할 수 있는 쿠폰입니다' };
   }
 
   const now = new Date();
@@ -10555,12 +10784,17 @@ app.get('/api/admin/coupons/suggest-code', authenticate, requireRole(['admin', '
 
 app.post('/api/admin/coupons', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
-    const { code, label, discount_type, discount_value, max_discount_amount, min_order_amount, usage_limit, per_user_limit, valid_from, valid_until } = req.body;
+    const { code, label, discount_type, discount_value, max_discount_amount, min_order_amount, usage_limit, per_user_limit, valid_from, valid_until, live_session_id } = req.body;
     if (!code || !label || !discount_type || !discount_value) {
       return res.status(400).json({ error: 'Bad Request', message: 'Required fields: code, label, discount_type, discount_value', timestamp: new Date().toISOString() });
     }
     if (!['percent', 'fixed'].includes(discount_type)) {
       return res.status(400).json({ error: 'Bad Request', message: "discount_type은 'percent' 또는 'fixed'여야 합니다", timestamp: new Date().toISOString() });
+    }
+    // 📺 라이브 전용 한정 쿠폰(방송 진행 화면에서 발급) - 이 사이트(WITH+)의 라이브 세션만 허용
+    if (live_session_id) {
+      const { data: sessionCheck } = await supabase.from(liveTable('live_sessions')).select('id').eq('id', live_session_id).maybeSingle();
+      if (!sessionCheck) return res.status(400).json({ error: 'Bad Request', message: '존재하지 않는 라이브 세션입니다', timestamp: new Date().toISOString() });
     }
 
     const { data, error } = await supabase
@@ -10576,6 +10810,7 @@ app.post('/api/admin/coupons', authenticate, requireRole(['admin', 'super_admin'
         per_user_limit: per_user_limit ? Number(per_user_limit) : 1,
         valid_from: valid_from || new Date().toISOString(),
         valid_until: valid_until || null,
+        live_session_id: live_session_id || null,
         is_active: true,
         created_by: req.user.id
       }])
