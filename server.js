@@ -3004,7 +3004,16 @@ const MODULE_REGISTRY = [
   { key: 'wms', category: '재고·물류', icon: '🏭', name: '창고관리(WMS)', desc: '이벤트소싱 재고원장, 바코드/Lot 추적, 창고 로케이션(Zone-Rack-Bin), 2D 디지털트윈 평면도(다층 + 층별 최대 5단 복층 지원)와 AGV 이동 시뮬레이션까지 지원합니다.', status: 'active', tabTarget: 'wms' },
   { key: 'marketing_automation', category: '적립·혜택', icon: '📢', name: '마케팅자동화', desc: '등급/누적구매액/주문건수/미구매기간/가입일 조건으로 회원을 골라 타겟 쿠폰을 즉시 발급하는 세그먼트 캠페인과, 등급유지·구매마일스톤 조건을 매일 자동 스캔해 발급하는 자동 쿠폰 규칙을 지원합니다.', status: 'active', tabTarget: 'marketing' },
   { key: 'supplier_settlements', category: '판매·상품 관리', icon: '💰', name: '공급자 정산 관리', desc: '기간별로 공급자(판매자)의 매출·수수료·정산금액을 자동 집계하고, 정산 처리(지급완료 표시)까지 관리합니다.', status: 'active', tabTarget: 'settlements' },
-  { key: 'live_commerce_separate', category: '라이브커머스', icon: '🎬', name: '라이브커머스(LIVE+)', desc: '실시간 라이브 방송 판매(채널·세션 관리, OmniCast 동시송출, 실시간 재고예약, 시청페이지 PG결제, FAN 공식채널 등)는 별도 서비스인 LIVE+에서 제공됩니다. 이 WITH+ 관리자 화면에는 포함되어 있지 않습니다.', status: 'active', tabTarget: null }
+  { key: 'live_channels', category: '라이브커머스(WITH+ 라이브)', icon: '🎬', name: '라이브 채널 관리', desc: 'WITH+ 전용 라이브 방송 채널(FAN+/CREATOR+/BRAND+)을 개설하고, 채널별 등급(티어)·노출 상품·방송 세션을 관리합니다. 데이터는 LIVE+와 분리된 WITH+ 전용 테이블에 저장됩니다.', status: 'active', tabTarget: 'live-commerce' },
+  { key: 'live_sessions', category: '라이브커머스(WITH+ 라이브)', icon: '📡', name: '라이브 세션·방송 진행', desc: '방송 세션을 예약/시작/종료하고, 상품 고정(핀)·실시간 채팅 모더레이션·호스트용 방송 진행 화면(/admin/live-host/채널)을 제공합니다. 방송 시작·예약 알림이 단골(채널 가입자)에게 발송됩니다.', status: 'active', tabTarget: 'live-commerce' },
+  { key: 'live_inventory_reservation', category: '라이브커머스(WITH+ 라이브)', icon: '📦', name: '라이브 세션 재고예약', desc: '방송 중 시청자가 상품을 담으면 세션 한정재고에서 실시간으로 예약(홀드)되어 초과판매를 막고, 미결제 라이브 주문은 30분 뒤 자동 취소·재고 복구됩니다.', status: 'active', tabTarget: 'live-commerce' },
+  { key: 'live_watch_payment', category: '라이브커머스(WITH+ 라이브)', icon: '💳', name: '시청페이지 실시간 결제', desc: '고객용 라이브 시청 페이지(/live/채널)에서 방송을 보면서 바로 결제합니다. 라이브 채널가·라이브 타임세일가가 일반 주문과 같은 가격 규칙으로 서버에서 재계산됩니다. 별도 관리자 설정 화면은 없습니다.', status: 'active', tabTarget: null },
+  { key: 'live_engagement', category: '라이브커머스(WITH+ 라이브)', icon: '⚡', name: '라이브 참여(퀴즈·경매·쿠폰함·선물·공유쿠폰)', desc: '타임세일 카운트다운, 실시간 퀴즈(정답자 선착순 쿠폰), 카운트다운 경매, 선착순 쿠폰함, 가상 선물(마일리지), 바이럴 공유쿠폰, 라이브 구매 캐시백을 제공합니다.', status: 'active', tabTarget: 'live-commerce' },
+  { key: 'live_vod_clips', category: '라이브커머스(WITH+ 라이브)', icon: '🎞️', name: '다시보기(VOD)·하이라이트·게스트', desc: '종료된 방송 다시보기 쇼핑, 하이라이트 클립, 게스트 초대(라이트 멀티호스트)를 지원합니다.', status: 'active', tabTarget: 'live-commerce' },
+  { key: 'live_licenses', category: '라이브커머스(WITH+ 라이브)', icon: '🪪', name: '채널 자격·라이선스 관리', desc: '채널별 업종 자격(라이선스) 상태와 변경 이력을 관리하고, 시청 딥링크·QR 유입 출처를 추적합니다.', status: 'active', tabTarget: 'live-commerce' },
+  { key: 'omnicast', category: '라이브커머스(WITH+ 라이브)', icon: '🛰️', name: 'OmniCast 동시송출', desc: '유튜브/페이스북/Cloudflare Stream/Restream(커스텀 RTMP) 등 여러 플랫폼에 하나의 방송을 동시 송출합니다. 연동키는 WITH+ 전용으로 따로 등록합니다(LIVE+ 키를 쓰지 않음).', status: 'active', tabTarget: 'live-commerce' },
+  { key: 'live_creators', category: '라이브커머스(WITH+ 라이브)', icon: '🤝', name: '크리에이터 제휴 커미션', desc: '크리에이터 추천코드로 유입된 라이브 주문을 귀속하고, 기간별 커미션 정산(지급대기→지급완료)을 관리합니다.', status: 'active', tabTarget: 'live-commerce' },
+  { key: 'fan_official_channel', category: '라이브커머스(WITH+ 라이브)', icon: '⭐', name: 'FAN 공식채널·등급/랭킹', desc: '공식 채널 구조와 시청자 팬 활동 점수, 채널 매출 등급(브론즈~플래티넘)·TOP3 랭킹을 관리합니다.', status: 'active', tabTarget: 'live-commerce' }
 ];
 
 app.get('/api/admin/modules', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
