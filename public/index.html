@@ -1427,33 +1427,50 @@
         .category-icon svg.wp-cat3d { width: 48px !important; height: 48px !important; filter: drop-shadow(0 4px 3px rgba(150,20,60,.25)); transition: transform .2s; }
         .category-item:hover .category-icon svg.wp-cat3d { transform: rotate(-6deg); }
         @media (max-width: 768px) { .category-icon svg.wp-cat3d { width: 38px !important; height: 38px !important; } }
-        /* 🔴 실시간 후기 + 지금 이 순간 */
-        .live-pulse { max-width: calc(var(--wp-container, 1200px) - 40px); margin: 22px auto; display: grid; grid-template-columns: 1.15fr 1fr; gap: 16px; padding: 0; }
+        /* 🔴 실시간 리뷰 + 지금 이 순간 (PC: 좌우 2칸, 모바일: 위아래) */
+        .live-pulse { max-width: calc(var(--wp-container, 1200px) - 40px); margin: 22px auto; display: grid; grid-template-columns: 1.15fr 1fr; gap: 16px; padding: 0; box-sizing: border-box; }
         .lp-card { background: #fff; border: 1px solid #F3E3E8; border-radius: 18px; padding: 16px 18px; box-shadow: 0 6px 18px rgba(232,18,92,.05); min-width: 0; }
-        .lp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-        .lp-head h2 { font-size: 1.12em; font-weight: 800; margin: 0; }
+        .lp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+        .lp-head h2 { font-size: 1.12em; font-weight: 800; margin: 0; display: flex; align-items: center; gap: 6px; min-width: 0; }
         .lp-head h2 b { color: var(--wp-pink, #E8125C); }
-        .lp-more { font-size: .86em; color: #777; text-decoration: none; }
+        .lp-more { font-size: .86em; color: #777; text-decoration: none; white-space: nowrap; }
         .lp-more:hover { color: var(--wp-pink, #E8125C); }
-        .lp-dot { width: 9px; height: 9px; border-radius: 50%; background: #E8125C; box-shadow: 0 0 0 0 rgba(232,18,92,.5); animation: lpPulse 1.6s infinite; }
+        .lp-dot { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; background: #E8125C; box-shadow: 0 0 0 0 rgba(232,18,92,.5); animation: lpPulse 1.6s infinite; }
         @keyframes lpPulse { 0% { box-shadow: 0 0 0 0 rgba(232,18,92,.5); } 70% { box-shadow: 0 0 0 9px rgba(232,18,92,0); } 100% { box-shadow: 0 0 0 0 rgba(232,18,92,0); } }
-        .lp-review-scroll { display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 6px; scrollbar-width: thin; }
-        .lp-rv { flex: 0 0 132px; scroll-snap-align: start; text-decoration: none; color: inherit; }
+        .lp-review-scroll { display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 6px; scrollbar-width: thin; overscroll-behavior-x: contain; }
+        .lp-rv { flex: 0 0 132px; min-width: 0; scroll-snap-align: start; text-decoration: none; color: inherit; }
         .lp-rv-img { width: 132px; height: 132px; border-radius: 12px; background: #F6F1F3 center/cover no-repeat; position: relative; }
         .lp-src { position: absolute; left: 6px; top: 6px; font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 6px; background: rgba(255,255,255,.92); color: #2E7D32; }
         .lp-src.with { color: #E8125C; }
-        .lp-stars { color: #FFB400; font-size: 12px; margin-top: 6px; letter-spacing: 1px; }
-        .lp-rv-text { font-size: 12.5px; line-height: 1.45; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .lp-stars { color: #FFB400; font-size: 12px; margin-top: 6px; letter-spacing: 1px; min-height: 14px; }
+        .lp-rv-text { font-size: 12.5px; line-height: 1.45; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-all; }
         .lp-rv-who { font-size: 11.5px; color: #8A8A8A; margin-top: 3px; }
-        .lp-feed { list-style: none; margin: 0; padding: 0; }
-        .lp-feed li { display: flex; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px dashed #F2E6EA; font-size: 13.5px; }
+        .lp-feed { list-style: none; margin: 0; padding: 0; max-height: 372px; overflow: hidden; }
+        .lp-feed li { display: flex; align-items: center; gap: 10px; padding: 8px 2px; border-bottom: 1px dashed #F2E6EA; font-size: 13.5px; }
         .lp-feed li:last-child { border-bottom: none; }
-        .lp-ava { width: 30px; height: 30px; border-radius: 50%; flex: 0 0 30px; display: flex; align-items: center; justify-content: center; font-size: 14px; background: #FFF0F4; }
-        .lp-feed .lp-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .lp-feed li.lp-new { animation: lpIn .6s ease-out both; background: linear-gradient(90deg, #FFF3F7, rgba(255,243,247,0)); }
+        @keyframes lpIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+        .lp-thumb { position: relative; width: 38px; height: 38px; flex: 0 0 38px; border-radius: 10px; background: #FFF0F4 center/cover no-repeat; }
+        .lp-thumb .wp-emoji { position: absolute; right: -5px; bottom: -5px; width: 20px; height: 20px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.15)); }
+        .lp-thumb.lp-noimg .wp-emoji { position: static; width: 26px; height: 26px; margin: 6px; }
+        .lp-feed .lp-msg { flex: 1; min-width: 0; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-all; }
         .lp-feed .lp-msg a { color: inherit; font-weight: 700; text-decoration: none; }
+        .lp-feed .lp-msg a:hover { color: var(--wp-pink, #E8125C); }
+        .lp-feed .lp-msg .lp-verb { color: #E8125C; font-weight: 700; }
         .lp-feed .lp-time { color: #9A9A9A; font-size: 12px; white-space: nowrap; }
-        .lp-stats { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: linear-gradient(135deg, #FFF0F4, #FFE6EE); font-size: 13px; font-weight: 700; color: #C2185B; }
-        @media (max-width: 860px) { .live-pulse { grid-template-columns: 1fr; margin: 16px 12px; } .lp-rv { flex-basis: 112px; } .lp-rv-img { width: 112px; height: 112px; } }
+        .lp-stats { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: linear-gradient(135deg, #FFF0F4, #FFE6EE); font-size: 13px; font-weight: 700; color: #C2185B; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .lp-empty { color: #999; font-size: .9em; padding: 8px 2px; }
+        @media (max-width: 860px) { .live-pulse { grid-template-columns: 1fr; margin: 16px 12px; max-width: none; } .lp-rv { flex-basis: 112px; } .lp-rv-img { width: 112px; height: 112px; } }
+        @media (max-width: 400px) { .lp-card { padding: 14px 12px; } .lp-feed li { font-size: 13px; gap: 8px; } .lp-feed .lp-time { font-size: 11px; } }
+        /* 🧊 입체(3D) 이모지 아이콘 — Windows/삼성/아이폰 어디서나 같은 모양 (public/images/emoji, Fluent Emoji 3D·MIT) */
+        .wp-emoji { display: inline-block; width: 1.2em; height: 1.2em; vertical-align: -0.25em; object-fit: contain; margin-right: .25em; flex-shrink: 0; }
+        .wms-icon .wp-emoji { width: 1.2em; height: 1.2em; margin: 0; vertical-align: middle; filter: drop-shadow(0 3px 4px rgba(0,0,0,.18)); }
+        .banner-card h3 .wp-emoji { width: 1.3em; height: 1.3em; filter: drop-shadow(0 2px 3px rgba(0,0,0,.2)); }
+        .community-image .wp-emoji { width: 1.1em; height: 1.1em; margin: 0; }
+        .carousel-slide .wp-emoji { width: 1.25em; height: 1.25em; }
+        .lp-head h2 .wp-emoji, .lp-stats .wp-emoji { width: 1.3em; height: 1.3em; margin: 0; }
+        /* 구매 적립 P 코인도 입체감 있게 */
+        .wms-coin { background: radial-gradient(circle at 34% 28%, #FFF1B8 0, #FFD54A 38%, #F5A800 78%, #D98B00 100%) !important; color: #fff; text-shadow: 0 1px 2px rgba(150,90,0,.6); box-shadow: inset 0 -3px 0 rgba(150,90,0,.25), inset 0 3px 4px rgba(255,255,255,.6), 0 3px 6px rgba(0,0,0,.18) !important; }
         /* 🛠 특가 배너 사진 칸 — 관리자가 저장한 크기·위치(--deal-*) 적용 */
         .deal-slide { grid-template-columns: 1fr minmax(140px, var(--deal-col, 54%)) !important; }
         .deal-img { aspect-ratio: var(--deal-ar, 1.39) !important; border-radius: var(--deal-radius, 18px) !important; overflow: hidden; position: relative; transform: translate(var(--deal-dx, 0px), var(--deal-dy, 0px)); }
@@ -1551,10 +1568,10 @@
             <h1>함께할수록 더 큰 나눔</h1>
             <p>구매할 때마다 개인 1% + 커뮤니티 2% 적립</p>
             <div class="hero-carousel">
-                <a href="#category-grid" class="carousel-slide active">🛍️ 쇼핑</a>
-                <a href="/mypage" class="carousel-slide">💰 적립</a>
-                <a href="/communities" class="carousel-slide">🤝 공유</a>
-                <a href="#community-highlight" class="carousel-slide">🌟 성장</a>
+                <a href="#category-grid" class="carousel-slide active"><img class="wp-emoji" src="/images/emoji/bags.png" width="128" height="128" alt="" aria-hidden="true">쇼핑</a>
+                <a href="/mypage" class="carousel-slide"><img class="wp-emoji" src="/images/emoji/moneybag.png" width="128" height="128" alt="" aria-hidden="true">적립</a>
+                <a href="/communities" class="carousel-slide"><img class="wp-emoji" src="/images/emoji/handshake.png" width="128" height="128" alt="" aria-hidden="true">공유</a>
+                <a href="#community-highlight" class="carousel-slide"><img class="wp-emoji" src="/images/emoji/glowstar.png" width="128" height="128" alt="" aria-hidden="true">성장</a>
             </div>
         </div>
         </div>
@@ -1580,7 +1597,7 @@
         <a class="wms-cell" id="wms-grade" href="/login">
             <span class="wms-label">회원등급</span>
             <span class="wms-value" id="wms-grade-value">비회원</span>
-            <span class="wms-icon" aria-hidden="true">👑</span>
+            <span class="wms-icon" aria-hidden="true"><img class="wp-emoji" src="/images/emoji/crown.png" width="128" height="128" alt="" aria-hidden="true"></span>
             <span class="wms-link" id="wms-grade-link">로그인하기 ›</span>
         </a>
         <a class="wms-cell" id="wms-rate" href="/communities">
@@ -1592,13 +1609,13 @@
         <a class="wms-cell" id="wms-coupon" href="/join">
             <span class="wms-label">쿠폰</span>
             <span class="wms-value" id="wms-coupon-value">가입 혜택</span>
-            <span class="wms-icon" aria-hidden="true">🎟️</span>
+            <span class="wms-icon" aria-hidden="true"><img class="wp-emoji" src="/images/emoji/ticket.png" width="128" height="128" alt="" aria-hidden="true"></span>
             <span class="wms-link" id="wms-coupon-link">회원가입 ›</span>
         </a>
         <a class="wms-cell" id="wms-mileage" href="/join">
             <span class="wms-label">보유 적립금</span>
             <span class="wms-value" id="wms-mileage-value">0<small>P</small></span>
-            <span class="wms-icon" aria-hidden="true">🪙</span>
+            <span class="wms-icon" aria-hidden="true"><img class="wp-emoji" src="/images/emoji/coin.png" width="128" height="128" alt="" aria-hidden="true"></span>
             <span class="wms-link" id="wms-mileage-link">적립금 내역 ›</span>
         </a>
     </section>
@@ -1608,21 +1625,21 @@
         <div class="banner-grid">
             <a href="/join" class="banner-card" style="text-decoration:none; display:block;">
                 <div class="banner-card-content">
-                    <h3>🎁 신규 회원 혜택</h3>
-                    <p>첫 구매 시 10% 할인 + 5,000원 마일리지</p>
+                    <h3><img class="wp-emoji" src="/images/emoji/gift.png" width="128" height="128" alt="" aria-hidden="true">신규 회원 혜택</h3>
+                    <p>구매 금액의 1% 적립 · 적립금은 다음 구매에 바로 사용</p>
                     <button type="button">지금 가입하기</button>
                 </div>
             </a>
             <a href="/mypage" class="banner-card" style="background: linear-gradient(135deg, #667EEA, #764BA2); text-decoration:none; display:block;">
                 <div class="banner-card-content">
-                    <h3>⭐ VIP 회원 전용</h3>
+                    <h3><img class="wp-emoji" src="/images/emoji/glowstar.png" width="128" height="128" alt="" aria-hidden="true">VIP 회원 전용</h3>
                     <p>매월 특별 할인 상품 & 빠른 배송</p>
                     <button type="button">등급 올리기</button>
                 </div>
             </a>
             <a href="/communities" class="banner-card" style="background: linear-gradient(135deg, #F093FB, #F5576C); text-decoration:none; display:block;">
                 <div class="banner-card-content">
-                    <h3>🤝 커뮤니티 참여</h3>
+                    <h3><img class="wp-emoji" src="/images/emoji/handshake.png" width="128" height="128" alt="" aria-hidden="true">커뮤니티 참여</h3>
                     <p>구매 시 추가 2% 적립 + 커뮤니티 혜택</p>
                     <button type="button">커뮤니티 보기</button>
                 </div>
@@ -1631,22 +1648,22 @@
     </section>
 
     <!-- 🔥 실시간 랭킹 (실시간 인기 · 구매순 · 오래 본 순 · 노출순 — 서버가 3분마다 자동 계산) -->
-    <!-- 🔴 실시간 후기 + 지금 이 순간 (밴드 후기·구매 후기·실제 주문만 — 이름은 가려서) -->
-    <section class="live-pulse" id="live-pulse" style="display:none;">
+    <!-- 🔴 실시간 리뷰 + 지금 이 순간 (장바구니 담기·결제완료·후기·밴드 후기 — 실제 이벤트만, 이름은 가려서, 30초마다 갱신) -->
+    <section class="live-pulse" id="live-pulse" style="display:none;" aria-label="실시간 활동">
         <div class="lp-card lp-reviews">
-            <div class="lp-head"><h2>💬 실시간 후기</h2><a href="/reviews" class="lp-more">전체보기 ›</a></div>
+            <div class="lp-head"><h2><img class="wp-emoji" src="/images/emoji/speech.png" width="128" height="128" alt="" aria-hidden="true">실시간 리뷰</h2><a href="/reviews" class="lp-more">전체보기 ›</a></div>
             <div class="lp-review-scroll" id="lp-review-scroll"></div>
         </div>
         <div class="lp-card lp-now">
             <div class="lp-head"><h2>지금 이 순간, <b>WITH+</b></h2><span class="lp-dot" aria-hidden="true"></span></div>
-            <ul class="lp-feed" id="lp-feed"></ul>
+            <ul class="lp-feed" id="lp-feed" aria-live="polite"></ul>
             <div class="lp-stats" id="lp-stats"></div>
         </div>
     </section>
 
     <section class="products-section wp-ranking" id="ranking-section">
         <div class="section-header">
-            <h2 class="section-title">🔥 실시간 랭킹</h2>
+            <h2 class="section-title"><img class="wp-emoji" src="/images/emoji/fire.png" width="128" height="128" alt="" aria-hidden="true">실시간 랭킹</h2>
             <span class="rank-updated" id="rank-updated"></span>
         </div>
         <div class="rank-tabs" id="rank-tabs" role="tablist"></div>
@@ -1835,7 +1852,7 @@
     <!-- RECENTLY VIEWED -->
     <section class="recently-viewed" id="recently-viewed-section" style="display:none;">
         <div class="section-header">
-            <h2 class="section-title">👀 최근 본 상품</h2>
+            <h2 class="section-title"><img class="wp-emoji" src="/images/emoji/eyes.png" width="128" height="128" alt="" aria-hidden="true">최근 본 상품</h2>
             <div class="count-selector" id="recently-viewed-count"></div>
         </div>
         <div class="horizontal-scroll" id="recently-viewed-grid">
@@ -1843,23 +1860,15 @@
         </div>
     </section>
 
-    <!-- REALTIME ACTIVITY -->
+    <!-- WITH+ 현황 (실시간 활동·리뷰는 위쪽 "실시간 리뷰 / 지금 이 순간" 카드로 통합) -->
     <!-- 상품 탐색 흐름(베스트→개인화 추천→최근 본 상품)이 끊기지 않도록,
          참여형 콘텐츠(실시간 활동/커뮤니티)는 상품 섹션들이 모두 끝난 뒤 배치한다. -->
     <section class="realtime-section">
-        <h2 class="section-title">🔥 실시간 활동</h2>
+        <h2 class="section-title"><img class="wp-emoji" src="/images/emoji/sparkles.png" width="128" height="128" alt="" aria-hidden="true">WITH+ 한눈에 보기</h2>
         <div class="activity-grid">
-            <!-- Recent Reviews (실제 리뷰 데이터, 작성자는 가운데를 *로 가린 이름만 표시) -->
-            <div class="activity-card">
-                <h3 style="margin-bottom: 15px; font-size: 1.1em;">⭐ 최근 리뷰</h3>
-                <div id="recent-reviews-list">
-                    <div class="activity-item"><span class="activity-action">불러오는 중...</span></div>
-                </div>
-            </div>
-
             <!-- Platform Stats (실제 집계 데이터) -->
             <div class="activity-card">
-                <h3 style="margin-bottom: 15px; font-size: 1.1em;">📊 플랫폼 현황</h3>
+                <h3 style="margin-bottom: 15px; font-size: 1.1em;"><img class="wp-emoji" src="/images/emoji/chart.png" width="128" height="128" alt="" aria-hidden="true">플랫폼 현황</h3>
                 <div id="platform-stats-list">
                     <div class="activity-item"><span class="activity-action">불러오는 중...</span></div>
                 </div>
@@ -1867,7 +1876,7 @@
 
             <!-- Mileage Stats (실제 누적 적립 데이터) -->
             <div class="activity-card">
-                <h3 style="margin-bottom: 15px; font-size: 1.1em;">💰 마일리지 현황</h3>
+                <h3 style="margin-bottom: 15px; font-size: 1.1em;"><img class="wp-emoji" src="/images/emoji/moneybag.png" width="128" height="128" alt="" aria-hidden="true">마일리지 현황</h3>
                 <div id="mileage-stats-list">
                     <div class="activity-item"><span class="activity-action">불러오는 중...</span></div>
                 </div>
@@ -1879,7 +1888,7 @@
     <section class="community-section" id="community-highlight">
         <div class="community-content">
             <div class="community-text">
-                <h2>🤝 WITH+ 커뮤니티</h2>
+                <h2><img class="wp-emoji" src="/images/emoji/handshake.png" width="128" height="128" alt="" aria-hidden="true">WITH+ 커뮤니티</h2>
                 <p>
                     WITH+ 커뮤니티에 참여하면, 단순한 쇼핑을 넘어
                     함께 성장하는 경험을 할 수 있습니다.
@@ -1893,7 +1902,7 @@
                 </ul>
                 <a href="/communities" class="community-cta">커뮤니티 보기</a>
             </div>
-            <div class="community-image">🌍</div>
+            <div class="community-image"><img class="wp-emoji" src="/images/emoji/globe.png" width="128" height="128" alt="" aria-hidden="true"></div>
         </div>
     </section>
 
@@ -2311,8 +2320,29 @@
             }
 
             // ============================================
-            // 🔴 실시간 후기 + 지금 이 순간 — /api/home/live (실제 데이터만, 이름은 가려서)
+            // 🔴 실시간 리뷰 + 지금 이 순간 — /api/home/live (실제 이벤트만, 이름은 가려서)
+            // 장바구니 담기 · 결제완료 · 리뷰 작성 · 밴드 후기를 최신순으로 보여주고 30초마다 새 소식을 위에 끼워 넣는다.
             // ============================================
+            const LP_EMOJI = n => `<img class="wp-emoji" src="/images/emoji/${n}.png" width="128" height="128" alt="" aria-hidden="true">`;
+            const LP_TYPES = {
+                cart_add: { icon: 'cart', verb: '장바구니에 담았습니다', josa: '을(를) ' },
+                order: { icon: 'card', verb: '구매했습니다', josa: '을(를) ' },
+                review: { icon: 'memo', verb: '리뷰를 작성했습니다', josa: ' ' },
+                band_review: { icon: 'speech', verb: '후기를 남겼습니다', josa: ' ', pre: '밴드에 ' }
+            };
+            let lpSeen = null;
+            function renderLpItem(e, isNew) {
+                const esc = WithPlus.escapeHtml;
+                const t = LP_TYPES[e.type] || { icon: 'sparkles', verb: '', josa: '' };
+                const prod = e.product_name
+                    ? (e.product_id ? `<a href="/product/${encodeURIComponent(e.product_id)}">${esc(e.product_name)}</a>` : `<b>${esc(e.product_name)}</b>`) + (e.extra ? ` 외 ${e.extra}건` : '') + t.josa
+                    : '';
+                const img = e.product_image ? WithPlus.safeUrlAttr(e.product_image) : '';
+                return `<li class="${isNew ? 'lp-new' : ''}" data-key="${esc(e.key || '')}">`
+                    + `<span class="lp-thumb${img ? '' : ' lp-noimg'}"${img ? ` style="background-image:url('${img}')"` : ''}>${LP_EMOJI(t.icon)}</span>`
+                    + `<span class="lp-msg">${esc(e.author)}님이 ${t.pre || ""}${prod}<span class="lp-verb">${t.verb}</span></span>`
+                    + `<span class="lp-time" data-at="${esc(e.at)}">${WithPlus.timeAgo(e.at)}</span></li>`;
+            }
             async function loadLivePulse() {
                 const sec = document.getElementById('live-pulse');
                 if (!sec) return;
@@ -2323,49 +2353,45 @@
                     const reviews = d.reviews || [], feed = d.feed || [];
                     if (!reviews.length && !feed.length) return; // 보여줄 실제 데이터가 없으면 섹션을 숨긴 채로 둔다
                     const esc = WithPlus.escapeHtml;
-                    document.getElementById('lp-review-scroll').innerHTML = reviews.length ? reviews.map(r => `
+                    const rvEl = document.getElementById('lp-review-scroll');
+                    if (lpSeen === null || !rvEl.children.length) {
+                        rvEl.innerHTML = reviews.length ? reviews.map(r => `
                         <a class="lp-rv" href="${r.product ? '/product/' + encodeURIComponent(r.product.id) : '/reviews'}">
-                            <div class="lp-rv-img" style="${r.photo ? `background-image:url('${WithPlus.safeUrlAttr(r.photo)}')` : ''}"></div>
+                            <div class="lp-rv-img" style="${r.photo ? `background-image:url('${WithPlus.safeUrlAttr(r.photo)}')` : ''}"><span class="lp-src${r.source === 'band' ? '' : ' with'}">${r.source === 'band' ? '밴드' : 'WITH+'}</span></div>
                             <div class="lp-stars">${r.rating ? '★'.repeat(r.rating) + '<span style="color:#E6E6E6">' + '★'.repeat(5 - r.rating) + '</span>' : ''}</div>
                             <div class="lp-rv-text">${esc(r.text || (r.product ? r.product.name : ''))}</div>
                             <div class="lp-rv-who">${esc(r.author)}님</div>
-                        </a>`).join('') : '<p style="color:#999;font-size:.9em;">아직 공개된 후기가 없습니다</p>';
-                    const icon = { order: '🛍️', review: '⭐', band_review: '⭐' };
-                    const verb = { order: '구매했습니다', review: '후기를 남겼습니다', band_review: '후기를 남겼습니다' };
-                    document.getElementById('lp-feed').innerHTML = feed.map(e => {
-                        const prod = e.product_name ? (e.product_id ? `<a href="/product/${encodeURIComponent(e.product_id)}">${esc(e.product_name)}</a>` : `<b>${esc(e.product_name)}</b>`) + (e.extra ? ` 외 ${e.extra}건` : '') + (e.type === 'order' ? '을(를) ' : ' ') : '';
-                        return `<li><span class="lp-ava">${icon[e.type] || '✨'}</span><span class="lp-msg">${esc(e.author)}님이 ${prod}${verb[e.type] || ''}</span><span class="lp-time">${WithPlus.timeAgo(e.at)}</span></li>`;
-                    }).join('');
-                    const s = d.stats || {};
-                    document.getElementById('lp-stats').textContent = `🛒 누적 주문 ${(s.orders || 0).toLocaleString('ko-KR')}건 · ⭐ 후기 ${((s.reviews || 0) + (s.bandReviews || 0)).toLocaleString('ko-KR')}건`;
-                    sec.style.display = '';
-                } catch (e) { /* 실패하면 섹션을 숨긴 채로 둔다 */ }
-            }
-
-            // ============================================
-            // 최근 리뷰: 실제 리뷰 데이터 (작성자는 개인정보 보호로 비공개)
-            // ============================================
-            async function loadRecentReviews() {
-                const list = document.getElementById('recent-reviews-list');
-                if (!list) return;
-                try {
-                    const { ok, json } = await WithPlus.fetchJSON('/api/reviews/recent?limit=4');
-                    if (!ok || !json.success) throw new Error('리뷰를 불러오지 못했습니다');
-
-                    if (json.data.length === 0) {
-                        list.innerHTML = '<div class="activity-item"><span class="activity-action">아직 작성된 리뷰가 없습니다</span></div>';
-                        return;
+                        </a>`).join('') : '<p class="lp-empty">아직 공개된 후기가 없습니다</p>';
                     }
-
-                    list.innerHTML = json.data.map(r => `
-                        <div class="activity-item">
-                            <span class="activity-action">${'⭐'.repeat(r.rating)} "${WithPlus.escapeHtml(r.comment || '')}" - ${WithPlus.escapeHtml(r.product_name)} · <strong>${WithPlus.escapeHtml(r.author_name || '구매자')}</strong>님</span>
-                            <span class="activity-time">${WithPlus.timeAgo(r.created_at)}</span>
-                        </div>`).join('');
-                } catch (err) {
-                    list.innerHTML = `<div class="activity-item"><span class="activity-action">불러오지 못했습니다: ${WithPlus.escapeHtml(err.message)}</span></div>`;
-                }
+                    const feedEl = document.getElementById('lp-feed');
+                    if (lpSeen === null) {
+                        // 첫 화면: 목록을 그대로 그린다
+                        lpSeen = new Set(feed.map(e => e.key));
+                        feedEl.innerHTML = feed.length ? feed.map(e => renderLpItem(e, false)).join('') : '<li class="lp-empty">최근 활동을 기다리는 중입니다</li>';
+                    } else {
+                        // 갱신: 새 이벤트만 위에 하나씩 부드럽게 끼워 넣는다(최신이 맨 위)
+                        // (늦게 동기화된 옛날 후기처럼 지금 맨 위 소식보다 오래된 건 위에 끼우지 않는다)
+                        const topEl = feedEl.querySelector('.lp-time[data-at]');
+                        const topAt = topEl ? new Date(topEl.dataset.at).getTime() : 0;
+                        const fresh = feed.filter(e => !lpSeen.has(e.key) && new Date(e.at).getTime() >= topAt).reverse();
+                        feed.forEach(e => lpSeen.add(e.key)); // 다음 확인 때 같은 소식을 또 끼우지 않도록 바로 표시
+                        fresh.forEach((e, i) => setTimeout(() => {
+                            const empty = feedEl.querySelector('.lp-empty');
+                            if (empty) empty.remove();
+                            feedEl.insertAdjacentHTML('afterbegin', renderLpItem(e, true));
+                            while (feedEl.children.length > 20) feedEl.lastElementChild.remove();
+                        }, i * 1200));
+                    }
+                    // 상대 시간("7분 전")은 매번 다시 계산
+                    feedEl.querySelectorAll('.lp-time[data-at]').forEach(el => { el.textContent = WithPlus.timeAgo(el.dataset.at); });
+                    const s = d.stats || {};
+                    document.getElementById('lp-stats').innerHTML = `${LP_EMOJI('bags')}누적 주문 ${(s.orders || 0).toLocaleString('ko-KR')}건 · ${LP_EMOJI('star')}후기 ${((s.reviews || 0) + (s.bandReviews || 0)).toLocaleString('ko-KR')}건`;
+                    sec.style.display = '';
+                } catch (e) { /* 실패하면 지금 보이는 내용을 그대로 둔다 */ }
             }
+            // 30초마다 새 소식 확인(탭이 안 보일 때는 쉬었다가, 다시 보이면 바로 확인)
+            setInterval(() => { if (!document.hidden) loadLivePulse(); }, 30000);
+            document.addEventListener('visibilitychange', () => { if (!document.hidden && lpSeen !== null) loadLivePulse(); });
 
             // ============================================
             // 플랫폼 통계 / 마일리지 현황: 실제 집계 데이터
@@ -2410,7 +2436,6 @@
                 loadProductSections(),
                 loadRecommendedProducts(),
                 loadRecentlyViewed(),
-                loadRecentReviews(),
                 loadLivePulse(),
                 initBannerLayout(),
                 loadPlatformStats(),
