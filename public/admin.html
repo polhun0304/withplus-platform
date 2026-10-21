@@ -621,6 +621,7 @@
                 </div>
                 <div class="field"><label>정가 (원) *</label><input type="number" id="pf-price" min="0" required></div>
                 <div class="field"><label>할인가 (원, 선택)</label><input type="number" id="pf-discount-price" min="0"></div>
+                <div class="field" id="pf-channel-preview" style="display:none; background:#F7F9FC; border:1px solid #e3e6ea; border-radius:8px; padding:10px 12px; font-size:0.85em; line-height:1.7;"></div>
                 <div class="field qtp-field">
                     <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
                         <input type="checkbox" id="pf-qtp-enabled" style="width:auto;"> 수량별 가격 옵션 사용
@@ -1295,6 +1296,7 @@
     </footer>
 
     <script src="/vendor/supabase.min.js"></script>
+    <script src="/withplus-pricing.js"></script>
     <script src="/withplus-common.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script>
@@ -4580,6 +4582,38 @@
             document.getElementById('pf-price').addEventListener('input', qtpRecalc);
             document.getElementById('pf-discount-price').addEventListener('input', qtpRecalc);
 
+            // 채널별 자동 가격 미리보기 (기본가 / 예시 분양몰가 / 도매가) - 저장 전 입력값으로 서버가 실제 주문과 같은 계산식으로 계산
+            let channelPreviewTimer = null;
+            let channelPreviewSeq = 0;
+            function scheduleChannelPreview() { clearTimeout(channelPreviewTimer); channelPreviewTimer = setTimeout(refreshChannelPreview, 350); }
+            async function refreshChannelPreview() {
+                const box = document.getElementById('pf-channel-preview');
+                if (!box) return;
+                const price = Number(document.getElementById('pf-price').value);
+                if (!Number.isFinite(price) || price <= 0) { box.style.display = 'none'; return; }
+                const seq = ++channelPreviewSeq;
+                try {
+                    const { ok, json } = await authedFetch('/api/admin/channel-pricing/preview', { method: 'POST', body: JSON.stringify({
+                        product_id: document.getElementById('pf-id').value || null,
+                        price,
+                        discount_price: document.getElementById('pf-discount-price').value || null,
+                        category: document.getElementById('pf-category').value || null
+                    }) });
+                    if (seq !== channelPreviewSeq) return;
+                    if (!ok || !json.success || !json.data) { box.style.display = 'none'; return; }
+                    const d = json.data;
+                    const pct = (n) => (n > 0 ? '+' : '') + n + '%';
+                    const ex = (e, title) => e ? `<div>${title}: <b>${WithPlus.formatPrice(e.unit_price)}</b> <span style="color:#777;">(${WithPlus.escapeHtml(e.community_name)} · 총 적립율 ${e.total_rate_percent}% · ${e.adjust_percent ? pct(e.adjust_percent) : '조정 없음'})</span></div>` : '';
+                    box.innerHTML = `<div style="font-weight:700; margin-bottom:2px;">🏷️ 채널별 자동 가격 미리보기 <span style="font-weight:400; color:#777;">(1개 기준 · 설정 › 채널별 자동 가격)</span></div>` +
+                        `<div>기본가: <b>${WithPlus.formatPrice(d.default_unit_price)}</b> <span style="color:#777;">(일반 회원 · 기본 총 적립율 ${d.base_total_rate_percent}%)</span></div>` +
+                        (d.community_enabled ? ex(d.community_highest, '예시 분양몰가(최고 적립)') + ex(d.community_lowest, '예시 분양몰가(최저 적립)') : '<div style="color:#777;">분양몰 가격 자동조정: 꺼짐</div>') +
+                        `<div>도매가: <b>${WithPlus.formatPrice(d.wholesale_unit_price)}</b> <span style="color:#777;">(${d.wholesale_source === 'product' ? '상품별 도매채널가' : (d.wholesale_source === 'category' ? '카테고리 도매 할인율 -' + d.wholesale_discount_percent + '%' : '기본 도매 할인율 -' + d.wholesale_discount_percent + '%')})</span></div>`;
+                    box.style.display = '';
+                } catch (e) { box.style.display = 'none'; }
+            }
+            ['pf-price', 'pf-discount-price'].forEach(id => document.getElementById(id).addEventListener('input', scheduleChannelPreview));
+            document.getElementById('pf-category').addEventListener('change', scheduleChannelPreview);
+
             function openProductModal(product) {
                 pfMsg.className = 'msg';
                 pfForm.reset();
@@ -4634,6 +4668,7 @@
                 photoDescribeAutoDone = false;
                 clearTimeout(photoDescribeTimer);
                 restorePhotoOpts();
+                refreshChannelPreview();
                 const photoMsgReset = document.getElementById('pf-photo-describe-msg');
                 photoMsgReset.className = 'msg'; photoMsgReset.textContent = '';
                 modal.classList.add('open');
@@ -9807,7 +9842,7 @@
 
                     try {
                         if (!cpmAllProducts) {
-                            const { ok, json } = await WithPlus.fetchJSON('/api/products');
+                            const { ok, json } = await WithPlus.fetchJSON('/api/products', { skipPriceContext: true }); // 관리자는 항상 기본가
                             if (!ok || !json.success) throw new Error('상품 목록을 불러오지 못했습니다');
                             cpmAllProducts = json.data;
                         }
@@ -11114,6 +11149,101 @@
                     if (!a.dataset.loaded) { a.dataset.loaded = '1'; loadBandPosts(); }
                 });
 
+                // ===== 설정: 채널별 자동 가격 (분양몰 공동체가 · 도매가) =====
+                // 서버 GET/PATCH /api/admin/settings/channel-pricing - 계산식은 /withplus-pricing.js (주문 금액과 같은 파일)
+                async function loadChannelPricingCard() {
+                    const card = document.getElementById('channel-pricing-card');
+                    if (!card) return;
+                    try {
+                        const [cpRes, catRes] = await Promise.all([
+                            authedFetch('/api/admin/settings/channel-pricing'),
+                            authedFetch('/api/admin/categories')
+                        ]);
+                        if (!cpRes.ok || !cpRes.json.success) throw new Error(cpRes.json.message || '설정을 불러오지 못했습니다');
+                        const { settings, base_total_rate_percent: baseTotal, communities } = cpRes.json.data;
+                        const cats = [];
+                        const seen = new Set();
+                        ((catRes.ok && catRes.json.success) ? catRes.json.data : []).forEach(c => {
+                            const key = c.db_category || c.slug;
+                            if (!key || seen.has(key)) return;
+                            seen.add(key);
+                            cats.push({ key, label: c.label || key });
+                        });
+                        const fmtPct = (n) => (n > 0 ? '+' : '') + Number(n).toLocaleString('ko-KR', { maximumFractionDigits: 2 }) + '%';
+                        const exampleOf = (bp) => {
+                            const ctx = bp ? { mode: 'community', bp, rounding_unit: settings.rounding_unit } : { mode: 'default' };
+                            return window.WithPlusPricing ? window.WithPlusPricing.unitPrice({ price: 10000 }, ctx) : 10000;
+                        };
+                        card.innerHTML = `
+                            <h3>🏷️ 채널별 자동 가격 (분양몰 · 도매)</h3>
+                            <p class="desc">상품에는 <b>기본가</b>(정가/할인가)만 등록하면, 들어온 경로에 따라 가격이 자동으로 바뀝니다. 화면에 보이는 가격과 실제 결제 금액은 같은 계산식으로 서버가 다시 계산합니다. 관리자 상품 목록에는 항상 기본가가 보입니다.</p>
+                            <div class="subsection-title">🏠 분양몰(공동체) 가격 — 적립율 연동</div>
+                            <p class="desc" style="margin-top:0;">공동체가 = 기본가 × (1 + (그 공동체 총 적립율 − 기본 총 적립율 ${baseTotal}%)). 적립율이 높은 공동체는 그만큼 가격이 오르고, 낮은 공동체는 내려갑니다. 수량별 묶음가도 같은 비율로 바뀝니다. (총 적립율 = 개인 + 커뮤니티 적립율, 공동체별 적립율은 "분양 조직 관리"에서 설정)</p>
+                            <div class="field"><label style="display:flex; align-items:center; gap:6px; cursor:pointer;"><input type="checkbox" id="cp-community-enabled" style="width:auto;" ${settings.community_enabled ? 'checked' : ''}> 분양몰 가격 자동조정 사용</label></div>
+                            <div class="field"><label>반올림 단위</label>
+                                <select id="cp-rounding-unit" style="max-width:160px;">${[1, 10, 100, 1000].map(u => `<option value="${u}" ${Number(settings.rounding_unit) === u ? 'selected' : ''}>${u.toLocaleString('ko-KR')}원 (반올림)</option>`).join('')}</select>
+                            </div>
+                            <div class="field"><label>최대 가감 폭 (±%)</label>
+                                <div class="rate-input-row"><input type="number" id="cp-max-adjust" min="0" max="100" step="0.1" value="${settings.max_adjust_percent}" style="width:120px;"><span>%</span></div>
+                            </div>
+                            <div class="field"><label>공동체별 적용 현황 (체크 = 가격 자동조정 제외)</label>
+                                <div style="max-height:260px; overflow:auto; border:1px solid var(--border-color, #e5e5e5); border-radius:8px;">
+                                    <table style="width:100%; border-collapse:collapse; font-size:0.85em;">
+                                        <thead><tr style="background:#F7F9FC;"><th style="text-align:left; padding:6px 8px;">공동체</th><th style="padding:6px 8px;">총 적립율</th><th style="padding:6px 8px;">가감</th><th style="padding:6px 8px;">10,000원 →</th><th style="padding:6px 8px;">제외</th></tr></thead>
+                                        <tbody>${(communities || []).map(c => `
+                                            <tr style="border-top:1px solid #f0f0f0;${c.status !== 'active' ? ' color:#aaa;' : ''}">
+                                                <td style="padding:6px 8px; word-break:keep-all;">${WithPlus.escapeHtml(c.name)}${c.status !== 'active' ? ' (비활성)' : ''}</td>
+                                                <td style="padding:6px 8px; text-align:center;">${c.total_rate_percent}%</td>
+                                                <td style="padding:6px 8px; text-align:center; color:${c.bp > 0 ? '#C62828' : (c.bp < 0 ? '#1565C0' : '#777')};">${c.bp ? fmtPct(c.adjust_percent) : '없음'}</td>
+                                                <td style="padding:6px 8px; text-align:center;">${WithPlus.formatPrice(exampleOf(c.bp))}</td>
+                                                <td style="padding:6px 8px; text-align:center;"><input type="checkbox" class="cp-exclude" value="${WithPlus.escapeHtml(c.id)}" style="width:auto;" ${c.excluded ? 'checked' : ''}></td>
+                                            </tr>`).join('') || '<tr><td colspan="5" style="padding:10px; color:#999;">등록된 공동체가 없습니다</td></tr>'}</tbody>
+                                    </table>
+                                </div>
+                            </div>
+                            <div class="subsection-title">🏭 도매 가격</div>
+                            <p class="desc" style="margin-top:0;">도매 회원에게는 도매가 = 기본가 − 도매 할인율 이 자동 적용됩니다. 상품별 도매채널가(상품 수정 › 채널별 가격)가 지정돼 있으면 그 값이 가장 우선이고, 다음은 카테고리별 할인율, 마지막이 공통 할인율입니다. 도매가에는 수량별 묶음가가 적용되지 않으며, 도매 회원은 공동체가 대신 도매가로 구매합니다.</p>
+                            <div class="field"><label>도매 기본 할인율 (%)</label>
+                                <div class="rate-input-row"><input type="number" id="cp-wholesale-rate" min="0" max="90" step="0.1" value="${settings.wholesale_discount_percent}" style="width:120px;"><span>%</span></div>
+                            </div>
+                            <div class="field"><label>카테고리별 도매 할인율 (선택 — 비워두면 기본 할인율)</label>
+                                <div style="display:grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap:6px 10px;">
+                                    ${cats.map(c => `<label style="display:flex; align-items:center; gap:6px; font-size:0.85em; min-width:0;"><span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${WithPlus.escapeHtml(c.label)}</span><input type="number" class="cp-cat-rate" data-cat="${WithPlus.escapeHtml(c.key)}" min="0" max="90" step="0.1" value="${settings.wholesale_category_rates && settings.wholesale_category_rates[c.key] !== undefined ? settings.wholesale_category_rates[c.key] : ''}" placeholder="기본" style="width:70px;">%</label>`).join('') || '<span style="color:#999; font-size:0.85em;">카테고리가 없습니다</span>'}
+                                </div>
+                            </div>
+                            <div class="settings-msg" id="cp-msg"></div>
+                            <button type="button" class="settings-save-btn" id="cp-save-btn">저장</button>`;
+                        document.getElementById('cp-save-btn').addEventListener('click', async () => {
+                            const btn = document.getElementById('cp-save-btn');
+                            const msg = document.getElementById('cp-msg');
+                            msg.className = 'settings-msg'; msg.textContent = '';
+                            const catRates = {};
+                            card.querySelectorAll('.cp-cat-rate').forEach(i => { if (i.value !== '') catRates[i.dataset.cat] = Number(i.value); });
+                            const body = {
+                                community_enabled: document.getElementById('cp-community-enabled').checked,
+                                rounding_unit: Number(document.getElementById('cp-rounding-unit').value),
+                                max_adjust_percent: Number(document.getElementById('cp-max-adjust').value),
+                                excluded_community_ids: [...card.querySelectorAll('.cp-exclude:checked')].map(i => i.value),
+                                wholesale_discount_percent: Number(document.getElementById('cp-wholesale-rate').value),
+                                wholesale_category_rates: catRates
+                            };
+                            btn.disabled = true; btn.textContent = '저장 중...';
+                            try {
+                                const { ok, json } = await authedFetch('/api/admin/settings/channel-pricing', { method: 'PATCH', body: JSON.stringify(body) });
+                                if (!ok || !json.success) throw new Error(json.message || '저장에 실패했습니다');
+                                await loadChannelPricingCard();
+                                const m2 = document.getElementById('cp-msg');
+                                if (m2) { m2.className = 'settings-msg success'; m2.textContent = '✅ 저장되었습니다 (최대 30초 안에 전체 쇼핑몰에 반영)'; }
+                            } catch (err) {
+                                msg.className = 'settings-msg error'; msg.textContent = err.message;
+                                btn.disabled = false; btn.textContent = '저장';
+                            }
+                        });
+                    } catch (err) {
+                        card.innerHTML = `<h3>🏷️ 채널별 자동 가격 (분양몰 · 도매)</h3><p class="desc" style="color:#C62828;">${WithPlus.escapeHtml(err.message)}</p>`;
+                    }
+                }
+
                 // ===== 설정: 마일리지 적립율 (관리자가 언제든 동적으로 변경) =====
                 async function loadSettings() {
                     const settingsArea = document.getElementById('settings-area');
@@ -11315,6 +11445,7 @@
                                     <button type="submit" class="settings-save-btn" id="settings-save-btn">저장</button>
                                 </form>
                             </div>
+                            <div class="settings-card" id="channel-pricing-card" style="margin-top:20px; max-width:640px;"><h3>🏷️ 채널별 자동 가격 (분양몰 · 도매)</h3><p class="desc">불러오는 중...</p></div>
                             <div class="settings-card" style="margin-top:20px; max-width:640px;">
                                 <h3>🏅 회원 등급/혜택</h3>
                                 <p class="desc">누적 구매액(취소·환불 제외) 기준으로 회원 등급이 자동 산정됩니다. 등급별로 개인 마일리지 추가 적립율(%p)을 혜택으로 지정할 수 있습니다. 가장 낮은 등급은 기준 금액 0원으로 고정됩니다(모든 회원의 기본 등급).</p>
@@ -11617,6 +11748,7 @@
                             }
                         });
 
+                        loadChannelPricingCard();
                         document.getElementById('mileage-rate-form').addEventListener('submit', async (e) => {
                             e.preventDefault();
                             const msg = document.getElementById('settings-msg');
@@ -11641,6 +11773,7 @@
                                 if (!ok) throw new Error(json.message || '저장에 실패했습니다');
                                 msg.textContent = '저장되었습니다. 플랫폼 전체에 곧 반영됩니다.';
                                 msg.className = 'settings-msg success';
+                                loadChannelPricingCard(); // 기본 적립율이 바뀌면 공동체가 가감률도 바뀐다
                             } catch (err) {
                                 msg.textContent = err.message;
                                 msg.className = 'settings-msg error';

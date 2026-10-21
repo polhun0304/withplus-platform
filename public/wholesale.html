@@ -129,6 +129,7 @@
     </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="/withplus-pricing.js"></script>
     <script src="/withplus-common.js"></script>
     <script>
         const APP = document.getElementById('wholesale-app');
@@ -302,13 +303,17 @@
                 }
                 grid.innerHTML = json.data.map(p => {
                     const img = (p.images_urls && p.images_urls[0]) || '';
-                    const discounted = p.wholesale_price < Number(p.price);
+                    // 도매가 = 상품별 도매채널가 > 카테고리 도매 할인율 > 공통 도매 할인율 (서버가 계산 - 주문 금액과 같다)
+                    const retail = WithPlus.getEffectiveUnitPrice(p);
+                    const discounted = p.wholesale_price < retail;
+                    const offPct = discounted && retail > 0 ? Math.round((1 - p.wholesale_price / retail) * 100) : 0;
                     return `
                     <div class="wprod-card" data-id="${p.id}">
                         ${img ? `<img class="wprod-thumb" src="${WithPlus.escapeHtml(img)}" alt="">` : `<div class="wprod-thumb"></div>`}
                         <div class="wprod-body">
                             <div class="wprod-name">${WithPlus.escapeHtml(p.name)}</div>
-                            <div class="wprod-price">${WithPlus.formatPrice(p.wholesale_price)}${discounted ? `<span class="wprod-price-orig">${WithPlus.formatPrice(p.price)}</span>` : ''}</div>
+                            <div class="wprod-price">${WithPlus.formatPrice(p.wholesale_price)}${discounted ? `<span class="wprod-price-orig">${WithPlus.formatPrice(retail)}</span>` : ''}</div>
+                            <div style="font-size:11px; color:#1565C0; font-weight:600; margin:2px 0 6px;">도매가${offPct > 0 ? ` · 기본가 대비 -${offPct}%` : ''}</div>
                             <button type="button" class="wprod-addbtn">담기</button>
                         </div>
                     </div>`;

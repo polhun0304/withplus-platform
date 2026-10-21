@@ -1816,6 +1816,7 @@
     </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script src="/withplus-pricing.js"></script>
     <script src="/withplus-common.js"></script>
     <script src="/flash-deals.js?v=1"></script>
     <script>
@@ -2145,6 +2146,11 @@
                     if (!res.ok || !json.success) throw new Error(json.message || '추천 상품을 불러오지 못했습니다');
 
                     const sections = json.sections || [];
+                    // 채널별 자동 가격(공동체가/도매가) - 다른 상품 목록(WithPlus.fetchJSON)과 같은 가격으로 보여준다
+                    try {
+                        const priceCtx = await WithPlus.loadPriceContext();
+                        sections.forEach(sec => { sec.products = WithPlus.applyPriceContext(sec.products || [], priceCtx); });
+                    } catch (e) { /* 실패 시 기본가 표시 */ }
                     if (sections.length === 0) { container.innerHTML = ''; return; }
 
                     container.innerHTML = sections.map(sec => `
