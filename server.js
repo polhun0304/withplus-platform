@@ -445,7 +445,7 @@ const isAdminRole = (role) => role === 'admin' || role === 'super_admin';
 // products_with를 조회하는 모든 API가 이 화이트리스트만 select한다 - select('*')를 쓰면 앞으로 테이블에
 // 컬럼이 추가될 때마다(예: cost_price가 이번에 추가된 것처럼) 의도치 않게 새 컬럼이 응답에 새어나갈 수 있으므로,
 // "필요한 컬럼만 명시적으로 나열"하는 화이트리스트 방식으로 통일한다. cost_price는 여기 절대 포함하지 않는다.
-const PRODUCT_SAFE_COLUMNS = 'id, created_at, name, slug, description, long_description, price, discount_price, category, stock, images_urls, supplier_id, rating, review_count, status, detail_sections, vendor_id, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount, brand';
+const PRODUCT_SAFE_COLUMNS = 'id, created_at, name, slug, description, long_description, price, discount_price, quantity_price_options, category, stock, images_urls, supplier_id, rating, review_count, status, detail_sections, vendor_id, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount, brand';
 
 function getClientIp(req) {
   return (req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '').toString().split(',')[0].trim() || null;
@@ -5878,7 +5878,7 @@ app.get('/api/admin/products/check-barcode', authenticate, requireRole(['provide
 
 app.post('/api/products', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
-    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, vendor_id, brand, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount } = req.body;
+    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, vendor_id, brand, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount, quantity_price_options } = req.body;
 
     if (!name || !price || !category) {
       return res.status(400).json({
@@ -5896,6 +5896,12 @@ app.post('/api/products', authenticate, requireRole(['provider', 'admin', 'super
       });
     }
 
+    // 구매수량별 가격 옵션 (선택) - 형식/중복/금액 검증
+    const qtpCreate = normalizeQuantityPriceOptions(quantity_price_options);
+    if (!qtpCreate.ok) {
+      return res.status(400).json({ error: 'Bad Request', message: qtpCreate.message, timestamp: new Date().toISOString() });
+    }
+
     const vatSplit = computeVatSplit(price, supply_amount, vat_amount);
     const initialStock = stock ? parseInt(stock, 10) : 0;
     const { data, error } = await supabase
@@ -5907,6 +5913,7 @@ app.post('/api/products', authenticate, requireRole(['provider', 'admin', 'super
         long_description: long_description || '',
         price: parseFloat(price),
         discount_price: discount_price ? parseFloat(discount_price) : null,
+        quantity_price_options: qtpCreate.value || null,
         category,
         stock: 0,
         barcode: barcode ? String(barcode).trim() : null,
@@ -5971,7 +5978,7 @@ app.post('/api/products', authenticate, requireRole(['provider', 'admin', 'super
 app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, status, vendor_id, brand, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount } = req.body;
+    const { name, description, long_description, price, discount_price, category, stock, images_urls, detail_sections, status, vendor_id, brand, subscription_available, barcode, expiry_date, spec, supply_amount, vat_amount, quantity_price_options } = req.body;
 
     const { data: existing, error: findErr } = await supabase
       .from('products_with')
@@ -5995,7 +6002,14 @@ app.put('/api/products/:id', authenticate, requireRole(['provider', 'admin', 'su
       });
     }
 
+    // 구매수량별 가격 옵션 - 보내지 않으면(undefined) 기존 값 유지, null/[]이면 해제
+    const qtpUpdate = normalizeQuantityPriceOptions(quantity_price_options);
+    if (!qtpUpdate.ok) {
+      return res.status(400).json({ error: 'Bad Request', message: qtpUpdate.message, timestamp: new Date().toISOString() });
+    }
+
     const updates = {};
+    if (qtpUpdate.value !== undefined) updates.quantity_price_options = qtpUpdate.value;
     if (name !== undefined) updates.name = name;
     if (description !== undefined) updates.description = description;
     if (long_description !== undefined) updates.long_description = long_description;
@@ -9660,7 +9674,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
     if (productIds.length > 0) {
       const { data: orderProducts, error: prodErr } = await supabase
         .from('products_with')
-        .select('id, name, price, stock, status')
+        .select('id, name, price, discount_price, quantity_price_options, stock, status')
         .in('id', productIds);
       if (prodErr) throw prodErr;
       (orderProducts || []).forEach(p => { productMap[p.id] = p; });
@@ -9710,9 +9724,10 @@ app.post('/api/orders', authenticate, async (req, res) => {
       }
       // 도매 회원이면 도매채널가(설정돼 있으면)로 대체 - 설정된 채널가가 없으면 기존과 동일하게 온라인 판매가를 사용한다
       // (채널가 조회 화면과 동일한 폴백 규칙 - 관리자가 아직 도매가를 지정하지 않은 상품까지 주문을 막지 않기 위함)
-      let unitPrice = (isWholesaleBuyer && wholesalePriceMap[item.product_id] !== undefined)
-        ? wholesalePriceMap[item.product_id]
-        : (Number(product.price) || 0);
+      // 일반 회원은 화면(상품상세/장바구니)과 동일하게 할인가(discount_price)가 있으면 할인가를 단가로 쓴다 (effectivePriceOf)
+      const useWholesale = isWholesaleBuyer && wholesalePriceMap[item.product_id] !== undefined;
+      let unitPrice = useWholesale ? wholesalePriceMap[item.product_id] : effectivePriceOf(product);
+      let priceAdjustment = 0;
       let variantLabel = '';
 
       if (variants.length > 0) {
@@ -9726,25 +9741,32 @@ app.post('/api/orders', authenticate, async (req, res) => {
         if (Number(variant.stock) < qty) {
           return res.status(400).json({ error: 'Bad Request', message: `재고가 부족합니다: ${product.name} (${variant.name})`, timestamp: new Date().toISOString() });
         }
-        unitPrice += Number(variant.price_adjustment) || 0;
+        priceAdjustment = Number(variant.price_adjustment) || 0;
         variantLabel = ` (${variant.name})`;
       } else if (Number(product.stock) < qty) {
         return res.status(400).json({ error: 'Bad Request', message: `재고가 부족합니다: ${product.name}`, timestamp: new Date().toISOString() });
       }
 
-      verifiedItems.push({
+      // 구매수량별 가격 옵션: 수량이 등록된 묶음 수량과 정확히 같으면 묶음 총액, 아니면 단가 x 수량 (도매가에는 미적용)
+      const line = computeProductLineTotal(product, qty, { unitPrice, priceAdjustment, allowTier: !useWholesale });
+      const verifiedItem = {
         product_id: item.product_id,
         variant_id: item.variant_id || null,
-        name: product.name + variantLabel,
-        price: unitPrice,
+        name: product.name + variantLabel + (line.tier && line.tier.label ? ` [${line.tier.label}]` : ''),
+        price: line.tier ? Math.round((line.lineTotal / qty) * 100) / 100 : unitPrice + priceAdjustment,
         quantity: qty
-      });
+      };
+      if (line.tier) {
+        verifiedItem.line_total = line.lineTotal;
+        verifiedItem.quantity_tier = line.tier;
+      }
+      verifiedItems.push(verifiedItem);
     }
 
-    // 총액 계산 - verifiedItems(서버가 재검증한 가격)만 사용
+    // 총액 계산 - verifiedItems(서버가 재검증한 가격)만 사용 (수량별 가격이 적용된 항목은 line_total)
     let totalPrice = 0;
     for (const item of verifiedItems) {
-      totalPrice += item.price * item.quantity;
+      totalPrice += orderItemLineTotal(item);
     }
 
     // 쿠폰 적용 (있는 경우) - 주문 생성 시점에 서버에서 다시 한번 검증(레이스 컨디션/중복사용 방지)
@@ -10380,7 +10402,7 @@ app.get('/api/provider/orders', authenticate, requireRole(['provider', 'admin', 
       .map(o => {
         const myItems = (o.items || []).filter(it => myProductIds.has(String(it.product_id)));
         if (myItems.length === 0) return null;
-        const mySubtotal = myItems.reduce((sum, it) => sum + Number(it.price || 0) * Number(it.quantity || 1), 0);
+        const mySubtotal = myItems.reduce((sum, it) => sum + orderItemLineTotal(it), 0);
         return {
           id: o.id,
           order_number: o.order_number,
@@ -13349,7 +13371,7 @@ app.get('/api/admin/supplier-sales-report', authenticate, requireRole(['provider
         if (!supplierId) return; // 삭제된 상품 등 공급자를 알 수 없는 라인아이템은 집계에서 제외
         if (onlyOwnSupplierId && supplierId !== onlyOwnSupplierId) return;
         if (!agg[supplierId]) agg[supplierId] = { revenue: 0, quantity: 0, orderIds: new Set() };
-        agg[supplierId].revenue += Number(item.price || 0) * Number(item.quantity || 1);
+        agg[supplierId].revenue += orderItemLineTotal(item);
         agg[supplierId].quantity += Number(item.quantity || 1);
         agg[supplierId].orderIds.add(o.id);
       });
@@ -13433,7 +13455,7 @@ async function computeProviderRevenueForPeriod(startDate, endDate) {
       const supplierId = productSupplierMap[String(item.product_id)];
       if (!supplierId) return; // 삭제된 상품 등 공급자를 알 수 없는 라인아이템은 집계에서 제외
       if (!agg[supplierId]) agg[supplierId] = { revenue: 0, orderIds: new Set() };
-      agg[supplierId].revenue += Number(item.price || 0) * Number(item.quantity || 1);
+      agg[supplierId].revenue += orderItemLineTotal(item);
       touchedSuppliers.add(supplierId);
     });
     touchedSuppliers.forEach(supplierId => agg[supplierId].orderIds.add(o.id));
@@ -14727,6 +14749,78 @@ function effectivePriceOf(p) {
   const dp = p && p.discount_price !== null && p.discount_price !== undefined ? Number(p.discount_price) : null;
   return (dp !== null && Number.isFinite(dp) && dp < price) ? dp : price;
 }
+
+// ============================================
+// 구매수량별 가격 옵션 (products_with.quantity_price_options)
+// 형식: [{ qty: 2, price: 52920(그 수량의 총액), label: '2세트', badge: '구매많음' }]
+// 비어있으면(null/[]) 기존과 완전히 동일하게 "1개 가격 x 수량"으로 계산한다.
+// 주문 금액 계산은 반드시 아래 computeProductLineTotal()만 거쳐야 한다 (가격 규칙 단일화 - 다른 가격 규칙
+// 예: 타임딜 getFlashDealPrice()가 추가되면 이 함수 안에서 단가 결정 단계에 합류시키면 된다).
+// ============================================
+const QUANTITY_PRICE_OPTIONS_MAX = 10;
+
+// 관리자 입력값 검증/정규화 - { ok, value(정규화된 배열 또는 null), message }
+function normalizeQuantityPriceOptions(raw) {
+  if (raw === undefined) return { ok: true, value: undefined };
+  if (raw === null || raw === '' || (Array.isArray(raw) && raw.length === 0)) return { ok: true, value: null };
+  let arr = raw;
+  if (typeof arr === 'string') {
+    try { arr = JSON.parse(arr); } catch (e) { return { ok: false, message: '수량별 가격 옵션 형식이 올바르지 않습니다' }; }
+  }
+  if (!Array.isArray(arr)) return { ok: false, message: '수량별 가격 옵션은 배열이어야 합니다' };
+  if (arr.length === 0) return { ok: true, value: null };
+  if (arr.length > QUANTITY_PRICE_OPTIONS_MAX) return { ok: false, message: `수량별 가격 옵션은 최대 ${QUANTITY_PRICE_OPTIONS_MAX}개까지 등록할 수 있습니다` };
+  const seen = new Set();
+  const out = [];
+  for (const row of arr) {
+    const qty = Number(row && row.qty);
+    const price = Number(row && row.price);
+    if (!Number.isInteger(qty) || qty < 1 || qty > 9999) return { ok: false, message: '수량은 1 이상의 정수여야 합니다' };
+    if (seen.has(qty)) return { ok: false, message: `수량 ${qty}개가 중복되었습니다` };
+    if (!Number.isFinite(price) || price <= 0) return { ok: false, message: `수량 ${qty}개의 판매가는 0보다 커야 합니다` };
+    seen.add(qty);
+    out.push({
+      qty,
+      price: Math.round(price),
+      label: row.label ? String(row.label).trim().slice(0, 30) : '',
+      badge: row.badge ? String(row.badge).trim().slice(0, 20) : ''
+    });
+  }
+  out.sort((a, b) => a.qty - b.qty);
+  return { ok: true, value: out };
+}
+
+// 수량 qty가 등록된 묶음 수량과 정확히 일치하면 그 묶음 총액, 아니면 null
+function getQuantityTierPrice(product, qty) {
+  const opts = product && Array.isArray(product.quantity_price_options) ? product.quantity_price_options : null;
+  if (!opts || opts.length === 0) return null;
+  const q = Number(qty);
+  const tier = opts.find(o => Number(o.qty) === q);
+  if (!tier) return null;
+  const price = Number(tier.price);
+  return Number.isFinite(price) && price > 0 ? price : null;
+}
+
+// 주문 라인 금액 계산 (서버 권위) - unitPrice: 이 상품의 1개 기준 단가(할인가/도매가 반영된 값),
+// priceAdjustment: 옵션(variant) 1개당 가격조정, allowTier: 도매가 등 별도 단가 체계일 때는 false
+function computeProductLineTotal(product, qty, { unitPrice, priceAdjustment = 0, allowTier = true } = {}) {
+  const q = Number(qty) || 1;
+  const base = unitPrice !== undefined ? Number(unitPrice) : effectivePriceOf(product);
+  const adj = Number(priceAdjustment) || 0;
+  const tierTotal = allowTier ? getQuantityTierPrice(product, q) : null;
+  if (tierTotal !== null) {
+    const tier = product.quantity_price_options.find(o => Number(o.qty) === q);
+    return { lineTotal: tierTotal + adj * q, tier: { qty: q, price: tierTotal, label: tier.label || '' } };
+  }
+  return { lineTotal: (base + adj) * q, tier: null };
+}
+
+// 저장된 주문 항목의 라인 금액 - 수량별 가격이 적용된 항목은 line_total을 우선 사용 (단가 x 수량이 소수점 반올림으로 어긋나지 않게)
+function orderItemLineTotal(it) {
+  if (it && it.line_total !== undefined && it.line_total !== null && Number.isFinite(Number(it.line_total))) return Number(it.line_total);
+  return Number((it && it.price) || 0) * Number((it && it.quantity) || 1);
+}
+
 async function triggerPriceDropNotifications(productId, productName, oldEffectivePrice, newEffectivePrice) {
   try {
     const { data: wishlisters, error } = await supabase.from('wishlist_with').select('user_id').eq('product_id', productId);

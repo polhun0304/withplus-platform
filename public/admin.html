@@ -350,6 +350,18 @@
         .bs-row select { min-width: 200px; width: auto; }
         .bs-row label { display: inline-flex !important; gap: 4px; align-items: center; margin: 0; font-weight: 500 !important; }
         .bs-row label input { width: auto; }
+        /* 구매수량별 가격 옵션 편집기 */
+        .qtp-field { background:#F7F9FC; border:1px solid var(--border-color, #e5e5e5); border-radius:8px; padding:12px; }
+        .qtp-rows { display:flex; flex-direction:column; gap:8px; }
+        .qtp-row { display:grid; grid-template-columns: 80px minmax(0,1.2fr) minmax(0,1fr) minmax(0,1fr) auto; gap:6px 8px; align-items:end; background:#fff; border:1px solid #e3e6ea; border-radius:8px; padding:8px; min-width:0; }
+        .qtp-row label { display:flex; flex-direction:column; font-size:0.75em; color:var(--text-gray, #777); gap:3px; min-width:0; }
+        .qtp-row input { width:100%; min-width:0; box-sizing:border-box; }
+        .qtp-row .qtp-calc { grid-column: 1 / -1; font-size:0.8em; color:#555; }
+        .qtp-row .qtp-remove { grid-row:1; grid-column:5; }
+        @media (max-width: 640px) {
+            .qtp-row { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+            .qtp-row .qtp-remove { grid-row:auto; grid-column: 1 / -1; }
+        }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -436,6 +448,17 @@
                 </div>
                 <div class="field"><label>정가 (원) *</label><input type="number" id="pf-price" min="0" required></div>
                 <div class="field"><label>할인가 (원, 선택)</label><input type="number" id="pf-discount-price" min="0"></div>
+                <div class="field qtp-field">
+                    <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+                        <input type="checkbox" id="pf-qtp-enabled" style="width:auto;"> 수량별 가격 옵션 사용
+                    </label>
+                    <p style="font-size:0.78em; color:var(--text-gray); margin:2px 0 6px;">선택하지 않으면 그냥 1개 가격(할인가가 있으면 할인가) × 수량으로 판매됩니다. 선택하면 "2개 52,920원"처럼 수량별 총액을 직접 정할 수 있습니다. (사이즈/색상 옵션이 있으면 옵션 가격조정은 개당 금액만큼 더해집니다)</p>
+                    <div id="pf-qtp-editor" style="display:none;">
+                        <div id="pf-qtp-rows" class="qtp-rows"></div>
+                        <button type="button" class="btn btn-secondary btn-sm" id="pf-qtp-add" style="margin-top:6px;">+ 수량 추가</button>
+                        <p class="msg" id="pf-qtp-msg" style="margin-top:6px;"></p>
+                    </div>
+                </div>
                 <div class="field" id="pf-cost-field" style="display:none; background:#FFF8E1; border:1px dashed #E0A800; border-radius:8px; padding:12px;">
                     <label>🔒 원가 (원) - 대표자 전용</label>
                     <p style="font-size:0.78em; color:var(--text-gray); margin:2px 0 8px;">원가와 마진율은 대표자 계정이 2단계 인증을 완료한 뒤 15분간만 조회/수정할 수 있습니다. 채널별(쇼핑몰/라이브/도매) 판매가는 원가와 각 채널 마진율 정책에 따라 자동으로 계산됩니다.</p>
@@ -3745,6 +3768,92 @@
                 if (msgEl) { msgEl.className = 'msg'; msgEl.textContent = ''; }
             }
 
+            // ============================================
+            // 구매수량별 가격 옵션 편집기 - 행: { 수량, 판매가(총액), 표시 이름, 뱃지 } + 개당 가격/할인율 실시간 표시
+            // ============================================
+            const qtpEnabledEl = document.getElementById('pf-qtp-enabled');
+            const qtpEditorEl = document.getElementById('pf-qtp-editor');
+            const qtpRowsEl = document.getElementById('pf-qtp-rows');
+            const qtpMsgEl = document.getElementById('pf-qtp-msg');
+            function qtpUnitPrice() {
+                const price = Number(document.getElementById('pf-price').value) || 0;
+                const dp = Number(document.getElementById('pf-discount-price').value) || 0;
+                return (dp > 0 && dp < price) ? dp : price;
+            }
+            function qtpAddRow(row) {
+                row = row || {};
+                const div = document.createElement('div');
+                div.className = 'qtp-row';
+                div.innerHTML = `
+                    <label>수량(개)<input type="number" class="qtp-qty" min="1" step="1" value="${row.qty != null ? Number(row.qty) : ''}" placeholder="2"></label>
+                    <label>판매가(총액, 원)<input type="number" class="qtp-price" min="1" step="1" value="${row.price != null ? Number(row.price) : ''}" placeholder="52920"></label>
+                    <label>표시 이름(선택)<input type="text" class="qtp-label" maxlength="30" value="${WithPlus.escapeHtml(row.label || '')}" placeholder="2세트"></label>
+                    <label>뱃지(선택)<input type="text" class="qtp-badge" maxlength="20" value="${WithPlus.escapeHtml(row.badge || '')}" placeholder="구매많음"></label>
+                    <div class="qtp-calc"></div>
+                    <button type="button" class="btn btn-secondary btn-sm qtp-remove" title="이 행 삭제">삭제</button>`;
+                qtpRowsEl.appendChild(div);
+                qtpRecalc();
+            }
+            function qtpRecalc() {
+                const unit = qtpUnitPrice();
+                qtpRowsEl.querySelectorAll('.qtp-row').forEach(r => {
+                    const qty = Number(r.querySelector('.qtp-qty').value);
+                    const price = Number(r.querySelector('.qtp-price').value);
+                    const calc = r.querySelector('.qtp-calc');
+                    if (Number.isInteger(qty) && qty >= 1 && price > 0) {
+                        const per = price / qty;
+                        const rate = unit > 0 ? Math.round((1 - per / unit) * 100) : 0;
+                        calc.innerHTML = `개당 <b>${Math.round(per).toLocaleString('ko-KR')}원</b>` +
+                            (unit > 0 ? (rate > 0 ? ` · 1개 가격 대비 <b style="color:#C62828;">${rate}% 할인</b>` : rate < 0 ? ` · 1개 가격보다 <b style="color:#E65100;">${-rate}% 비쌈</b>` : ' · 1개 가격과 동일') : '');
+                    } else {
+                        calc.textContent = '수량과 판매가를 입력하면 개당 가격이 계산됩니다';
+                    }
+                });
+            }
+            function qtpSetOptions(opts) {
+                qtpRowsEl.innerHTML = '';
+                const list = Array.isArray(opts) ? opts : [];
+                qtpEnabledEl.checked = list.length > 0;
+                qtpEditorEl.style.display = list.length > 0 ? '' : 'none';
+                list.forEach(o => qtpAddRow(o));
+                qtpMsgEl.className = 'msg'; qtpMsgEl.textContent = '';
+            }
+            // 검증 후 배열 반환 (사용 안 함이면 null) - 오류면 throw
+            function qtpCollect() {
+                if (!qtpEnabledEl.checked) return null;
+                const rows = [...qtpRowsEl.querySelectorAll('.qtp-row')];
+                if (rows.length === 0) throw new Error('수량별 가격 옵션을 1개 이상 추가하거나, "수량별 가격 옵션 사용"을 해제해주세요');
+                const seen = new Set();
+                return rows.map(r => {
+                    const qtyRaw = r.querySelector('.qtp-qty').value;
+                    const qty = Number(qtyRaw);
+                    const price = Number(r.querySelector('.qtp-price').value);
+                    if (qtyRaw === '' || !Number.isInteger(qty) || qty < 1) throw new Error('수량별 가격: 수량은 1 이상의 정수여야 합니다');
+                    if (seen.has(qty)) throw new Error(`수량별 가격: 수량 ${qty}개가 중복되었습니다`);
+                    if (!(price > 0)) throw new Error(`수량별 가격: 수량 ${qty}개의 판매가는 0보다 커야 합니다`);
+                    seen.add(qty);
+                    return { qty, price: Math.round(price), label: r.querySelector('.qtp-label').value.trim(), badge: r.querySelector('.qtp-badge').value.trim() };
+                }).sort((a, b) => a.qty - b.qty);
+            }
+            qtpEnabledEl.addEventListener('change', () => {
+                qtpEditorEl.style.display = qtpEnabledEl.checked ? '' : 'none';
+                if (qtpEnabledEl.checked && !qtpRowsEl.querySelector('.qtp-row')) {
+                    const unit = qtpUnitPrice();
+                    qtpAddRow({ qty: 1, price: unit || '' });
+                    qtpAddRow({ qty: 2, price: '', label: '2세트' });
+                }
+            });
+            document.getElementById('pf-qtp-add').addEventListener('click', () => {
+                const used = [...qtpRowsEl.querySelectorAll('.qtp-qty')].map(i => Number(i.value) || 0);
+                qtpAddRow({ qty: (used.length ? Math.max(...used) : 0) + 1 });
+            });
+            qtpRowsEl.addEventListener('click', (e) => {
+                if (e.target.classList.contains('qtp-remove')) { e.target.closest('.qtp-row').remove(); qtpRecalc(); }
+            });
+            qtpRowsEl.addEventListener('input', qtpRecalc);
+            document.getElementById('pf-price').addEventListener('input', qtpRecalc);
+            document.getElementById('pf-discount-price').addEventListener('input', qtpRecalc);
+
             function openProductModal(product) {
                 pfMsg.className = 'msg';
                 pfForm.reset();
@@ -3762,6 +3871,7 @@
                     document.getElementById('pf-description').value = product.description || '';
                     document.getElementById('pf-price').value = product.price;
                     document.getElementById('pf-discount-price').value = product.discount_price || '';
+                    qtpSetOptions(product.quantity_price_options);
                     document.getElementById('pf-stock').value = product.stock;
                     document.getElementById('pf-status').value = product.status;
                     document.getElementById('pf-images').value = Array.isArray(product.images_urls) ? product.images_urls.join('\n') : '';
@@ -3779,6 +3889,7 @@
                 } else {
                     document.getElementById('product-modal-title').textContent = '새 상품 등록';
                     document.getElementById('pf-id').value = '';
+                    qtpSetOptions(null);
                     document.getElementById('pf-status').value = 'active';
                     document.getElementById('pf-vendor').value = '';
                     document.getElementById('pf-brand').value = '';
@@ -3856,7 +3967,19 @@
                     return;
                 }
                 const id = document.getElementById('pf-id').value;
+                let quantityPriceOptions;
+                try {
+                    quantityPriceOptions = qtpCollect();
+                } catch (qtpErr) {
+                    pfMsg.textContent = qtpErr.message;
+                    pfMsg.className = 'msg error';
+                    qtpMsgEl.textContent = qtpErr.message;
+                    qtpMsgEl.className = 'msg error';
+                    return;
+                }
+                qtpMsgEl.className = 'msg'; qtpMsgEl.textContent = '';
                 const payload = {
+                    quantity_price_options: quantityPriceOptions,
                     name: document.getElementById('pf-name').value.trim(),
                     category: document.getElementById('pf-category').value,
                     description: document.getElementById('pf-description').value.trim(),
