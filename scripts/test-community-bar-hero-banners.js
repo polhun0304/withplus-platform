@@ -9,13 +9,16 @@ const BASE = process.env.BASE || 'http://localhost:3107';
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 const admin = createClient(supabaseUrl, process.env.SUPABASE_SERVICE_ROLE_KEY);
-const KEEP = process.argv.includes('--keep'); // 화면 확인용: 정리를 미루고 계정 정보를 출력한 뒤 Enter를 기다린다
+const KEEP = process.argv.includes('--keep'); // 화면 확인용: 정리를 미루고 계정 정보를 출력한 뒤 KEEP_UNTIL 파일이 생기거나 15분이 지나면 정리한다
+const fs = require('fs');
 
 const stamp = Date.now();
 const PASSWORD = 'WithplusTest2026!';
 const BANNER_KEY = 'home_hero_banners' + (process.env.UPLOAD_PLATFORM === 'liveplus' ? '_live' : '');
 const created = { users: [], communities: [], orders: [], storage: [] };
 let originalBannerRow = null;
+let originalConfigRow = null;
+const CONFIG_KEY = 'home_hero_config' + (process.env.UPLOAD_PLATFORM === 'liveplus' ? '_live' : '');
 
 function assert(cond, msg) {
   if (!cond) throw new Error('❌ 검증 실패: ' + msg);
@@ -60,6 +63,8 @@ async function cleanup() {
   console.log('\n--- 정리 시작 ---');
   if (originalBannerRow) await admin.from('platform_settings').upsert(originalBannerRow, { onConflict: 'key' });
   else await admin.from('platform_settings').delete().eq('key', BANNER_KEY);
+  if (originalConfigRow) await admin.from('platform_settings').upsert(originalConfigRow, { onConflict: 'key' });
+  else await admin.from('platform_settings').delete().eq('key', CONFIG_KEY);
   for (const id of created.orders) await admin.from('orders_with').delete().eq('id', id);
   for (const id of created.communities) {
     await admin.from('community_members').delete().eq('community_id', id);
@@ -76,6 +81,8 @@ async function cleanup() {
 async function main() {
   const { data: orig } = await admin.from('platform_settings').select('*').eq('key', BANNER_KEY).maybeSingle();
   originalBannerRow = orig || null;
+  const { data: origCfg } = await admin.from('platform_settings').select('*').eq('key', CONFIG_KEY).maybeSingle();
+  originalConfigRow = origCfg || null;
 
   const hq = await createTestUser(`withplus.wcb.hq.${stamp}@withplus.test`, 'super_admin');
   const member = await createTestUser(`withplus.wcb.member.${stamp}@withplus.test`, null);
@@ -155,13 +162,30 @@ async function main() {
   const alts = pub.json.data.map(b => b.alt);
   assert(JSON.stringify(alts) === JSON.stringify(['테스트 배너 A', '테스트 배너 B']), `공개 API는 켜짐+기간 안 배너만 순서대로 (${alts.join(', ')})`);
   assert(pub.json.data[1].mobile_image === mobile && pub.json.data[1].link_url === '/category/food', '모바일 사진·링크 포함');
+  assert(pub.json.config && pub.json.config.interval_sec >= 2, '공개 API에 슬라이더 옵션(config) 포함');
+
+  // ---------- 3) 슬라이더 옵션·특가 상품 고정 ----------
+  const badSec = await api('/api/admin/home/hero-config', hq.token, { method: 'PUT', body: JSON.stringify({ interval_sec: 1 }) });
+  assert(badSec.status === 400, '자동 넘김 2초 미만 거부');
+  const emptyManual = await api('/api/admin/home/hero-config', hq.token, { method: 'PUT', body: JSON.stringify({ interval_sec: 5, deals: { mode: 'manual', product_ids: [] } }) });
+  assert(emptyManual.status === 400, '직접 선택인데 상품이 없으면 거부');
+  const { data: someProducts } = await admin.from('products_with').select('id').limit(2);
+  const pin = (someProducts || []).map(p => p.id);
+  const cfgPut = await api('/api/admin/home/hero-config', hq.token, { method: 'PUT', body: JSON.stringify({ interval_sec: 6, order: 'deals_first', show_intro: false, deals: { mode: 'manual', product_ids: [...pin, 'not-a-uuid'] } }) });
+  assert(cfgPut.ok && cfgPut.json.data.deals.product_ids.length === pin.length, '특가 상품 고정 저장(잘못된 ID는 걸러냄)');
+  const pub2 = await api('/api/home/hero-banners');
+  assert(pub2.json.config.interval_sec === 6 && pub2.json.config.order === 'deals_first' && pub2.json.config.show_intro === false, '공개 config에 저장 값 반영');
+  const memberCfg = await api('/api/admin/home/hero-config', member.token, { method: 'PUT', body: JSON.stringify({ interval_sec: 5 }) });
+  assert(memberCfg.status === 403, '일반 회원은 슬라이더 설정 저장 불가');
 
   if (KEEP) {
     console.log(`\n[화면 확인용] 회원: ${member.email} / 관리자: ${hq.email} (비밀번호는 스크립트 상수)`);
     console.log('MEMBER_TOKEN=' + member.token);
     console.log('ADMIN_TOKEN=' + hq.token);
-    console.log('Enter를 누르면 정리합니다…');
-    await new Promise(r => process.stdin.once('data', r));
+    const flag = process.env.KEEP_UNTIL || '';
+    console.log('KEEP_UNTIL 파일이 생기면(또는 15분 뒤) 정리합니다…');
+    const until = Date.now() + 15 * 60e3;
+    while (Date.now() < until && !(flag && fs.existsSync(flag))) await new Promise(r => setTimeout(r, 1000));
   }
 }
 

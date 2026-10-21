@@ -10501,7 +10501,7 @@ app.put('/api/admin/layout', authenticate, requireRole(['admin', 'super_admin'])
 // ============================================
 // 🖼️ 홈 메인 이미지 배너 — 관리자가 올린 통이미지 광고 배너(PC/모바일 사진·링크·노출기간·순서·켜기/끄기)
 // - platform_settings key=home_hero_banners(+_live)에 사이트별로 저장(WITH+와 LIVE+가 서로 덮어쓰지 않게)
-// - 홈 슬라이더 맨 앞에 순서대로 붙고, 그 뒤에 기존 소개 배너·오늘의 특가 배너가 이어진다.
+// - 기본은 홈 슬라이더 맨 앞에 순서대로 붙고 그 뒤에 소개 배너·오늘의 특가 배너가 이어진다(순서는 슬라이더 옵션에서 변경).
 // ============================================
 const HERO_BANNERS_KEY = 'home_hero_banners' + LAYOUT_KEY_SUFFIX;
 const HERO_BANNER_MAX = 20;
@@ -10543,15 +10543,67 @@ async function readHeroBanners() {
   const list = data && data.value && Array.isArray(data.value.banners) ? data.value.banners : [];
   return list.slice().sort((a, b) => (Number(a.sort_order) || 0) - (Number(b.sort_order) || 0));
 }
-// 공개: 지금 노출 중인 배너만(켜짐 + 오늘이 노출기간 안)
+// 슬라이더 옵션 — 자동 넘김 간격, 이미지 배너/특가 배너 순서, 소개 배너 표시, 특가 배너 상품 선택(자동/직접 고정)
+// key=home_hero_config(+_live). 특가 사진 칸 크기는 기존 home_banner 배치 설정(box/items)을 그대로 쓴다.
+const HERO_CONFIG_KEY = 'home_hero_config' + LAYOUT_KEY_SUFFIX;
+const HERO_CONFIG_DEFAULTS = { interval_sec: 4, order: 'images_first', show_intro: true, deals: { mode: 'auto', product_ids: [] } };
+const HERO_DEAL_PIN_MAX = 10;
+function normalizeHeroConfig(v) {
+  const c = v && typeof v === 'object' ? v : {};
+  const sec = Math.round(Number(c.interval_sec));
+  const d = c.deals && typeof c.deals === 'object' ? c.deals : {};
+  const ids = Array.isArray(d.product_ids) ? d.product_ids.map(String).filter(id => /^[0-9a-f-]{36}$/i.test(id)) : [];
+  return {
+    interval_sec: Number.isFinite(sec) ? Math.min(15, Math.max(2, sec)) : HERO_CONFIG_DEFAULTS.interval_sec,
+    order: c.order === 'deals_first' ? 'deals_first' : 'images_first',
+    show_intro: c.show_intro !== false,
+    deals: { mode: d.mode === 'manual' ? 'manual' : 'auto', product_ids: [...new Set(ids)].slice(0, HERO_DEAL_PIN_MAX) }
+  };
+}
+async function readHeroConfig() {
+  const { data, error } = await supabase.from('platform_settings').select('value').eq('key', HERO_CONFIG_KEY).maybeSingle();
+  if (error) throw error;
+  return normalizeHeroConfig(data && data.value);
+}
+app.get('/api/admin/home/hero-config', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    res.json({ success: true, data: await readHeroConfig(), timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error reading hero config:', err);
+    res.status(500).json({ error: 'Failed to read config', message: '슬라이더 설정을 불러오지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+app.put('/api/admin/home/hero-config', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const sec = Number(body.interval_sec);
+    if (!Number.isFinite(sec) || sec < 2 || sec > 15) return res.status(400).json({ error: 'Bad Request', message: '자동 넘김 간격은 2~15초 사이로 입력해주세요', timestamp: new Date().toISOString() });
+    if (body.deals && Array.isArray(body.deals.product_ids) && body.deals.product_ids.length > HERO_DEAL_PIN_MAX) {
+      return res.status(400).json({ error: 'Bad Request', message: `특가 배너 상품은 최대 ${HERO_DEAL_PIN_MAX}개까지 고를 수 있습니다`, timestamp: new Date().toISOString() });
+    }
+    const value = normalizeHeroConfig(body);
+    if (value.deals.mode === 'manual' && value.deals.product_ids.length === 0) {
+      return res.status(400).json({ error: 'Bad Request', message: '직접 선택일 때는 상품을 하나 이상 골라주세요', timestamp: new Date().toISOString() });
+    }
+    const { error } = await supabase.from('platform_settings').upsert({ key: HERO_CONFIG_KEY, value, updated_at: new Date().toISOString(), updated_by: req.user.id }, { onConflict: 'key' });
+    if (error) throw error;
+    res.json({ success: true, data: value, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error saving hero config:', err);
+    res.status(500).json({ error: 'Failed to save config', message: '슬라이더 설정을 저장하지 못했습니다', timestamp: new Date().toISOString() });
+  }
+});
+
+// 공개: 지금 노출 중인 배너만(켜짐 + 오늘이 노출기간 안) + 슬라이더 옵션(config)
 app.get('/api/home/hero-banners', async (req, res) => {
   try {
     const today = kstTodayYmd();
+    const config = await readHeroConfig();
     const banners = (await readHeroBanners())
       .filter(b => b.active && b.pc_image && (!b.start_date || b.start_date <= today) && (!b.end_date || b.end_date >= today))
       .map(b => ({ id: b.id, pc_image: b.pc_image, mobile_image: b.mobile_image || '', link_url: b.link_url || '', alt: b.alt || '' }));
     res.set('Cache-Control', 'no-cache');
-    res.json({ success: true, data: banners, timestamp: new Date().toISOString() });
+    res.json({ success: true, data: banners, config, timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error reading hero banners:', err);
     res.status(500).json({ error: 'Failed to read banners', message: '배너를 불러오지 못했습니다', timestamp: new Date().toISOString() });
