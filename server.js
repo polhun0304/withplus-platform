@@ -13518,7 +13518,7 @@ app.get('/api/me/community-summary', authenticate, async (req, res) => {
 // ============================================
 // 조직별 사업자등록번호·수수료율·은행계좌가 그대로 포함되어 나가므로 requireOwnerStepUpOrBootstrap로
 // 대표자 전용 조회로 제한한다("🏢 분양 조직 관리" 탭과 "💵 분양조직 정산" 탭의 조직별 수수료율 섹션이 공유).
-app.get('/api/admin/communities', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+app.get('/api/admin/communities', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { data, error } = await supabase.from('communities').select('*').order('created_at', { ascending: false });
     if (error) throw error;
@@ -16158,11 +16158,7 @@ app.get('/api/admin/community-settlements', authenticate, async (req, res) => {
       // 노출되므로 대표자 전용으로 제한한다. requireRole 미들웨어로 걸 수 없는 이유는 바로 아래 else 분기
       // (분양조직 담당자 본인 조회, 이 검사와 무관)와 같은 엔드포인트를 공유하기 때문 - checkOwnerStepUp을
       // 관리자 분기 안에서만 직접 호출한다(requireOwnerStepUpOrBootstrap과 동일한 로직, 부트스트랩 예외 포함).
-      const stepUpResult = await checkOwnerStepUp(req, { allowBootstrap: true });
-      if (!stepUpResult.ok) {
-        await logCostAudit({ profileId: req.user.id, action: 'step_up_denied', detail: { reason: stepUpResult.reason }, ip: getClientIp(req) });
-        return res.status(stepUpResult.status).json({ error: 'Forbidden', message: stepUpResult.message, timestamp: new Date().toISOString() });
-      }
+      // 형님 결정(2026-10-22): 운영 화면은 관리자(admin)도 사용 — 실제 이체·송금 API 키·원가/마진율·대표자 지정만 대표자 전용
       if (communityId) query = query.eq('community_id', communityId);
     } else {
       const myCommunity = await getMyManagedCommunity(req.user.id);
@@ -19599,7 +19595,7 @@ STATIC_INFO_PAGES.forEach(slug => {
 // ============================================
 
 // 크리에이터 목록 (수수료율 등 마진율급 민감정보 포함 - 대표자 스텝업 필요, provider 목록과 동일한 기준)
-app.get('/api/admin/creators', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+app.get('/api/admin/creators', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { data, error } = await supabase.from(liveTable('live_creators')).select('*').order('created_at', { ascending: false });
     if (error) throw error;
@@ -19611,7 +19607,7 @@ app.get('/api/admin/creators', authenticate, requireRole(['admin', 'super_admin'
 });
 
 // 크리에이터 등록 - 플랫폼 회원일 필요는 없다(user_id는 선택값). 실제 계약이 확정된 뒤 등록하는 것을 전제로 한다.
-app.post('/api/admin/creators', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+app.post('/api/admin/creators', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { display_name, commission_rate, user_id, bank_name, bank_account, account_holder } = req.body || {};
     if (!display_name || !String(display_name).trim()) {
@@ -19638,7 +19634,8 @@ app.post('/api/admin/creators', authenticate, requireRole(['admin', 'super_admin
 });
 
 // 크리에이터 정보 수정(수수료율/상태/세무처리방식/계좌) - provider 수수료율 변경과 동일하게 requireOwnerStepUp(부트스트랩 예외 없음) 필수
-app.patch('/api/admin/creators/:id', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUp, async (req, res) => {
+// 형님 결정(2026-10-22): 운영 화면은 관리자(admin)도 사용 — 실제 이체·송금 API 키·원가/마진율·대표자 지정만 대표자 전용
+app.patch('/api/admin/creators/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { id } = req.params;
     const { data: existing } = await supabase.from(liveTable('live_creators')).select('id').eq('id', id).maybeSingle();
@@ -19694,7 +19691,7 @@ async function generateUniqueCreatorReferralCode() {
   return `CR${Date.now().toString(36).toUpperCase()}`;
 }
 
-app.post('/api/admin/creators/:id/referral-codes', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+app.post('/api/admin/creators/:id/referral-codes', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { data: creator } = await supabase.from(liveTable('live_creators')).select('id').eq('id', req.params.id).maybeSingle();
     if (!creator) return res.status(404).json({ error: 'Not Found', message: '크리에이터를 찾을 수 없습니다', timestamp: new Date().toISOString() });
@@ -19718,7 +19715,7 @@ app.post('/api/admin/creators/:id/referral-codes', authenticate, requireRole(['a
   }
 });
 
-app.get('/api/admin/creators/:id/referral-codes', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+app.get('/api/admin/creators/:id/referral-codes', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { data, error } = await supabase.from(liveTable('live_creator_referral_codes'))
       .select('*').eq('creator_id', req.params.id).order('created_at', { ascending: false });
@@ -19731,7 +19728,7 @@ app.get('/api/admin/creators/:id/referral-codes', authenticate, requireRole(['ad
 });
 
 // 코드 활성/비활성 전환 - 삭제하지 않고 비활성화만 지원한다(이미 이 코드로 유입된 과거 주문 기록은 그대로 보존).
-app.patch('/api/admin/creators/referral-codes/:codeId', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+app.patch('/api/admin/creators/referral-codes/:codeId', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     if (!['active', 'inactive'].includes(req.body?.status)) {
       return res.status(400).json({ error: 'Bad Request', message: "status는 'active' 또는 'inactive'여야 합니다", timestamp: new Date().toISOString() });
@@ -19923,7 +19920,7 @@ async function computeCreatorRevenueForPeriod(startDate, endDate) {
 }
 
 // 기간을 지정해 크리에이터별 정산 내역 생성(또는 재계산). 이미 'paid' 상태인 건은 건드리지 않는다. 관리자 전용.
-app.post('/api/admin/creator-settlements/generate', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+app.post('/api/admin/creator-settlements/generate', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { startDate, endDate } = req.body || {};
     if (!startDate || !endDate) {
@@ -19996,7 +19993,7 @@ app.post('/api/admin/creator-settlements/generate', authenticate, requireRole(['
   }
 });
 
-app.get('/api/admin/creator-settlements', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+app.get('/api/admin/creator-settlements', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { status, creatorId } = req.query;
     let query = supabase.from(liveTable('live_creator_settlements')).select('*').order('period_start', { ascending: false });
@@ -20022,7 +20019,7 @@ app.get('/api/admin/creator-settlements', authenticate, requireRole(['admin', 's
 });
 
 // 정산 상태 변경(지급완료/취소) - 지급완료 시점에 계좌정보 스냅샷 필수 + 세무처리 스냅샷(공급자/분양조직과 동일한 규칙)
-app.patch('/api/admin/creator-settlements/:id/status', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+app.patch('/api/admin/creator-settlements/:id/status', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { id } = req.params;
     const { status, payout_memo } = req.body || {};
