@@ -667,7 +667,6 @@
                             <a href="/my-info"><span class="ico">📮</span>수신 동의 설정</a>
                             <a href="/board/qa"><span class="ico">💬</span>1:1 문의</a>
                             <a href="/support"><span class="ico">🎧</span>고객센터</a>
-                            <a href="#withdraw"><span class="ico">🚪</span>회원탈퇴</a>
                         </nav>
                         <div class="push-card" id="push-card">
                             <div><b>🔔 앱 푸시 알림</b><p id="push-desc">주문·배송, 특가, 리뷰 요청 소식을 휴대폰 알림으로 받아보세요.</p></div>
@@ -703,7 +702,8 @@
                         </h2>
                         ${notificationsHtml}
                         ${sectionsHtml}
-                        <div style="text-align:center; margin-top:40px;">
+                        <!-- 회원탈퇴는 마이페이지에 바로 보이지 않게 숨기고, 내 정보 수정(/my-info) 맨 아래 '계정 관리'에서 /mypage#withdraw 로 들어와 연다 -->
+                        <div hidden>
                             <a href="#" id="withdraw-open-link" style="font-size:0.78em; color:var(--text-gray); text-decoration:underline;">회원탈퇴</a>
                         </div>
                     `;

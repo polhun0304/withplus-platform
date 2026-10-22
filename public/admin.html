@@ -2665,7 +2665,8 @@
                     <p style="color:var(--text-gray); font-size:0.88em; margin-bottom:10px;">창고털이 밴드에서 옮겨온 글입니다. 후기마다 <b>연결할 상품</b>을 확인하고 <b>✅ 승인</b>한 것만 상품 화면의 "창고털이 밴드 후기"에 보입니다(작성자 이름은 가려서 표시, WITH+ 구매 후기·별점과는 따로 표시). <b>⚠ 효능 표현</b>이 있는 후기는 건강식품 광고 규정에 걸릴 수 있으니 내용을 꼭 확인해주세요. 글을 누르면 전체 내용이 펼쳐집니다.</p>
                     <div class="band-sync-box" id="band-sync-box">
                         <div class="bs-head"><b>🔄 밴드 자동 연동</b> <span id="bs-status" class="bs-status">확인 중...</span></div>
-                        <p class="bs-help">밴드 공식 연동 키(Access Token)를 넣고 밴드를 고른 뒤 켜두면, <b>10분마다</b> 새 글은 들어오고 · 고친 글은 고쳐지고 · 지운 글은 숨겨집니다(매일 새벽 전체 점검). 새 후기는 바로 "실시간 후기"에 공개됩니다.
+                        <div id="bs-setup-guide" hidden style="background:#FFF3E0;border:1px solid #FFB74D;border-radius:10px;padding:10px 12px;margin:8px 0;font-size:0.86em;line-height:1.7;color:#5D4037;"><b>⚠ 아직 밴드와 연결되지 않았습니다.</b> 그래서 새 밴드 후기가 홈 "실시간 리뷰·지금 이 순간"에 자동으로 올라오지 않습니다(지금 보이는 후기는 예전에 한 번 옮겨온 글).<br>① <a href="https://developers.band.us/develop/myapps/list" target="_blank" rel="noopener">밴드 개발자센터</a>에 <b>창고털이 밴드 리더 계정</b>으로 로그인 → ② <b>내 서비스 › 서비스 등록</b> → ③ 서비스 정보 화면의 <b>Access Token</b> 복사 → ④ 아래 칸에 붙여넣고 [토큰 저장 · 밴드 불러오기] → ⑤ 밴드 선택 · <b>자동 연동 켜기</b> · [설정 저장] → ⑥ [⚡ 지금 동기화]</div>
+                        <p class="bs-help">밴드 공식 연동 키(Access Token)를 넣고 밴드를 고른 뒤 켜두면, <b>2분마다</b> 새 글은 들어오고 · 고친 글은 고쳐지고 · 지운 글은 숨겨집니다(매일 새벽 전체 점검). 새 후기는 바로 "실시간 후기"에 공개됩니다.
                         토큰은 <a href="https://developers.band.us/develop/myapps/list" target="_blank" rel="noopener">밴드 개발자센터 › 내 서비스</a>에서 발급받아 붙여넣어 주세요(서버에만 저장되고 화면에는 가려서 보입니다).</p>
                         <div class="bs-row">
                             <input type="password" id="bs-token" placeholder="밴드 Access Token 붙여넣기 (바꿀 때만 입력)" autocomplete="off">
@@ -11835,6 +11836,8 @@
                     if (d.band_key && !Array.from(sel.options).some(o => o.value === d.band_key)) sel.insertAdjacentHTML('beforeend', `<option value="${WithPlus.escapeHtml(d.band_key)}">${WithPlus.escapeHtml(d.band_name || d.band_key)}</option>`);
                     sel.value = d.band_key || '';
                     document.getElementById('bs-token').placeholder = d.token_set ? `저장된 토큰 ${d.token_masked} (바꿀 때만 입력)` : '밴드 Access Token 붙여넣기';
+                    // 토큰·밴드·자동 연동 중 하나라도 빠졌으면 연결 안내를 크게 보여준다
+                    document.getElementById('bs-setup-guide').hidden = !!(d.enabled && d.token_set && d.band_key);
                     const ls = d.last_sync;
                     st.className = 'bs-status ' + (d.enabled ? 'on' : 'off');
                     st.textContent = (d.enabled ? '● 켜짐' : '○ 꺼짐') + (ls ? ` · 마지막 ${new Date(ls.at).toLocaleString('ko-KR')} ${ls.ok ? `✅ 새 글 ${ls.inserted || 0} · 수정 ${ls.updated || 0} · 숨김 ${ls.hidden || 0}` : '⚠ ' + (ls.message || '실패')}` : ' · 아직 동기화 기록 없음');

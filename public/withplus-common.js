@@ -1516,6 +1516,14 @@
         /* 헤더 카테고리 메뉴가 화면보다 넓어져 페이지 전체가 옆으로 밀리던 문제 방지 — 메뉴 안에서만 가로 스크롤 */
         .header .nav-menu { align-self: stretch; max-width: 100%; min-width: 0; }
       }
+      /* PC 상단 카테고리 메뉴(다이어트~기획전·초특가)는 항상 한 줄 — 좁은 PC 폭에서는 간격만 줄인다 */
+      @media (min-width: 1025px) {
+        #nav-menu { flex-wrap: nowrap !important; }
+        #nav-menu > a { white-space: nowrap; flex-shrink: 0; }
+      }
+      @media (min-width: 1025px) and (max-width: 1320px) {
+        #nav-menu { gap: 14px !important; }
+      }
 
       .wp-tabbar { display: none; }
       @media (max-width: 1024px) {
