@@ -15786,7 +15786,8 @@ app.get('/api/public/business-info', async (req, res) => {
 // 공급자(provider) 목록 + 현재 수수료율 조회 (정산 화면용)
 // 공급자별 수수료율이 응답에 그대로 노출되므로(마진율과 같은 급의 민감정보) requireOwnerStepUpOrBootstrap로
 // 대표자 전용 조회로 제한한다 - "🏢 분양 조직 관리"/"💵 분양조직 정산"의 GET과 동일한 판단.
-app.get('/api/admin/providers', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
+// 형님 결정(2026-10-22): 공급자별 수수료율은 관리자(admin)도 조회·수정할 수 있다 — 변경은 관리자 감사로그에 자동 기록된다
+app.get('/api/admin/providers', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('profiles')
@@ -15802,7 +15803,7 @@ app.get('/api/admin/providers', authenticate, requireRole(['admin', 'super_admin
 });
 
 // 공급자별 수수료율 설정 - requireOwnerStepUp 필수 (수수료율도 마진율과 같은 급의 민감정보)
-app.patch('/api/admin/providers/:id/commission-rate', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUp, async (req, res) => {
+app.patch('/api/admin/providers/:id/commission-rate', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { id } = req.params;
     const rate = Number(req.body?.commission_rate);
