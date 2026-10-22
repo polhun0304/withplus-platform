@@ -1081,21 +1081,53 @@
     render(initial);
   }
 
-  // 종교 중립 문구 헬퍼 (GIVE+ 1단계) - community.org_type에 따라 랜딩페이지 하단 문구를 다르게 보여준다.
+  // 조직 유형 문구 헬퍼 (GIVE+ 1단계 → 2026-10-22 비종교 조직 확장) - community.org_type에 따라 랜딩페이지·헌금/후원 문구를 다르게 보여준다.
   // 예전에는 "하나님의 사랑을 전하는 사역"이 모든 조직(성당/사찰 포함)에 하드코딩되어 있었는데,
-  // 개신교 외 종교시설(성당/사찰) 연결이 실제로 예정되어 있어 org_type별로 분기하도록 고쳤다.
-  const ORG_TYPE_NAMES = { church: '교회', catholic: '성당', buddhist: '사찰', other: '기관/단체' };
+  // 개신교 외 종교시설(성당/사찰)과 일반회사·협회·학교·아파트·동호회·복지기관 등 비종교 조직도 분양 대상이라 org_type별로 분기한다.
+  // 유형 목록은 server.js ORG_TYPES / DB CHECK(community_prospects·communities.org_type)와 같아야 한다.
+  const ORG_TYPE_OPTIONS = [
+    { value: 'church', label: '개신교(교회)', name: '교회', religious: true },
+    { value: 'catholic', label: '천주교(성당)', name: '성당', religious: true },
+    { value: 'buddhist', label: '불교(사찰)', name: '사찰', religious: true },
+    { value: 'company', label: '일반회사', name: '회사', religious: false },
+    { value: 'association', label: '협회·단체', name: '협회·단체', religious: false },
+    { value: 'school', label: '학교·학원', name: '학교·학원', religious: false },
+    { value: 'apartment', label: '아파트·주민모임', name: '아파트·주민모임', religious: false },
+    { value: 'club', label: '동호회·모임', name: '동호회·모임', religious: false },
+    { value: 'nonprofit', label: '비영리·복지기관', name: '비영리·복지기관', religious: false },
+    { value: 'other', label: '기타', name: '기관/단체', religious: false }
+  ];
+  const ORG_TYPE_NAMES = Object.fromEntries(ORG_TYPE_OPTIONS.map(o => [o.value, o.name]));
+  const ORG_TYPE_LABELS = Object.fromEntries(ORG_TYPE_OPTIONS.map(o => [o.value, o.label]));
   const POWERED_BY_TAGLINES = {
     church: '하나님의 사랑을 전하는 사역에 동참합니다',
     catholic: '하느님의 사랑을 전하는 사목에 동참합니다',
     buddhist: '자비의 마음을 나누는 원력에 동참합니다',
+    company: '임직원과 함께하는 나눔에 동참합니다',
+    association: '회원과 함께하는 나눔에 동참합니다',
+    school: '배움의 공동체와 함께 나눔에 동참합니다',
+    apartment: '이웃과 함께하는 나눔에 동참합니다',
+    club: '회원과 함께하는 나눔에 동참합니다',
+    nonprofit: '이웃을 돕는 나눔에 동참합니다',
     other: '공동체의 나눔에 함께합니다'
   };
+  function isReligiousOrgType(orgType) {
+    const o = ORG_TYPE_OPTIONS.find(x => x.value === orgType);
+    return !!(o && o.religious);
+  }
   function getOrgTypeName(orgType) {
     return ORG_TYPE_NAMES[orgType] || ORG_TYPE_NAMES.other;
   }
+  function getOrgTypeLabel(orgType) {
+    return ORG_TYPE_LABELS[orgType] || orgType || ORG_TYPE_LABELS.other;
+  }
   function getPoweredByTagline(orgType) {
     return POWERED_BY_TAGLINES[orgType] || POWERED_BY_TAGLINES.other;
+  }
+  // 헌금/후원 용어: 종교시설은 "헌금·후원"(사찰은 "시주·후원"), 그 외는 "후원"
+  function getOfferingWord(orgType) {
+    if (!isReligiousOrgType(orgType)) return '후원';
+    return orgType === 'buddhist' ? '시주·후원' : '헌금·후원';
   }
 
   // 분양 랜딩페이지의 "헌금/후원하러 가기" 버튼 문구 - org_type에 맞는 실제 용어로 자동 전환한다
@@ -1103,11 +1135,10 @@
   const OFFERING_CTA_LABELS = {
     church: '🙏 온라인 헌금하기',
     catholic: '🙏 온라인 헌금하기',
-    buddhist: '🙏 온라인 시주하기',
-    other: '🙏 온라인 후원하기'
+    buddhist: '🙏 온라인 시주하기'
   };
   function getOfferingCtaLabel(orgType) {
-    return OFFERING_CTA_LABELS[orgType] || OFFERING_CTA_LABELS.other;
+    return OFFERING_CTA_LABELS[orgType] || '🤝 온라인 후원하기';
   }
 
   // ============================================
@@ -2154,7 +2185,11 @@
     API_BASE,
     CATEGORY_MAP,
     CATEGORY_EMOJI,
+    ORG_TYPE_OPTIONS,
     getOrgTypeName,
+    getOrgTypeLabel,
+    isReligiousOrgType,
+    getOfferingWord,
     getPoweredByTagline,
     getOfferingCtaLabel,
     refreshCategoryMap,

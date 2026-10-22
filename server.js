@@ -13595,6 +13595,12 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
     }
     const resolvedOrgType = org_type || 'church';
     const resolvedOfferingLabels = offering_labels || DEFAULT_OFFERING_LABELS[resolvedOrgType];
+    // 로고·직인 주소는 https만(파일은 등록 후 POST /api/admin/communities/:id/logo 로 따로 올린다)
+    const logoInput = checkCommunityImageUrlInput(logo_url, '로고 주소');
+    const stampInput = checkCommunityImageUrlInput(stamp_url, '직인 주소');
+    if (logoInput.error || stampInput.error) {
+      return res.status(400).json({ error: 'Bad Request', message: logoInput.error || stampInput.error, timestamp: new Date().toISOString() });
+    }
 
     // 이 조직을 담당할 관리자를 이메일로 지정 (WITH+에 이미 가입된 회원이어야 함) - 이 사람만 /api/community-admin/* 로 이 조직 데이터를 볼 수 있다
     let adminUserId = null;
@@ -13631,8 +13637,8 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
         business_number_verified: bizUpdates.business_number_verified || false,
         business_number_verified_at: bizUpdates.business_number_verified_at || null,
         business_number_status: bizUpdates.business_number_status || null,
-        logo_url: logo_url || null,
-        stamp_url: stamp_url || null,
+        logo_url: logoInput.value || null,
+        stamp_url: stampInput.value || null,
         primary_color: primary_color || null,
         hero_title: hero_title || null,
         hero_subtitle: hero_subtitle || null,
@@ -13684,9 +13690,9 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
 });
 
 // ============================================
-// 분양 영업 리스트(전국 종교시설 후보) 관리 API - 관리자 전용
+// 분양 영업 리스트(전국 분양 후보 - 종교시설·회사·단체 등) 관리 API - 관리자 전용
 // ============================================
-// 전국 교회·성당·사찰 등을 수집해 우선 비공개 스테이징 테이블(community_prospects)에만 쌓는다.
+// 전국 교회·성당·사찰·회사·협회·단체 등을 수집해 우선 비공개 스테이징 테이블(community_prospects)에만 쌓는다.
 // communities(공개 테이블)와 완전히 분리되어 있어, 관리자가 "공개 전환(promote)"을 누르기 전까지는
 // /c/슬러그 랜딩페이지 등 어떤 공개 화면에도 절대 노출되지 않는다.
 // (형님 결정: nationwide_religious_org_import_plan.md 참고 - "1번으로 하되 관리자 모드에서
@@ -13824,6 +13830,492 @@ app.patch('/api/admin/prospects/:id', authenticate, requireRole(['admin', 'super
   } catch (err) {
     console.error('Error updating prospect:', err);
     res.status(500).json({ error: 'Failed to update prospect', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🔎 분양 후보 추천 (관리자 전용) - "이 화면에 분양을 할 수 있는 업체들을 찾아 추천해서 올리는 기능"
+// (1) 내부 추천: 아직 공개 전환되지 않은 영업리스트 후보를 "준비도 점수"로 줄 세운다. 점수는 근거를 그대로 보여준다.
+//     연락처 유무 · 영업 상태(컨택중/미컨택) · 같은 시군구/시도에 이미 운영 중인 조직 수 · 그 지역 회원 수
+//     (조직 회원 community_members + 회원 프로필의 지역/주소) · 운영 중인 같은 유형 조직 · 이름의 규모 힌트 · 로고 등록
+// (2) 외부 찾기: 카카오 로컬 "키워드로 장소 검색" API(dapi.kakao.com/v2/local/search/keyword.json)로
+//     지역+업종 키워드 검색 → 미리보기(이미 있는 후보 표시) → 고른 것만 community_prospects에 source='kakao_local'로 추가.
+//     - 키: 환경변수 KAKAO_REST_API_KEY(전용) → 없으면 관리자 > 설정 > 카카오 로그인에 저장한 REST API 키(oauth_configs.kakao.client_id)
+//     - 카카오 제한: 한 검색어당 최대 45건(15건×3쪽). 요청 사이 간격을 두고, 같은 검색은 5분간 캐시, 관리자당 분당 20회 제한.
+//     - 웹사이트를 긁지 않는다(카카오가 돌려준 장소 정보만 사용). 추가는 서버가 기억해 둔 검색 결과(30분) 안에서만 가능.
+//     - 테스트 전용 가짜 응답: PROSPECT_KAKAO_TEST_MODE=1 + NODE_ENV≠production + 이 서버 자신(127.0.0.1, 프록시 미경유) 요청일 때만.
+// ============================================
+const SIDO_ALIASES = {
+  '서울': '서울특별시', '서울시': '서울특별시', '부산': '부산광역시', '부산시': '부산광역시', '대구': '대구광역시', '대구시': '대구광역시',
+  '인천': '인천광역시', '인천시': '인천광역시', '광주': '광주광역시', '광주시': '광주광역시', '대전': '대전광역시', '대전시': '대전광역시',
+  '울산': '울산광역시', '울산시': '울산광역시', '세종': '세종특별자치시', '세종시': '세종특별자치시', '경기': '경기도',
+  '강원': '강원특별자치도', '강원도': '강원특별자치도', '충북': '충청북도', '충남': '충청남도',
+  '전북': '전북특별자치도', '전라북도': '전북특별자치도', '전남': '전라남도', '경북': '경상북도', '경남': '경상남도',
+  '제주': '제주특별자치도', '제주도': '제주특별자치도'
+};
+const SIDO_FULL_NAMES = new Set(Object.values(SIDO_ALIASES));
+function normalizeSidoName(token) {
+  const t = String(token || '').trim();
+  if (SIDO_FULL_NAMES.has(t)) return t;
+  return SIDO_ALIASES[t] || null;
+}
+// "경기 수원시 권선구 …" → { sido: '경기도', sigungu: '수원시 권선구' } (기존 수집 데이터의 region_sido/region_sigungu 형식)
+function parseKoreanRegion(address) {
+  const tokens = String(address || '').trim().split(/\s+/).filter(Boolean);
+  const sido = normalizeSidoName(tokens[0]);
+  if (!sido) return { sido: null, sigungu: null };
+  let sigungu = tokens[1] || null;
+  if (sigungu && /시$/.test(sigungu) && tokens[2] && /구$/.test(tokens[2])) sigungu = `${sigungu} ${tokens[2]}`;
+  if (sigungu && !/(시|군|구)$/.test(sigungu)) sigungu = null;
+  return { sido, sigungu };
+}
+// 카카오는 "서울 강남구 …"처럼 짧은 시도명을 쓰므로 정식 시도명으로 바꿔 기존 후보와 같은 형식(중복 키 일치)으로 맞춘다
+function normalizeKoreanAddress(address) {
+  const tokens = String(address || '').trim().split(/\s+/).filter(Boolean);
+  if (!tokens.length) return '';
+  const sido = normalizeSidoName(tokens[0]);
+  if (sido) tokens[0] = sido;
+  return tokens.join(' ');
+}
+function regionKey(sido, sigungu) { return sido ? `${sido}|${sigungu || ''}` : null; }
+function phoneDigits(v) { return String(v || '').replace(/\D/g, ''); }
+function compactText(v) { return String(v || '').replace(/\s+/g, ''); }
+
+async function fetchAllRowsPaged(table, columns, apply, cap = 60000) {
+  const out = [];
+  for (let from = 0; from < cap; from += 1000) {
+    let q = supabase.from(table).select(columns).order('id', { ascending: true }).range(from, from + 999);
+    if (apply) q = apply(q);
+    const { data, error } = await q;
+    if (error) throw error;
+    out.push(...(data || []));
+    if (!data || data.length < 1000) break;
+  }
+  return out;
+}
+
+// 지역 현황(운영 중 조직·회원 수)은 1분 캐시 - 추천 목록을 여러 번 눌러도 DB를 반복해서 훑지 않게
+let prospectRecommendContextCache = { at: 0, ctx: null };
+async function loadProspectRecommendContext() {
+  if (prospectRecommendContextCache.ctx && Date.now() - prospectRecommendContextCache.at < 60 * 1000) return prospectRecommendContextCache.ctx;
+  const [communities, members, profiles] = await Promise.all([
+    fetchAllRowsPaged('communities', 'id, name, address, org_type', q => q.eq('status', 'active')),
+    fetchAllRowsPaged('community_members', 'id, community_id', q => q.eq('status', 'active')),
+    fetchAllRowsPaged('profiles', 'id, region, address', q => q.or('region.not.is.null,address.not.is.null'))
+  ]);
+  const membersByCommunity = new Map();
+  members.forEach(m => membersByCommunity.set(m.community_id, (membersByCommunity.get(m.community_id) || 0) + 1));
+  const commBySigungu = new Map(), commBySido = new Map(), membersBySigungu = new Map(), membersBySido = new Map(), typeCount = {};
+  const bump = (map, key, n) => { if (key) map.set(key, (map.get(key) || 0) + n); };
+  for (const c of communities) {
+    typeCount[c.org_type] = (typeCount[c.org_type] || 0) + 1;
+    const r = parseKoreanRegion(c.address);
+    if (!r.sido) continue;
+    const mc = membersByCommunity.get(c.id) || 0;
+    bump(commBySido, r.sido, 1);
+    bump(membersBySido, r.sido, mc);
+    if (r.sigungu) { bump(commBySigungu, regionKey(r.sido, r.sigungu), 1); bump(membersBySigungu, regionKey(r.sido, r.sigungu), mc); }
+  }
+  for (const p of profiles) {
+    const r = parseKoreanRegion(p.address || p.region);
+    if (!r.sido) continue;
+    bump(membersBySido, r.sido, 1);
+    if (r.sigungu) bump(membersBySigungu, regionKey(r.sido, r.sigungu), 1);
+  }
+  const ctx = {
+    commBySigungu, commBySido, membersBySigungu, membersBySido, typeCount,
+    activeCommunities: communities.length,
+    membersTotal: members.length,
+    profilesWithRegion: profiles.length
+  };
+  prospectRecommendContextCache = { at: Date.now(), ctx };
+  return ctx;
+}
+
+const PROSPECT_SIZE_HINT_RE = /(주교좌|대성당|대교회|중앙|제일|본당|총회|연합회|협회|재단|본사|그룹|대학교)/;
+function scoreProspectReadiness(p, ctx) {
+  let score = 0;
+  const reasons = [];
+  if (phoneDigits(p.phone).length >= 7) { score += 30; reasons.push('연락처 있음'); } else reasons.push('연락처 없음');
+  if (p.status === 'contacted') { score += 20; reasons.push('연락함(컨택중)'); } else { score += 5; reasons.push('미컨택'); }
+  const parsed = parseKoreanRegion(p.address);
+  const sido = p.region_sido || parsed.sido;
+  const sigungu = p.region_sigungu || parsed.sigungu;
+  const sgKey = regionKey(sido, sigungu);
+  const nSg = (sigungu && ctx.commBySigungu.get(sgKey)) || 0;
+  const nSido = (sido && ctx.commBySido.get(sido)) || 0;
+  if (nSg) { score += 15 * Math.min(nSg, 3); reasons.push(`같은 시군구에 운영 중 조직 ${nSg}곳`); }
+  else if (nSido) { score += 5 * Math.min(nSido, 3); reasons.push(`같은 시도에 운영 중 조직 ${nSido}곳`); }
+  const mSg = (sigungu && ctx.membersBySigungu.get(sgKey)) || 0;
+  const mSido = (sido && ctx.membersBySido.get(sido)) || 0;
+  if (mSg) { score += mSg >= 100 ? 20 : mSg >= 30 ? 15 : mSg >= 10 ? 10 : 5; reasons.push(`회원 ${mSg}명 지역`); }
+  else if (mSido) { score += mSido >= 100 ? 8 : mSido >= 10 ? 5 : 2; reasons.push(`시도 회원 ${mSido}명`); }
+  const label = ORG_TYPE_LABELS[p.org_type] || p.org_type;
+  const nType = ctx.typeCount[p.org_type] || 0;
+  if (nType) { score += 10; reasons.push(`운영 중 같은 유형(${label}) ${nType}곳`); }
+  else if (p.org_type !== 'other') { score += 5; reasons.push(`유형: ${label}`); }
+  const hint = PROSPECT_SIZE_HINT_RE.exec(p.name || '');
+  if (hint) { score += 5; reasons.push(`규모 힌트(이름에 '${hint[1]}')`); }
+  if (p.logo_url) { score += 3; reasons.push('로고 등록됨'); }
+  return { score, reasons };
+}
+
+app.get('/api/admin/prospects/recommend', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { org_type, region_sido, region_sigungu } = req.query;
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20));
+    if (org_type && !ORG_TYPES.includes(org_type)) {
+      return res.status(400).json({ error: 'Bad Request', message: `org_type은 ${ORG_TYPES.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+    }
+    const ctx = await loadProspectRecommendContext();
+    const candidates = await fetchAllRowsPaged('community_prospects',
+      'id, name, org_type, address, region_sido, region_sigungu, phone, status, admin_note, logo_url, source, source_url, collected_at',
+      q => {
+        q = q.is('promoted_community_id', null).in('status', ['prospect', 'contacted']);
+        if (org_type) q = q.eq('org_type', org_type);
+        if (region_sido) q = q.eq('region_sido', String(region_sido).trim());
+        if (region_sigungu) q = q.eq('region_sigungu', String(region_sigungu).trim());
+        return q;
+      });
+    const ranked = candidates
+      .map(p => ({ ...p, ...scoreProspectReadiness(p, ctx) }))
+      .sort((a, b) => (b.score - a.score) || String(b.collected_at || '').localeCompare(String(a.collected_at || '')) || String(a.id).localeCompare(String(b.id)));
+    res.json({
+      success: true,
+      data: ranked.slice(0, limit),
+      summary: {
+        candidates: candidates.length,
+        active_communities: ctx.activeCommunities,
+        community_members: ctx.membersTotal,
+        profiles_with_region: ctx.profilesWithRegion
+      },
+      scoring: '연락처 +30 · 컨택중 +20/미컨택 +5 · 같은 시군구 운영 조직 곳당 +15(최대 3곳, 없으면 같은 시도 곳당 +5) · 지역 회원 수 +5~20 · 운영 중 같은 유형 +10(없으면 유형 +5) · 이름 규모 힌트 +5 · 로고 +3',
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error recommending prospects:', err);
+    res.status(500).json({ error: 'Failed to recommend prospects', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ----- 외부 찾기: 카카오 로컬 -----
+const KAKAO_LOCAL_BASE = 'https://dapi.kakao.com/v2/local/search';
+const KAKAO_LOCAL_KEYWORD_PRESETS = {
+  church: ['교회'], catholic: ['성당'], buddhist: ['사찰', '절'],
+  company: ['회사', '기업'], association: ['협회', '단체'], school: ['학원', '학교'],
+  apartment: ['아파트 관리사무소'], club: ['동호회'], nonprofit: ['복지관', '사회복지'], other: []
+};
+const KAKAO_LOCAL_GUIDE = [
+  'Kakao Developers(developers.kakao.com) 로그인 → 내 애플리케이션 → WITH+ 앱 선택(없으면 애플리케이션 추가)',
+  '앱 설정 > 플랫폼 키(앱 키)에서 REST API 키 복사',
+  '제품 설정 > 카카오맵(로컬 API) 사용 설정을 켬(꺼져 있으면 검색이 403으로 거절됩니다)',
+  'WITH+ 관리자 > 설정 > 카카오 로그인의 "REST API 키" 칸에 붙여넣고 저장 (카카오 로그인을 켜지 않아도 검색에는 쓰입니다)',
+  '또는 서버 환경변수 KAKAO_REST_API_KEY에 넣으면 그 키를 우선 사용합니다'
+];
+
+function isKakaoLocalTestMode(req) {
+  if (process.env.PROSPECT_KAKAO_TEST_MODE !== '1' || process.env.NODE_ENV === 'production') return false;
+  const ip = (req && req.socket && req.socket.remoteAddress) || '';
+  if (!['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(ip)) return false;
+  return !req.headers['x-forwarded-for'];
+}
+
+async function getKakaoLocalKey(req) {
+  if (isKakaoLocalTestMode(req)) {
+    return req.headers['x-test-kakao-key'] === 'none' ? { key: null, source: null } : { key: 'test-kakao-rest-key', source: 'test' };
+  }
+  if (process.env.KAKAO_REST_API_KEY) return { key: process.env.KAKAO_REST_API_KEY.trim(), source: 'env' };
+  const cfg = await getOauthConfig('kakao').catch(() => null);
+  if (cfg && cfg.client_id) return { key: String(cfg.client_id).trim(), source: 'kakao_login' };
+  return { key: null, source: null };
+}
+
+let kakaoLocalStubCalls = 0;
+function kakaoLocalStub(path, params) {
+  kakaoLocalStubCalls++;
+  const q = params.get('query') || '';
+  if (path === 'address') {
+    if (q.includes('__none__')) return { documents: [], meta: { total_count: 0, pageable_count: 0, is_end: true } };
+    return { documents: [{ address_name: q, x: '127.0276', y: '37.4979' }], meta: { total_count: 1, pageable_count: 1, is_end: true } };
+  }
+  const page = Number(params.get('page') || 1), size = Number(params.get('size') || 15);
+  const total = q.includes('__empty__') ? 0 : 20;
+  const pageable = Math.min(total, 45);
+  const docs = [];
+  for (let i = (page - 1) * size; i < Math.min(pageable, page * size); i++) {
+    const id = String(parseInt(crypto.createHash('sha1').update(`${q}#${i}`).digest('hex').slice(0, 12), 16));
+    docs.push({
+      id, place_name: `${q} 스텁장소 ${i + 1}`, category_name: '테스트 > 스텁', category_group_code: '',
+      phone: i % 2 === 0 ? `02-555-${String(1000 + i)}` : '',
+      address_name: `서울 테스트구 스텁동 ${i + 1}`, road_address_name: `서울 테스트구 스텁로 ${i + 1}`,
+      x: '127.0276', y: '37.4979', place_url: `https://place.map.kakao.com/${id}`
+    });
+  }
+  return { documents: docs, meta: { total_count: total, pageable_count: pageable, is_end: page * size >= pageable } };
+}
+
+async function kakaoLocalRequest(req, key, path, params) {
+  if (isKakaoLocalTestMode(req)) return kakaoLocalStub(path, params);
+  const res = await fetch(`${KAKAO_LOCAL_BASE}/${path}.json?${params.toString()}`, {
+    headers: { Authorization: `KakaoAK ${key}` },
+    signal: AbortSignal.timeout(8000)
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const e = new Error(
+      res.status === 401 ? '카카오 REST API 키가 올바르지 않습니다. 관리자 > 설정 > 카카오 로그인의 REST API 키를 확인해주세요'
+        : res.status === 403 ? 'Kakao Developers에서 이 앱의 카카오맵(로컬 API) 사용 설정이 꺼져 있습니다. 제품 설정 > 카카오맵에서 켜주세요'
+          : res.status === 429 ? '카카오 검색 사용량 한도를 넘었습니다. 잠시 후 다시 시도해주세요'
+            : `카카오 검색 실패(${res.status}${body && body.message ? ': ' + body.message : ''})`);
+    e.status = res.status === 429 ? 429 : 502;
+    e.kakaoGuide = res.status === 401 || res.status === 403;
+    throw e;
+  }
+  return body;
+}
+
+const kakaoLocalCache = new Map(); // 같은 검색 5분 캐시
+const kakaoLocalRate = new Map(); // 관리자별 최근 검색 시각
+const kakaoFoundPlaces = new Map(); // 관리자별 검색 결과(추가 시 이 안에서만 허용) - 30분
+const KAKAO_CACHE_TTL = 5 * 60 * 1000, KAKAO_FOUND_TTL = 30 * 60 * 1000;
+const sleepMs = (ms) => new Promise(r => setTimeout(r, ms));
+
+function rememberKakaoPlaces(userId, items) {
+  const now = Date.now();
+  let m = kakaoFoundPlaces.get(userId);
+  if (!m) { m = new Map(); kakaoFoundPlaces.set(userId, m); }
+  for (const [id, v] of m) if (now - v.at > KAKAO_FOUND_TTL) m.delete(id);
+  items.forEach(it => m.set(it.kakao_id, { at: now, item: it }));
+  while (m.size > 2000) m.delete(m.keys().next().value);
+}
+
+// 이미 영업리스트에 있는 후보 찾기: 같은 유형의 중복 키(기존 computeDedupKeyForProspect) 또는
+// 같은 이름 + (같은 전화번호 또는 같은 주소 앞부분) - 유형을 다르게 골라 검색해도 같은 장소는 걸러진다
+async function findExistingProspectsForPlaces(orgType, items) {
+  if (!items.length) return new Map();
+  const keyToItems = new Map();
+  items.forEach(it => {
+    [it.address, it.jibun_address].filter(Boolean).forEach(addr => {
+      const k = computeDedupKeyForProspect(orgType, it.name, addr);
+      if (!keyToItems.has(k)) keyToItems.set(k, []);
+      keyToItems.get(k).push(it.kakao_id);
+    });
+  });
+  const names = [...new Set(items.map(it => it.name))];
+  const cols = 'id, name, org_type, address, phone, status, dedup_key, promoted_community_id';
+  const chunk = (arr, n) => { const out = []; for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n)); return out; };
+  const rows = [];
+  for (const part of chunk([...keyToItems.keys()], 20)) { // 한글 키가 길어 요청 주소가 너무 길어지지 않게 나눠 조회
+    const { data, error } = await supabase.from('community_prospects').select(cols).in('dedup_key', part);
+    if (error) throw error;
+    rows.push(...(data || []));
+  }
+  for (const part of chunk(names, 25)) {
+    const { data, error } = await supabase.from('community_prospects').select(cols).in('name', part);
+    if (error) throw error;
+    rows.push(...(data || []));
+  }
+  const found = new Map();
+  for (const it of items) {
+    const itKeys = [it.address, it.jibun_address].filter(Boolean).map(a => computeDedupKeyForProspect(orgType, it.name, a));
+    const itAddr = [it.address, it.jibun_address].filter(Boolean).map(a => compactText(a).slice(0, 20));
+    const itPhone = phoneDigits(it.phone);
+    const hit = rows.find(r => itKeys.includes(r.dedup_key) || (r.name === it.name && (
+      (itPhone.length >= 7 && phoneDigits(r.phone) === itPhone) ||
+      (r.address && itAddr.includes(compactText(r.address).slice(0, 20)))
+    )));
+    if (hit) found.set(it.kakao_id, { id: hit.id, name: hit.name, org_type: hit.org_type, status: hit.status, promoted: !!hit.promoted_community_id });
+  }
+  return found;
+}
+
+app.get('/api/admin/prospects/kakao-status', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { key, source } = await getKakaoLocalKey(req);
+    res.json({
+      success: true,
+      data: {
+        configured: !!key,
+        key_source: source, // env | kakao_login | test | null
+        presets: KAKAO_LOCAL_KEYWORD_PRESETS,
+        org_types: ORG_TYPES,
+        org_type_labels: ORG_TYPE_LABELS,
+        guide: KAKAO_LOCAL_GUIDE,
+        max_per_keyword: 45
+      },
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error reading kakao local status:', err);
+    res.status(500).json({ error: 'Failed to read status', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/prospects/kakao-search', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const body = req.body || {};
+    const orgType = body.org_type || 'other';
+    if (!ORG_TYPES.includes(orgType)) {
+      return res.status(400).json({ error: 'Bad Request', message: `org_type은 ${ORG_TYPES.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+    }
+    const rawKeywords = Array.isArray(body.keywords) ? body.keywords : String(body.keywords || '').split(',');
+    const keywords = [...new Set(rawKeywords.map(k => String(k || '').trim()).filter(Boolean))];
+    if (!keywords.length) return res.status(400).json({ error: 'Bad Request', message: '업종 키워드를 1개 이상 고르거나 입력해주세요', timestamp: new Date().toISOString() });
+    if (keywords.length > 5) return res.status(400).json({ error: 'Bad Request', message: '키워드는 한 번에 5개까지 검색할 수 있습니다', timestamp: new Date().toISOString() });
+    if (keywords.some(k => k.length > 30)) return res.status(400).json({ error: 'Bad Request', message: '키워드는 30자 이하로 입력해주세요', timestamp: new Date().toISOString() });
+    const sidoIn = String(body.sido || '').trim().slice(0, 30);
+    const sigunguIn = String(body.sigungu || '').trim().slice(0, 40);
+    const addressIn = String(body.address || '').trim().slice(0, 200);
+    if (!sidoIn && !sigunguIn && !addressIn) {
+      return res.status(400).json({ error: 'Bad Request', message: '지역(시/도·시/군/구) 또는 기준 주소를 입력해주세요', timestamp: new Date().toISOString() });
+    }
+    const radius = Math.min(20000, Math.max(500, parseInt(body.radius, 10) || 3000));
+    const maxPages = Math.min(3, Math.max(1, parseInt(body.max_pages, 10) || 3));
+
+    const { key, source } = await getKakaoLocalKey(req);
+    if (!key) {
+      return res.status(412).json({ error: 'Kakao Key Required', code: 'KAKAO_KEY_MISSING', message: '카카오 REST API 키가 아직 없습니다. 아래 순서대로 설정하면 바로 검색할 수 있습니다', guide: KAKAO_LOCAL_GUIDE, timestamp: new Date().toISOString() });
+    }
+
+    // 관리자당 분당 20회
+    const now = Date.now();
+    const recent = (kakaoLocalRate.get(req.user.id) || []).filter(t => now - t < 60 * 1000);
+    if (recent.length >= 20) {
+      return res.status(429).json({ error: 'Too Many Requests', message: '검색이 너무 잦습니다. 1분 뒤 다시 시도해주세요', timestamp: new Date().toISOString() });
+    }
+    recent.push(now);
+    kakaoLocalRate.set(req.user.id, recent);
+
+    const cacheKey = JSON.stringify({ keywords, sidoIn, sigunguIn, addressIn, radius: addressIn ? radius : null, maxPages, test: isKakaoLocalTestMode(req) });
+    let cached = kakaoLocalCache.get(cacheKey);
+    let fromCache = true;
+    if (!cached || now - cached.at > KAKAO_CACHE_TTL) {
+      fromCache = false;
+      let center = null;
+      if (addressIn) {
+        const geo = await kakaoLocalRequest(req, key, 'address', new URLSearchParams({ query: addressIn, size: '1' }));
+        const d = geo.documents && geo.documents[0];
+        if (!d) return res.status(400).json({ error: 'Bad Request', message: `주소를 찾지 못했습니다: ${addressIn}`, timestamp: new Date().toISOString() });
+        center = { x: d.x, y: d.y, address: d.address_name };
+      }
+      const regionText = [sidoIn, sigunguIn].filter(Boolean).join(' ');
+      const docsById = new Map();
+      const searched = [];
+      let calls = 0;
+      for (const kw of keywords) {
+        const query = center ? kw : `${regionText} ${kw}`.trim();
+        let count = 0, totalCount = 0;
+        for (let page = 1; page <= maxPages; page++) {
+          if (calls++ > 0 && !isKakaoLocalTestMode(req)) await sleepMs(150); // 카카오 쪽 부담을 줄이기 위한 간격
+          const params = new URLSearchParams({ query, page: String(page), size: '15' });
+          if (center) { params.set('x', center.x); params.set('y', center.y); params.set('radius', String(radius)); params.set('sort', 'distance'); }
+          const r = await kakaoLocalRequest(req, key, 'keyword', params);
+          totalCount = (r.meta && r.meta.total_count) || 0;
+          (r.documents || []).forEach(d => { if (!docsById.has(d.id)) { docsById.set(d.id, { ...d, _keyword: kw }); count++; } });
+          if (!r.meta || r.meta.is_end) break;
+        }
+        searched.push({ keyword: kw, query, found: count, total_count: totalCount });
+      }
+      cached = { at: Date.now(), docs: [...docsById.values()], searched, center };
+      kakaoLocalCache.set(cacheKey, cached);
+      if (kakaoLocalCache.size > 200) kakaoLocalCache.delete(kakaoLocalCache.keys().next().value);
+    }
+
+    const items = cached.docs.map(d => {
+      const road = normalizeKoreanAddress(d.road_address_name);
+      const jibun = normalizeKoreanAddress(d.address_name);
+      const region = parseKoreanRegion(road || jibun);
+      return {
+        kakao_id: String(d.id),
+        name: String(d.place_name || '').trim(),
+        category: d.category_name || '',
+        phone: d.phone || '',
+        address: road || jibun,
+        jibun_address: jibun || null,
+        region_sido: region.sido,
+        region_sigungu: region.sigungu,
+        latitude: d.y != null && d.y !== '' ? Number(d.y) : null,
+        longitude: d.x != null && d.x !== '' ? Number(d.x) : null,
+        place_url: /^https:\/\/place\.map\.kakao\.com\/\d+$/.test(String(d.place_url || '').replace(/^http:/, 'https:')) ? String(d.place_url).replace(/^http:/, 'https:') : null,
+        keyword: d._keyword
+      };
+    }).filter(it => it.name);
+    const existing = await findExistingProspectsForPlaces(orgType, items);
+    items.forEach(it => { it.existing = existing.get(it.kakao_id) || null; });
+    rememberKakaoPlaces(req.user.id, items);
+
+    const out = {
+      success: true,
+      data: items,
+      org_type: orgType,
+      searched: cached.searched,
+      center: cached.center,
+      cached: fromCache,
+      key_source: source,
+      new_count: items.filter(it => !it.existing).length,
+      timestamp: new Date().toISOString()
+    };
+    if (isKakaoLocalTestMode(req)) out._stub_calls = kakaoLocalStubCalls;
+    res.json(out);
+  } catch (err) {
+    console.error('Error searching kakao local:', err);
+    res.status(err.status || 500).json({ error: 'Kakao search failed', message: err.message, guide: err.kakaoGuide ? KAKAO_LOCAL_GUIDE : undefined, timestamp: new Date().toISOString() });
+  }
+});
+
+app.post('/api/admin/prospects/kakao-import', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { org_type, kakao_ids } = req.body || {};
+    if (!ORG_TYPES.includes(org_type)) {
+      return res.status(400).json({ error: 'Bad Request', message: `org_type은 ${ORG_TYPES.join(', ')} 중 하나여야 합니다`, timestamp: new Date().toISOString() });
+    }
+    const ids = [...new Set((Array.isArray(kakao_ids) ? kakao_ids : []).map(String))];
+    if (!ids.length || ids.length > 100) {
+      return res.status(400).json({ error: 'Bad Request', message: '추가할 업체를 1~100개 선택해주세요', timestamp: new Date().toISOString() });
+    }
+    const found = kakaoFoundPlaces.get(req.user.id) || new Map();
+    const now = Date.now();
+    const picked = ids.map(id => found.get(id)).filter(v => v && now - v.at <= KAKAO_FOUND_TTL).map(v => v.item);
+    const expired = ids.length - picked.length;
+    if (!picked.length) {
+      return res.status(400).json({ error: 'Bad Request', message: '검색 결과가 만료되었거나 이 화면에서 검색한 업체가 아닙니다. 다시 검색한 뒤 선택해주세요', timestamp: new Date().toISOString() });
+    }
+    const existing = await findExistingProspectsForPlaces(org_type, picked);
+    const fresh = picked.filter(it => !existing.has(it.kakao_id));
+    const today = new Date().toISOString().slice(0, 10);
+    const rows = fresh.map(it => ({
+      name: it.name,
+      org_type,
+      address: it.address || null,
+      region_sido: it.region_sido,
+      region_sigungu: it.region_sigungu,
+      phone: it.phone || null,
+      latitude: Number.isFinite(it.latitude) ? it.latitude : null,
+      longitude: Number.isFinite(it.longitude) ? it.longitude : null,
+      source: 'kakao_local',
+      source_url: it.place_url,
+      dedup_key: computeDedupKeyForProspect(org_type, it.name, it.address),
+      admin_note: `카카오 로컬 검색(${it.keyword || ''}${it.category ? ' · ' + it.category : ''}) ${today}`.slice(0, 2000)
+    }));
+    let inserted = [];
+    if (rows.length) {
+      const { data, error } = await supabase.from('community_prospects').upsert(rows, { onConflict: 'dedup_key', ignoreDuplicates: true }).select('id');
+      if (error) throw error;
+      inserted = data || [];
+    }
+    const skipped = picked.length - inserted.length;
+    res.status(201).json({
+      success: true,
+      inserted: inserted.length,
+      skipped_existing: skipped,
+      expired,
+      ids: inserted.map(r => r.id),
+      message: `${inserted.length}곳을 후보로 추가했습니다` + (skipped ? ` · 이미 있는 ${skipped}곳은 건너뜀` : '') + (expired ? ` · 만료된 ${expired}곳 제외(다시 검색 필요)` : ''),
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error importing kakao places:', err);
+    res.status(500).json({ error: 'Failed to import places', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
@@ -14112,11 +14604,176 @@ app.delete('/api/admin/prospects/:id/logo', authenticate, requireRole(['admin', 
   }
 });
 
+// ============================================
+// 🖼️ 분양 조직 관리 로고·직인 - "주소 붙여넣기(https)"와 "컴퓨터에서 파일 올리기"를 나란히 제공 (관리자 전용)
+// - 영업 리스트 로고(위 prospect-logos)와 같은 방식: product-images 버킷 <사이트>/community-logos/<조직ID>/<종류>-<시간>-<랜덤>.<확장자>
+//   PNG·JPG·WEBP만 2MB 이하(매직 바이트 검사), SVG는 관리자 화면에서 PNG로 바꿔 올린다.
+// - kind=logo(communities.logo_url/logo_storage_path) | stamp(communities.stamp_url/stamp_storage_path)
+// - 교체·삭제 시 이 기능으로 올린 파일(storage_path, 위 폴더 안)만 저장소에서 지운다. 붙여넣은 외부 주소는 지우지 않는다.
+// - 조직 수정 폼(PUT /api/admin/communities/:id)에서 주소를 바꾸거나 비워도 이전 업로드 파일을 같은 규칙으로 정리한다.
+// ============================================
+const COMMUNITY_LOGO_PREFIX = `${UPLOAD_PLATFORM}/community-logos/`;
+const COMMUNITY_IMAGE_KINDS = {
+  logo: { urlCol: 'logo_url', pathCol: 'logo_storage_path', name: '로고' },
+  stamp: { urlCol: 'stamp_url', pathCol: 'stamp_storage_path', name: '직인' }
+};
+
+async function removeCommunityImageFile(storagePath) {
+  if (!storagePath || !String(storagePath).startsWith(COMMUNITY_LOGO_PREFIX)) return;
+  const { error } = await supabase.storage.from(PRODUCT_IMAGE_BUCKET).remove([storagePath]);
+  if (error) console.error('community image file remove failed', storagePath, error.message);
+}
+
+// 조직 등록·수정 폼의 로고·직인 주소 검사: 비우기(null) 또는 https 주소만. (수정 시 기존 값과 같으면 검사 생략 - 예전 데이터 보호)
+function checkCommunityImageUrlInput(value, label, existing) {
+  if (value === undefined) return { present: false };
+  const v = value === null ? '' : String(value).trim();
+  if (!v) return { present: true, value: null };
+  if (existing !== undefined && v === (existing || '')) return { present: true, value: v, unchanged: true };
+  const check = normalizeProspectLogoUrl(v);
+  if (!check.ok) return { present: true, error: `${label}: ${check.message}` };
+  return { present: true, value: check.url };
+}
+
+function parseCommunityImageKind(req, res) {
+  const kind = String((req.query && req.query.kind) || (req.body && req.body.kind) || 'logo');
+  if (!COMMUNITY_IMAGE_KINDS[kind]) {
+    res.status(400).json({ error: 'Bad Request', message: 'kind는 logo 또는 stamp여야 합니다', timestamp: new Date().toISOString() });
+    return null;
+  }
+  return kind;
+}
+
+async function findCommunityForImage(req, res) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(req.params.id || ''))) {
+    res.status(400).json({ error: 'Bad Request', message: '잘못된 조직 ID입니다', timestamp: new Date().toISOString() });
+    return null;
+  }
+  const { data, error } = await supabase.from('communities').select('id, name, logo_url, logo_storage_path, stamp_url, stamp_storage_path').eq('id', req.params.id).maybeSingle();
+  if (error) throw error;
+  if (!data) {
+    res.status(404).json({ error: 'Not Found', message: '해당 분양 조직을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    return null;
+  }
+  return data;
+}
+
+async function applyCommunityImage(community, kind, nextUrl, nextPath) {
+  const k = COMMUNITY_IMAGE_KINDS[kind];
+  const { data, error } = await supabase
+    .from('communities')
+    .update({ [k.urlCol]: nextUrl, [k.pathCol]: nextPath, updated_at: new Date().toISOString() })
+    .eq('id', community.id)
+    .select()
+    .single();
+  if (error) throw error;
+  const prevPath = community[k.pathCol];
+  if (prevPath && prevPath !== nextPath) await removeCommunityImageFile(prevPath);
+  return data;
+}
+
+// 파일 업로드(신규·교체) - 본문은 이미지 바이너리, ?kind=logo|stamp
+app.post('/api/admin/communities/:id/logo',
+  authenticate,
+  requireRole(['admin', 'super_admin']),
+  express.raw({ type: ['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml', 'image/gif', 'application/octet-stream'], limit: '6mb' }),
+  async (req, res) => {
+    try {
+      const buf = req.body;
+      // 감사로그(요청 본문 스냅샷)에 바이너리가 통째로 남지 않도록 요약으로 바꿔둔다
+      req.body = { community_image_upload: { bytes: Buffer.isBuffer(buf) ? buf.length : 0, content_type: req.headers['content-type'] || null } };
+      const kind = parseCommunityImageKind(req, res);
+      if (!kind) return;
+      if (!Buffer.isBuffer(buf) || buf.length === 0) {
+        return res.status(400).json({ error: 'Bad Request', message: '이미지 파일이 비어 있습니다', timestamp: new Date().toISOString() });
+      }
+      if (buf.length > PROSPECT_LOGO_MAX_BYTES) {
+        return res.status(413).json({ error: 'Payload Too Large', message: '2MB 이하 이미지만 올릴 수 있습니다', timestamp: new Date().toISOString() });
+      }
+      const type = detectImageType(buf);
+      if (!type || type.ext === 'gif') {
+        return res.status(400).json({ error: 'Bad Request', message: 'PNG·JPG·WEBP·SVG 이미지만 올릴 수 있습니다(SVG는 관리자 화면에서 PNG로 자동 변환)', timestamp: new Date().toISOString() });
+      }
+      const community = await findCommunityForImage(req, res);
+      if (!community) return;
+      const objectPath = `${COMMUNITY_LOGO_PREFIX}${community.id}/${kind}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${type.ext}`;
+      const { error: upErr } = await supabase.storage.from(PRODUCT_IMAGE_BUCKET).upload(objectPath, buf, { contentType: type.mime, cacheControl: '31536000', upsert: false });
+      if (upErr) throw upErr;
+      const publicUrl = supabase.storage.from(PRODUCT_IMAGE_BUCKET).getPublicUrl(objectPath).data.publicUrl;
+      req.body.community_image_upload.path = objectPath;
+      req.body.community_image_upload.kind = kind;
+      let data;
+      try {
+        data = await applyCommunityImage(community, kind, publicUrl, objectPath);
+      } catch (e) {
+        await removeCommunityImageFile(objectPath); // 저장 실패 시 방금 올린 파일이 고아로 남지 않게 정리
+        throw e;
+      }
+      const k = COMMUNITY_IMAGE_KINDS[kind];
+      res.status(201).json({ success: true, data, message: community[k.urlCol] ? `${k.name}를 교체했습니다` : `${k.name}를 등록했습니다`, timestamp: new Date().toISOString() });
+    } catch (err) {
+      console.error('Error uploading community image:', err);
+      res.status(500).json({ error: 'Failed to upload image', message: (process.env.NODE_ENV === 'production' ? '이미지 업로드에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
+    }
+  });
+
+// 주소(https) 입력 - { kind, url }
+app.put('/api/admin/communities/:id/logo', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const kind = parseCommunityImageKind(req, res);
+    if (!kind) return;
+    const check = normalizeProspectLogoUrl(req.body && (req.body.url !== undefined ? req.body.url : req.body.logo_url));
+    if (!check.ok) return res.status(400).json({ error: 'Bad Request', message: check.message, timestamp: new Date().toISOString() });
+    const community = await findCommunityForImage(req, res);
+    if (!community) return;
+    const data = await applyCommunityImage(community, kind, check.url, null);
+    res.json({ success: true, data, message: `${COMMUNITY_IMAGE_KINDS[kind].name} 주소를 저장했습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error setting community image url:', err);
+    res.status(500).json({ error: 'Failed to set image', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 삭제 - ?kind=logo|stamp, 이 기능으로 올린 파일이면 저장소에서도 지운다
+app.delete('/api/admin/communities/:id/logo', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const kind = parseCommunityImageKind(req, res);
+    if (!kind) return;
+    const community = await findCommunityForImage(req, res);
+    if (!community) return;
+    const k = COMMUNITY_IMAGE_KINDS[kind];
+    if (!community[k.urlCol] && !community[k.pathCol]) {
+      return res.status(400).json({ error: 'Bad Request', message: `등록된 ${k.name}가 없습니다`, timestamp: new Date().toISOString() });
+    }
+    const data = await applyCommunityImage(community, kind, null, null);
+    res.json({ success: true, data, message: `${k.name}를 삭제했습니다`, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting community image:', err);
+    res.status(500).json({ error: 'Failed to delete image', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, status, admin_email, personal_point_rate, community_point_rate, landing_template, settlement_commission_rate, business_number, settlement_tax_method, bank_name, bank_account, account_holder, bank_account_verified, business_info_mode, business_name, ceo_name, mail_order_registration_number, privacy_officer_name, privacy_officer_position, privacy_officer_contact, org_type, offering_labels } = req.body;
     const updates = { updated_at: new Date().toISOString() };
     let bizWarning = null;
+    // 로고·직인 주소: 바뀐 경우에만 https 검사, 바뀌면 이 화면에서 올렸던 이전 파일은 저장 후 정리
+    const imageFilesToRemove = [];
+    if (logo_url !== undefined || stamp_url !== undefined) {
+      const { data: imgRow } = await supabase.from('communities').select('logo_url, logo_storage_path, stamp_url, stamp_storage_path').eq('id', req.params.id).maybeSingle();
+      for (const [kind, raw, label] of [['logo', logo_url, '로고 주소'], ['stamp', stamp_url, '직인 주소']]) {
+        const k = COMMUNITY_IMAGE_KINDS[kind];
+        const chk = checkCommunityImageUrlInput(raw, label, imgRow ? imgRow[k.urlCol] : undefined);
+        if (!chk.present) continue;
+        if (chk.error) return res.status(400).json({ error: 'Bad Request', message: chk.error, timestamp: new Date().toISOString() });
+        updates[k.urlCol] = chk.value;
+        if (!chk.unchanged && imgRow && imgRow[k.pathCol]) {
+          updates[k.pathCol] = null;
+          imageFilesToRemove.push(imgRow[k.pathCol]);
+        }
+      }
+    }
     // business_number/bank_account 변경 여부 판정에 기존 값이 필요하므로, 둘 중 하나라도 바뀌면 한 번만 조회해서 같이 재사용한다
     const needsExistingLookup = business_number !== undefined || bank_account !== undefined;
     let existingCommunityRow = null;
@@ -14162,8 +14819,6 @@ app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super
     }
     if (description !== undefined) updates.description = description;
     if (image_url !== undefined) updates.image_url = image_url || null;
-    if (logo_url !== undefined) updates.logo_url = logo_url || null;
-    if (stamp_url !== undefined) updates.stamp_url = stamp_url || null;
     if (primary_color !== undefined) updates.primary_color = primary_color || null;
     if (hero_title !== undefined) updates.hero_title = hero_title || null;
     if (hero_subtitle !== undefined) updates.hero_subtitle = hero_subtitle || null;
@@ -14274,6 +14929,7 @@ app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super
     if (!data) {
       return res.status(404).json({ error: 'Not Found', message: 'Community not found', timestamp: new Date().toISOString() });
     }
+    for (const p of imageFilesToRemove) await removeCommunityImageFile(p);
     const combinedPutWarning = [bizWarning, putAdminAssignWarning].filter(Boolean).join(' / ') || null;
     res.json({ success: true, data, warning: combinedPutWarning, message: '커뮤니티 정보가 수정되었습니다', timestamp: new Date().toISOString() });
   } catch (err) {
@@ -14836,24 +15492,39 @@ app.put('/api/community-admin/business-info', authenticate, async (req, res) => 
 // 🙏 GIVE+ 1단계: 종교 초월 헌금/후원 모듈
 // - 카르디아(교회용 키오스크 헌금 결제사) 대응 제안서(2026-09-13, 프로젝트 문서 참고)에 따라
 //   기존 분양형 멀티테넌트(communities) + 정산 인프라를 그대로 재사용해 "헌금"이라는 새 도메인을 얹는다.
-// - 종교를 코드에 하드코딩하지 않는다: communities.org_type(church/catholic/buddhist/other) +
+// - 종교를 코드에 하드코딩하지 않는다: communities.org_type(church/catholic/buddhist/company/association/school/apartment/club/nonprofit/other) +
 //   offering_labels(JSON, 항목key->한글명)로 데이터 기반 확장. 신규 종교/교단도 코드 수정 없이 데이터만으로 추가된다.
 // - 결제는 기존 토스페이먼츠 연동(getPgConfig('toss'))을 그대로 재사용 - 새 PG 계약 불필요.
 // - 실제 개신교 교회 외에 성당·사찰 연결도 예정되어 있어(형님 확인), org_type별 기본 항목명은 일반적인
 //   통용 표현으로 채워뒀다 - 실제 연결되는 성당/사찰 담당자에게 정확한 용어(예: 교무금 산정 단위, 시주 익명성 관례)를
 //   확인해 offering_labels를 조정하는 절차가 필요하다(제안서 5장에 명시한 한계와 동일).
 // ============================================
-const ORG_TYPES = ['church', 'catholic', 'buddhist', 'other'];
+// 2026-10-22 고객 요청("전체 종교가 아닌 일반회사, 단체 등 모든 것이 입력될 수 있도록")으로 비종교 조직 유형 6종 추가.
+// DB CHECK(community_prospects/communities.org_type)와 같은 목록 - docs/migrations/2026-10-22_org_types_widen_community_logo_upload.sql
+const ORG_TYPES = ['church', 'catholic', 'buddhist', 'company', 'association', 'school', 'apartment', 'club', 'nonprofit', 'other'];
+const RELIGIOUS_ORG_TYPES = ['church', 'catholic', 'buddhist'];
+const ORG_TYPE_LABELS = {
+  church: '개신교(교회)', catholic: '천주교(성당)', buddhist: '불교(사찰)',
+  company: '일반회사', association: '협회·단체', school: '학교·학원', apartment: '아파트·주민모임',
+  club: '동호회·모임', nonprofit: '비영리·복지기관', other: '기타'
+};
+const NON_RELIGIOUS_OFFERING_LABELS = { general: '후원금', special: '특별후원' };
 const DEFAULT_OFFERING_LABELS = {
   church: { tithe: '십일조', thanks: '감사헌금', mission: '선교헌금', building: '건축헌금', general: '주정기헌금' },
   catholic: { dues: '교무금', mass: '미사예물', special: '특별헌금', general: '주일헌금' },
   buddhist: { dana: '시주', lantern: '연등접수', incense: '불전', general: '보시금' },
-  other: { general: '후원금', special: '특별후원' }
+  company: { ...NON_RELIGIOUS_OFFERING_LABELS },
+  association: { dues: '회비', general: '후원금', special: '특별후원' },
+  school: { general: '후원금', scholarship: '장학후원' },
+  apartment: { general: '후원금', special: '공동체 기금' },
+  club: { dues: '회비', general: '후원금' },
+  nonprofit: { general: '후원금', regular: '정기후원', special: '특별후원' },
+  other: { ...NON_RELIGIOUS_OFFERING_LABELS }
 };
 
 // 공개: 종교시설 유형/기본 항목명 목록 (관리자가 조직 등록 시 org_type 선택 → 기본 라벨 프리필용)
 app.get('/api/offering-org-types', (req, res) => {
-  res.json({ success: true, data: { org_types: ORG_TYPES, default_labels: DEFAULT_OFFERING_LABELS }, timestamp: new Date().toISOString() });
+  res.json({ success: true, data: { org_types: ORG_TYPES, labels: ORG_TYPE_LABELS, religious: RELIGIOUS_ORG_TYPES, default_labels: DEFAULT_OFFERING_LABELS }, timestamp: new Date().toISOString() });
 });
 
 // 헌금/후원 생성 (결제 전 pending 레코드 - 상품주문(POST /api/orders)과 동일한 2단계 결제 패턴)
