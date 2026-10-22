@@ -14396,7 +14396,7 @@
                                 settlement_tax_method: document.getElementById('lvcr-tax').value
                             }, bankFields);
                             if (rateRaw !== '') body.commission_rate = Number(rateRaw);
-                            res = await ownerFetch('/api/admin/creators/' + encodeURIComponent(lvcrEditing.id), { method: 'PATCH', body: JSON.stringify(body) });
+                            res = await lvOwnerFetch('/api/admin/creators/' + encodeURIComponent(lvcrEditing.id), { method: 'PATCH', body: JSON.stringify(body) });
                         } else {
                             const user = document.getElementById('lvcr-user').value.trim();
                             if (user && !/^[0-9a-fA-F-]{36}$/.test(user)) return showErr('회원 ID는 UUID 형식이어야 합니다');
