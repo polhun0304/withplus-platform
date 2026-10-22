@@ -12853,7 +12853,8 @@ async function runBandSync({ full = false, reason = 'cron' } = {}) {
     bandSyncRunning = false;
   }
 }
-cron.schedule('*/10 * * * *', () => { runBandSync({ full: false, reason: 'cron' }).catch(e => console.error('band sync cron', e)); });
+// 밴드 새 글을 홈 '실시간 리뷰·지금 이 순간'에 바로 띄우기 위해 2분마다 최근 글(최대 3페이지)만 확인한다 (연동이 꺼져 있으면 즉시 건너뜀)
+cron.schedule('*/2 * * * *', () => { runBandSync({ full: false, reason: 'cron' }).catch(e => console.error('band sync cron', e)); });
 cron.schedule('30 4 * * *', () => { runBandSync({ full: true, reason: 'daily-full' }).catch(e => console.error('band sync full cron', e)); }, { timezone: 'Asia/Seoul' });
 
 function maskToken(t) { const s = String(t || ''); return s ? s.slice(0, 4) + '••••••' + s.slice(-4) : ''; }
