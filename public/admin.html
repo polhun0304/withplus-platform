@@ -5488,8 +5488,8 @@
                             // GET은 requireOwnerStepUpOrBootstrap로 보호되어 있으므로(수수료율도 마진율과
                             // 같은 급의 민감정보) 저장된 스텝업 토큰이 있으면 함께 보낸다. 진입 게이트는 아래
                             // settlement-manage-rates-btn 클릭 핸들러에서 이미 처리했다.
-                            const fetcher = (typeof ownerFetchOptional === 'function') ? ownerFetchOptional : authedFetch;
-                            const { ok, json } = await fetcher('/api/admin/providers');
+                            // 관리자(admin)도 조회·수정 가능 (형님 결정 2026-10-22) — 대표자 2단계 인증 없이 일반 관리자 인증으로 호출
+                            const { ok, json } = await authedFetch('/api/admin/providers');
                             if (!ok || !json.success) throw new Error(json.message || '공급자 목록을 불러오지 못했습니다');
                             const providers = json.data;
                             if (providers.length === 0) {
@@ -5520,8 +5520,7 @@
                                         // 저장(PATCH)은 requireOwnerStepUp(부트스트랩 예외 없음, 원가/가격정책과
                                         // 동일한 강한 정책)으로 보호되어 있으므로, 조회와 별개로 여기서 다시 한 번
                                         // 스텝업을 확실히 받아둔다(가격정책 저장 버튼과 동일한 패턴).
-                                        await window.__ensureOwnerStepUp();
-                                        const { ok, json } = await ownerFetch(`/api/admin/providers/${btn.dataset.id}/commission-rate`, {
+                                        const { ok, json } = await authedFetch(`/api/admin/providers/${btn.dataset.id}/commission-rate`, {
                                             method: 'PATCH', body: JSON.stringify({ commission_rate: rate, settlement_tax_method: taxSelect.value })
                                         });
                                         if (!ok || !json.success) { alert(json.message || '수수료율 저장 중 오류가 발생했습니다'); return; }
@@ -5544,16 +5543,6 @@
                     document.getElementById('settlement-manage-rates-btn').addEventListener('click', async () => {
                         const area = document.getElementById('settlement-rates-area');
                         if (area.style.display === 'block') { area.style.display = 'none'; return; }
-                        if (typeof window.__ensureOwnerStepUpOrBootstrap === 'function') {
-                            try {
-                                await window.__ensureOwnerStepUpOrBootstrap();
-                            } catch (err) {
-                                if (err.message === 'CANCELLED') return; // 취소 시 패널을 열지 않는다
-                                area.style.display = 'block';
-                                area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>인증 확인 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
-                                return;
-                            }
-                        }
                         area.style.display = 'block';
                         loadSettlementRates();
                     });
