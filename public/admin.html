@@ -2246,7 +2246,6 @@
                     ${isAdmin ? '<button class="tab-btn" data-tab="best-settings">⭐ 베스트 상품 설정</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="home-banners">🖼 배너 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="subscriptions">🔄 정기배송 관리</button>' : ''}
-                    ${isAdmin ? '<button class="tab-btn" data-tab="live-commerce">📺 라이브 커머스</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="categories">🏷️ 카테고리 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="suppliers">🏭 공급자 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="seller-applications">🆕 판매자 입점신청</button>' : ''}
@@ -2265,6 +2264,7 @@
                     ${(isAdmin || isProvider) ? '<button class="tab-btn" data-tab="wms">🏭 창고관리(WMS)</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="marketing">📢 마케팅자동화</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="push">📣 푸시 알림</button>' : ''}
+                    ${isAdmin ? '<button class="tab-btn" data-tab="live-commerce">📺 라이브 관리</button>' : ''}
                     ${isSuperAdmin ? '<button class="tab-btn" data-tab="audit-log">🕵️ 감사로그</button>' : ''}
                     ${isSuperAdmin ? '<button class="tab-btn" data-tab="owner-management">👑 대표자 관리</button>' : ''}
                     ${isOwner ? '<button class="tab-btn" data-tab="pricing-policies">💹 가격정책 설정</button>' : ''}
@@ -14604,7 +14604,7 @@
                                 settlement_tax_method: document.getElementById('lvcr-tax').value
                             }, bankFields);
                             if (rateRaw !== '') body.commission_rate = Number(rateRaw);
-                            res = await ownerFetch('/api/admin/creators/' + encodeURIComponent(lvcrEditing.id), { method: 'PATCH', body: JSON.stringify(body) });
+                            res = await lvOwnerFetch('/api/admin/creators/' + encodeURIComponent(lvcrEditing.id), { method: 'PATCH', body: JSON.stringify(body) });
                         } else {
                             const user = document.getElementById('lvcr-user').value.trim();
                             if (user && !/^[0-9a-fA-F-]{36}$/.test(user)) return showErr('회원 ID는 UUID 형식이어야 합니다');
