@@ -268,10 +268,13 @@
         .ss-more .product-meta { font-size: .75em; color: #999; margin-top: 2px; }
         .ss-more .add-to-cart-btn { width: 100%; margin-top: 8px; padding: 8px 0; border: 1px solid var(--border-color); background: #fff; border-radius: 8px; font-size: .82em; font-weight: 600; cursor: pointer; }
         .ss-more .add-to-cart-btn:hover { border-color: var(--primary-color); color: var(--primary-color); }
-        .ssm-cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; }
+        .ssm-cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(136px, 1fr)); gap: 10px; }
         .ssm-cat { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border: 1px solid #F0E3E8; border-radius: 12px; text-decoration: none; color: #333; font-size: .9em; font-weight: 600; background: #FFFAFC; }
         .ssm-cat:hover { border-color: var(--primary-color); color: var(--primary-color); }
-        .ssm-cat-ico { display: inline-flex; }
+        .ssm-cat-ico { display: inline-flex; flex-shrink: 0; }
+        /* 카테고리 이름(다이어트·건강식품·생활용품 등 4글자)이 두 줄로 쪼개지지 않게 한 줄 고정 */
+        .ssm-cat > span:last-child { white-space: nowrap; min-width: 0; }
+        @media (max-width: 480px) { .ssm-cats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; } .ssm-cat { padding: 9px 10px; gap: 6px; } }
         .ssm-sentinel { height: 1px; }
         .ssm-load { display: block; margin: 22px auto 0; padding: 13px 36px; border: 1px solid #222; border-radius: 999px; background: #fff; font-weight: 700; cursor: pointer; }
         .ssm-top { position: fixed; right: 18px; bottom: 96px; z-index: 900; width: 46px; height: 46px; border-radius: 50%; border: 1px solid var(--border-color); background: #fff; box-shadow: 0 4px 14px rgba(0,0,0,.15); font-size: 16px; cursor: pointer; opacity: 0; pointer-events: none; transition: opacity .2s; }
