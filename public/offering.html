@@ -168,14 +168,20 @@
         }
 
         const primaryColor = community.primary_color || '#D32F5B';
+        // 비종교 조직(회사·협회·학교·아파트·동호회·복지기관 등)은 '헌금' 대신 '후원'으로 표시한다
+        const isReligious = WithPlus.isReligiousOrgType(community.org_type);
+        const GIVE_WORD = WithPlus.getOfferingWord(community.org_type); // 헌금·후원 | 시주·후원 | 후원
+        const GIVE_ONE = isReligious ? (community.org_type === 'buddhist' ? '시주' : '헌금') : '후원';
+        document.querySelector('.tab-btn[data-tab="give"]').textContent = `${GIVE_WORD} 하기`;
+        document.querySelector('.tab-btn[data-tab="history"]').textContent = `내 ${GIVE_ONE} 내역`;
         document.documentElement.style.setProperty('--primary-color', primaryColor);
-        document.title = `${community.name} 헌금·후원 - WITH+`;
+        document.title = `${community.name} ${GIVE_WORD} - WITH+`;
         brandBox.innerHTML = `
             ${community.logo_url ? `<img src="${WithPlus.safeUrlAttr(community.logo_url)}" class="logo-img" alt="${WithPlus.escapeHtml(community.name)} 로고">` : '🙏'}
             <div><span class="brand-text">${WithPlus.escapeHtml(community.name)}</span><br>
-            <span class="org-type-tag">${WithPlus.escapeHtml(WithPlus.getOrgTypeName(community.org_type))} · 온라인 헌금/후원</span></div>`;
+            <span class="org-type-tag">${WithPlus.escapeHtml(WithPlus.getOrgTypeName(community.org_type))} · 온라인 ${GIVE_WORD.replace('·', '/')}</span></div>`;
 
-        const labels = community.offering_labels || { general: '헌금' };
+        const labels = community.offering_labels || { general: GIVE_ONE };
         const labelEntries = Object.entries(labels);
 
         // ===== 헌금하기 폼 렌더 =====
@@ -185,7 +191,7 @@
         const QUICK_AMOUNT_PRESETS = [10000, 30000, 50000, 100000, 300000];
         giveBox.innerHTML = `
             <form id="give-form">
-                <div class="item-chip-hint">헌금·후원할 항목을 눌러 선택해주세요 (여러 개 선택 가능)</div>
+                <div class="item-chip-hint">${GIVE_WORD}할 항목을 눌러 선택해주세요 (여러 개 선택 가능)</div>
                 <div class="item-chip-grid" id="item-chip-grid">
                     ${labelEntries.map(([key, label], i) => `
                         <button type="button" class="item-chip ${i === 0 ? 'active' : ''}" data-key="${WithPlus.escapeHtml(key)}">${WithPlus.escapeHtml(label)}</button>`).join('')}
@@ -201,15 +207,15 @@
                         </div>`).join('')}
                 </div>
                 <div class="form-row">
-                    <label for="memo-input">기도제목·감사제목 (선택)</label>
+                    <label for="memo-input">${isReligious ? '기도제목·감사제목' : '응원 메시지'} (선택)</label>
                     <textarea id="memo-input" maxlength="500" placeholder="나누고 싶은 내용이 있으면 적어주세요"></textarea>
                 </div>
                 <div class="toggle-row">
                     <input type="checkbox" id="anon-check" style="width:18px; height:18px;">
-                    <label for="anon-check">무기명으로 헌금하기 (담당자에게 이름이 표시되지 않습니다)</label>
+                    <label for="anon-check">무기명으로 ${GIVE_ONE}하기 (담당자에게 이름이 표시되지 않습니다)</label>
                 </div>
                 <div class="total-box">
-                    <span>총 헌금·후원 금액</span>
+                    <span>총 ${GIVE_WORD} 금액</span>
                     <span class="amount" id="total-amount">0원</span>
                 </div>
                 <button type="button" class="pay-btn" id="give-submit-btn">결제하기</button>
@@ -277,14 +283,14 @@
             });
             if (items.length === 0) {
                 giveMsg.className = 'msg error';
-                giveMsg.textContent = '헌금 항목과 금액을 1개 이상 입력해주세요.';
+                giveMsg.textContent = `${GIVE_ONE} 항목과 금액을 1개 이상 입력해주세요.`;
                 return;
             }
 
             const submitBtn = document.getElementById('give-submit-btn');
             submitBtn.disabled = true;
             giveMsg.className = 'msg info';
-            giveMsg.textContent = '헌금 내역을 준비하는 중입니다...';
+            giveMsg.textContent = `${GIVE_ONE} 내역을 준비하는 중입니다...`;
 
             try {
                 const t = await WithPlus.getAccessToken();
@@ -296,7 +302,7 @@
                     body: JSON.stringify({ community_slug: slug, items, is_anonymous: isAnonymous, memo })
                 });
                 const json = await res.json();
-                if (!res.ok || !json.success) throw new Error(json.message || '헌금 생성에 실패했습니다');
+                if (!res.ok || !json.success) throw new Error(json.message || `${GIVE_ONE} 생성에 실패했습니다`);
                 const offering = json.data;
 
                 // 토스 결제위젯 로드
@@ -329,7 +335,7 @@
                     try {
                         await widget.requestPayment({
                             orderId: offering.order_number,
-                            orderName: `${community.name} ${items.map(i => i.key).length > 1 ? '헌금 외 ' + (items.length - 1) + '건' : (labels[items[0].key] || '헌금')}`,
+                            orderName: `${community.name} ${items.map(i => i.key).length > 1 ? GIVE_ONE + ' 외 ' + (items.length - 1) + '건' : (labels[items[0].key] || GIVE_ONE)}`,
                             successUrl: location.origin + '/payment-result.html',
                             failUrl: location.origin + '/payment-result.html',
                             customerEmail: (session && session.user && session.user.email) || undefined
@@ -354,19 +360,19 @@
                 const t = await WithPlus.getAccessToken();
                 const res = await fetch('/api/offerings/my', { headers: { Authorization: 'Bearer ' + t } });
                 const json = await res.json();
-                if (!res.ok || !json.success) throw new Error(json.message || '헌금 내역을 불러오지 못했습니다');
+                if (!res.ok || !json.success) throw new Error(json.message || `${GIVE_ONE} 내역을 불러오지 못했습니다`);
                 const list = (json.data || []).filter(o => o.communities && o.communities.slug === slug);
                 const summary = {
                     total_all_time: list.reduce((s, o) => s + Number(o.total_amount || 0), 0),
                     count: list.length
                 };
                 if (list.length === 0) {
-                    historyBox.innerHTML = `<div class="state-box"><div class="emoji">🙏</div><h3>아직 이 조직에 헌금·후원한 내역이 없습니다</h3></div>`;
+                    historyBox.innerHTML = `<div class="state-box"><div class="emoji">🙏</div><h3>아직 이 조직에 ${GIVE_WORD}한 내역이 없습니다</h3></div>`;
                     return;
                 }
                 historyBox.innerHTML = `
                     <div class="summary-row">
-                        <div class="summary-card"><div class="label">총 헌금·후원액</div><div class="value">${WithPlus.formatPrice(summary.total_all_time)}</div></div>
+                        <div class="summary-card"><div class="label">총 ${GIVE_WORD}액</div><div class="value">${WithPlus.formatPrice(summary.total_all_time)}</div></div>
                         <div class="summary-card"><div class="label">총 건수</div><div class="value">${summary.count}건</div></div>
                     </div>
                     ${list.map(o => `
