@@ -147,6 +147,10 @@
                     </form>
                     <p class="pw-hint" style="margin-top:14px;">비밀번호가 기억나지 않으면 로그아웃 후 로그인 화면의 <a href="/login">비밀번호 찾기</a>를 이용해주세요.</p>
                 </div>
+                <!-- 계정 관리: 회원탈퇴는 이 화면 맨 아래에만 작게 둔다 (마이페이지에는 노출하지 않음) -->
+                <div style="margin-top:56px; padding-top:16px; border-top:1px solid #EEE; text-align:right;">
+                    <a href="/mypage#withdraw" style="font-size:0.76em; color:#AAA; text-decoration:underline;">계정 관리 · 회원탈퇴</a>
+                </div>
             `;
             initPasswordForm();
             document.getElementById('my-info-form').addEventListener('submit', async (e) => {
