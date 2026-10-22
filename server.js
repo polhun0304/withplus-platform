@@ -11,6 +11,7 @@ require('dotenv').config();
 
 const { createClient } = require('@supabase/supabase-js');
 const cron = require('node-cron');
+const { validateAnthropicKey, validateSupplierKey, validateEmailConfig } = require('./lib/secret-format');
 
 // 대표자 전용 원가/2FA 인프라용 라이브러리
 // - bcryptjs: 백업코드/OTP 코드 해시 (네이티브 컴파일이 필요한 bcrypt 대신 순수 JS 구현을 사용 - Windows 서버에
@@ -3105,6 +3106,8 @@ app.patch('/api/admin/integrations/:supplierKey', authenticate, requireRole(['ad
     const update = { updated_at: new Date().toISOString() };
     if (typeof req.body.api_key === 'string') update.api_key = req.body.api_key.trim() || null;
     if (typeof req.body.enabled === 'boolean') update.enabled = req.body.enabled;
+    const badKey = validateSupplierKey(update.api_key);
+    if (badKey) return res.status(400).json({ error: 'Bad Request', message: badKey, timestamp: new Date().toISOString() });
 
     const { data, error } = await supabase.from('supplier_integrations').update(update).eq('supplier_key', supplierKey).select().single();
     if (error) throw error;
@@ -5012,6 +5015,14 @@ app.patch('/api/admin/email-config', authenticate, requireRole(['admin', 'super_
     if (typeof req.body.from_email === 'string') update.from_email = req.body.from_email.trim() || null;
     if (typeof req.body.enabled === 'boolean') update.enabled = req.body.enabled;
 
+    // 칸별 형식 검사(예: Resend 비밀번호 칸에 이메일 주소) — 이번에 바꾸는 칸만, Resend 판정은 저장 후 서버 주소로
+    const current = (await getEmailConfig()) || {};
+    const bad = validateEmailConfig({
+      smtp_host: update.smtp_host, smtp_port: update.smtp_port, smtp_user: update.smtp_user, from_email: update.from_email,
+      smtp_pass_new: update.smtp_pass, effective_host: update.smtp_host !== undefined ? (update.smtp_host || '') : (current.smtp_host || ''),
+    });
+    if (bad) return res.status(400).json({ error: 'Bad Request', message: bad, timestamp: new Date().toISOString() });
+
     const { data, error } = await supabase.from('email_configs_with').update(update).eq('provider_key', 'smtp').select().single();
     if (error) throw error;
     res.json({ success: true, data: { enabled: data.enabled, has_smtp_pass: !!data.smtp_pass }, message: '저장되었습니다', timestamp: new Date().toISOString() });
@@ -5209,6 +5220,8 @@ app.patch('/api/admin/ai-category-recommender', authenticate, requireRole(['admi
     const update = { updated_at: new Date().toISOString() };
     if (typeof req.body.api_key === 'string' && req.body.api_key.trim()) update.api_key = req.body.api_key.trim();
     if (typeof req.body.enabled === 'boolean') update.enabled = req.body.enabled;
+    const badKey = validateAnthropicKey(update.api_key);
+    if (badKey) return res.status(400).json({ error: 'Bad Request', message: badKey, timestamp: new Date().toISOString() });
 
     const { data, error } = await supabase.from('ai_configs_with').update(update).eq('provider_key', 'anthropic').select().single();
     if (error) throw error;
