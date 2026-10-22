@@ -204,6 +204,12 @@
         .push-toggle { flex-shrink: 0; border: 1.5px solid var(--text-dark); background: #fff; color: var(--text-dark); border-radius: 999px; padding: 8px 18px; font-weight: 700; cursor: pointer; font-family: inherit; }
         .push-toggle.on { background: var(--text-dark); color: #fff; }
         .push-toggle:disabled { opacity: .5; cursor: default; }
+        /* 📱 앱 버전 — 설치 카드(앱으로 실행 중이면 pwa-install.js 가 숨김) */
+        .app-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; border: 1px solid #F3D3DE; border-radius: 14px; padding: 14px 16px; margin: -16px 0 28px; background: linear-gradient(135deg, #FFF5F8, #FFFFFF); }
+        .app-card .app-card-txt { display: flex; align-items: center; gap: 12px; min-width: 0; }
+        .app-card img { width: 44px; height: 44px; border-radius: 11px; flex-shrink: 0; box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+        .app-card p { margin: 2px 0 0; font-size: 0.85em; color: var(--text-gray); word-break: keep-all; }
+        .app-card-btn { flex-shrink: 0; border: 0; background: var(--primary-color); color: #fff; border-radius: 999px; padding: 9px 16px; font-weight: 700; cursor: pointer; font-family: inherit; }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -324,6 +330,7 @@
     </div>
 
     <script src="/vendor/supabase.min.js"></script>
+    <script src="/withplus-pricing.js"></script>
     <script src="/withplus-common.js"></script>
     <script src="//t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>
     <script>
@@ -372,7 +379,9 @@
                     if (!ordersRes.ok || !ordersJson.success) throw new Error(ordersJson.message || '주문 내역을 불러오지 못했습니다');
 
                     const wishlistJson = await wishlistRes.json().catch(() => null);
-                    const wishlist = (wishlistRes.ok && wishlistJson && wishlistJson.success) ? wishlistJson.data : [];
+                    let wishlist = (wishlistRes.ok && wishlistJson && wishlistJson.success) ? wishlistJson.data : [];
+                    // 채널별 자동 가격(공동체가/도매가) - 상품 카드와 같은 가격으로 보여준다
+                    try { wishlist = WithPlus.applyPriceContext(wishlist || [], await WithPlus.loadPriceContext()); } catch (e) {}
 
                     const returnsJson = await returnsRes.json().catch(() => null);
                     const returnRequests = (returnsRes.ok && returnsJson && returnsJson.success) ? returnsJson.data : [];
@@ -599,7 +608,7 @@
                                 <div class="thumb" ${img ? `style="background-image:url('${WithPlus.safeUrlAttr(img)}');"` : ''}>${img ? '' : emoji}</div>
                                 <div class="info">
                                     <div class="name">${WithPlus.escapeHtml(p.name)}</div>
-                                    <div class="price">${WithPlus.formatPrice(p.price)}</div>
+                                    <div class="price">${WithPlus.formatPrice(WithPlus.getEffectiveUnitPrice(p))}${WithPlus.renderPriceLabel(p)}</div>
                                 </div>
                             </a>`;
                         }).join('')}</div>`;
@@ -663,6 +672,10 @@
                         <div class="push-card" id="push-card">
                             <div><b>🔔 앱 푸시 알림</b><p id="push-desc">주문·배송, 특가, 리뷰 요청 소식을 휴대폰 알림으로 받아보세요.</p></div>
                             <button type="button" class="push-toggle" id="push-toggle" aria-pressed="false">받기</button>
+                        </div>
+                        <div class="app-card" id="app-install" data-wp-app-install-card>
+                            <div class="app-card-txt"><img src="/images/icons/icon-192.png" alt=""><div><b>📱 WITH+ 앱 설치</b><p>홈 화면에 추가하면 앱처럼 바로 열리고 알림도 받을 수 있어요.</p></div></div>
+                            <button type="button" class="app-card-btn" data-wp-app-install>앱 설치</button>
                         </div>
                         ${gradeHtml}
                         <div class="mileage-summary">

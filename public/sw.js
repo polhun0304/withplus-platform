@@ -3,7 +3,7 @@
 // 정적 리소스(이미지/CSS/JS/아이콘)는 캐시 우선으로 빠르게, HTML 페이지는 네트워크 우선(캐시하지 않음),
 // 실패 시 오프라인 안내 페이지로 대체한다.
 
-const CACHE_VERSION = 'v7'; // 설치형 앱(PWA) 표준 v1: 페이지(HTML) 캐시 중단·/auth 제외 — 옛 페이지 캐시 정리
+const CACHE_VERSION = 'v8'; // 📱 앱 버전: 오프라인 화면용 아이콘(/pwa/icon/*)·typography.css 사전 캐시
 const CACHE_NAME = `withplus-${CACHE_VERSION}`;
 const OFFLINE_URL = '/offline.html';
 
@@ -12,7 +12,10 @@ const PRECACHE_URLS = [
   '/manifest.json',
   '/images/icons/icon-192.png',
   '/images/icons/icon-512.png',
-  '/pwa-install.js'
+  '/pwa-install.js',
+  '/pwa/icon/192',
+  '/pwa/icon/apple',
+  '/typography.css'
 ];
 
 self.addEventListener('install', (event) => {

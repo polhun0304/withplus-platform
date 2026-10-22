@@ -33,6 +33,7 @@
         .msg { margin-top: 14px; font-size: 0.9em; padding: 10px 12px; border-radius: 8px; display: none; }
         .msg.error { display: block; background: #FDECEA; color: #C62828; }
         .msg.success { display: block; background: #E8F5E9; color: #2E7D32; }
+        #social-login-area button.is-soon { opacity: .55; }
         .links-row { text-align: center; margin-top: 20px; font-size: 0.9em; color: var(--text-gray); }
         .links-row a { color: var(--primary-color); text-decoration: none; font-weight: 600; }
         .back-home { text-align: center; margin-top: 16px; }
@@ -139,6 +140,7 @@
     </div>
 
     <script src="/vendor/supabase.min.js"></script>
+    <script src="/withplus-pricing.js"></script>
     <script src="/withplus-common.js"></script>
     <script>
         (async function () {
@@ -171,19 +173,28 @@
                 socialMsg.textContent = socialError;
                 socialMsg.className = 'msg error';
             }
+            // 카카오/네이버 로그인에서 막 돌아온 경우: 세션 이식(withplus-common.js) 후 자동으로 새로고침되어
+            // 아래 '이미 로그인' 분기에서 원래 페이지로 이동한다. 몇 초 안에 안 되면 안내.
+            const socialDone = urlParams.get('social_done');
+            if (socialDone && !socialError) {
+                const pname = { kakao: '카카오', naver: '네이버' }[socialDone] || '소셜';
+                socialMsg.textContent = pname + ' 로그인 처리 중입니다...';
+                socialMsg.className = 'msg success';
+                setTimeout(async () => {
+                    if (await WithPlus.getSession()) return;
+                    socialMsg.textContent = pname + ' 로그인 세션을 받지 못했습니다. 브라우저의 쿠키/저장소 차단을 해제하거나 다시 시도해주세요.';
+                    socialMsg.className = 'msg error';
+                }, 4000);
+            }
+            const returnPath = WithPlus.getLoginReturnPath();
 
             document.getElementById('social-google-btn').addEventListener('click', async () => {
                 const client = await WithPlus.getClient();
-                const { error } = await client.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + '/' } });
+                const { error } = await client.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + '/login' + (returnPath !== '/' ? '?next=' + encodeURIComponent(returnPath) : '') } });
                 if (error) { socialMsg.textContent = 'Google 로그인을 시작하지 못했습니다: ' + error.message; socialMsg.className = 'msg error'; }
             });
             // 카카오·네이버: 키가 등록돼 '준비 완료'된 경우에만 로그인 화면으로 이동, 아니면 준비중 안내
-            ['kakao', 'naver'].forEach(provider => {
-                document.getElementById('social-' + provider + '-btn').addEventListener('click', async () => {
-                    try { await WithPlus.socialLogin(provider); }
-                    catch (err) { socialMsg.textContent = err.message; socialMsg.className = 'msg error'; }
-                });
-            });
+            WithPlus.bindSocialButtons({ kakao: document.getElementById('social-kakao-btn'), naver: document.getElementById('social-naver-btn') }, socialMsg);
             document.getElementById('social-ekos-btn').addEventListener('click', () => {
                 location.href = '/auth/ekos/login';
             });
@@ -195,7 +206,8 @@
                 const client = await WithPlus.getClient();
                 const { data: aalData } = await client.auth.mfa.getAuthenticatorAssuranceLevel();
                 if (!aalData || aalData.nextLevel === aalData.currentLevel || aalData.nextLevel === 'aal1') {
-                    location.href = '/';
+                    if (socialDone) { socialMsg.textContent = '로그인되었습니다! 이동 중...'; socialMsg.className = 'msg success'; }
+                    WithPlus.goAfterLogin();
                     return;
                 }
                 // 2단계 인증이 아직 완료되지 않은 세션 - 코드 입력 화면으로
@@ -205,7 +217,7 @@
             async function showMfaStep(client) {
                 const { data: factorsData } = await client.auth.mfa.listFactors();
                 const verifiedTotp = (factorsData?.totp || []).find(f => f.status === 'verified');
-                if (!verifiedTotp) { location.href = '/'; return; } // 이론상 도달하지 않지만 방어적으로 처리
+                if (!verifiedTotp) { WithPlus.goAfterLogin(); return; } // 이론상 도달하지 않지만 방어적으로 처리
                 pendingFactorId = verifiedTotp.id;
                 form.style.display = 'none';
                 forgotLinkRow.style.display = 'none';
@@ -263,7 +275,7 @@
 
                     msg.textContent = '로그인 성공! 이동 중...';
                     msg.className = 'msg success';
-                    setTimeout(() => { location.href = '/'; }, 600);
+                    WithPlus.goAfterLogin(600);
                 } catch (err) {
                     msg.textContent = '로그인 중 오류가 발생했습니다: ' + err.message;
                     msg.className = 'msg error';
@@ -290,7 +302,7 @@
                     }
                     mfaMsg.textContent = '인증 완료! 이동 중...';
                     mfaMsg.className = 'msg success';
-                    setTimeout(() => { location.href = '/'; }, 500);
+                    WithPlus.goAfterLogin(500);
                 } catch (err) {
                     mfaMsg.textContent = '인증 중 오류가 발생했습니다: ' + err.message;
                     mfaMsg.className = 'msg error';

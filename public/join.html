@@ -95,11 +95,12 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script src="/withplus-pricing.js"></script>
     <script src="/withplus-common.js"></script>
     <script>
         (async function () {
             const session = await WithPlus.getSession();
-            if (session) { location.href = '/'; return; }
+            if (session) { WithPlus.goAfterLogin(); return; }
 
             const form = document.getElementById('join-form');
             const msg = document.getElementById('msg');
@@ -182,7 +183,7 @@
                                 localStorage.removeItem('withplus_pending_marketing_consent');
                             } catch (e) { /* 가입 자체는 이미 완료됐으므로 동의 반영 실패는 조용히 무시 - 마이페이지에서 다시 설정 가능 */ }
                         }
-                        setTimeout(() => { location.href = '/'; }, 600);
+                        WithPlus.goAfterLogin(600);
                     } else {
                         msg.textContent = '가입이 완료되었습니다. 이메일 인증 후 로그인해주세요.';
                         msg.className = 'msg success';
@@ -198,7 +199,23 @@
                 }
             });
         })();
-        WithPlus.bindSocialButtons({ kakao: document.getElementById('join-kakao-btn'), naver: document.getElementById('join-naver-btn') }, document.getElementById('join-social-msg'));
+        // 카카오/네이버로 가입: 실패하면 서버가 이 화면으로 ?social_error=와 함께 돌려보낸다
+        (function () {
+            const joinSocialMsg = document.getElementById('join-social-msg');
+            const socialError = new URLSearchParams(location.search).get('social_error');
+            if (socialError) { joinSocialMsg.textContent = socialError; joinSocialMsg.style.display = 'block'; }
+            WithPlus.getLoginReturnPath(); // 가입 전 보던 페이지를 기억(가입·로그인 후 그 페이지로 복귀)
+            WithPlus.bindSocialButtons({ kakao: document.getElementById('join-kakao-btn'), naver: document.getElementById('join-naver-btn') }, joinSocialMsg, {
+                // 이동 직전에 입력해둔 추천인코드·마케팅 동의를 저장 - 로그인 완료 시점에 반영된다(이메일 가입과 같은 방식)
+                beforeNavigate() {
+                    try {
+                        const ref = (document.getElementById('referral-code').value || '').trim().toUpperCase();
+                        if (ref) localStorage.setItem('withplus_pending_referral', ref);
+                        if (document.getElementById('marketing-consent').checked) localStorage.setItem('withplus_pending_marketing_consent', '1');
+                    } catch (e) { /* ignore */ }
+                }
+            });
+        })();
     </script>
 </body>
 </html>

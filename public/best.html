@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- 설치형 앱(PWA) 표준 v1 -->
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#D32F5B">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="WITH+">
+    <link rel="apple-touch-icon" sizes="180x180" href="/pwa/icon/apple">
+    <script src="/pwa-install.js" defer></script>
+    <script src="/voice-dictation.js?v=1" defer></script>
+    <title>⭐ 베스트 상품 - WITH+</title>
+    <meta name="description" content="WITH+ 회원들이 가장 많이 찾은 베스트 상품">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B;
+            --primary-dark: #B0154F;
+            --bg-white: #FFFFFF;
+            --bg-light: #F5F5F5;
+            --text-dark: #333333;
+            --text-gray: #666666;
+            --border-color: #E0E0E0;
+            --success: #2E7D32;
+            --warning: #FFC107;
+        }
+        html { scroll-behavior: smooth; }
+        body {
+            font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background-color: var(--bg-white);
+            color: var(--text-dark);
+            line-height: 1.6;
+        }
+        /* ===== HEADER (index.html과 동일) ===== */
+        .header { background: var(--bg-white); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-top { max-width: 1400px; margin: 0 auto; padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; }
+        .header-top-left { display: flex; gap: 30px; align-items: center; }
+        .header-top-right { display: flex; gap: 20px; align-items: center; font-size: 0.9em; }
+        .header-top-right a { color: var(--text-dark); text-decoration: none; transition: color 0.3s; }
+        .header-top-right a:hover { color: var(--primary-color); }
+        .header-main { max-width: 1400px; margin: 0 auto; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; gap: 30px; }
+        .logo { font-size: 1.8em; font-weight: bold; color: var(--primary-color); text-decoration: none; white-space: nowrap; }
+        .logo span { font-size: 0.7em; color: var(--text-gray); display: block; font-weight: normal; }
+        .nav-menu { display: flex; gap: 25px; flex: 1; flex-wrap: wrap; }
+        .nav-menu a { color: var(--text-dark); text-decoration: none; font-weight: 500; font-size: 0.95em; transition: color 0.3s; position: relative; }
+        .nav-menu a:hover, .nav-menu a.active { color: var(--primary-color); }
+        .header-actions { display: flex; gap: 20px; align-items: center; }
+        .search-box { display: flex; align-items: center; background: var(--bg-light); border-radius: 24px; padding: 8px 16px; border: 1px solid var(--border-color); }
+        .search-box input { border: none; background: transparent; padding: 4px; width: 150px; outline: none; font-size: 0.9em; }
+        .search-box button { background: none; border: none; cursor: pointer; color: var(--text-gray); font-size: 1em; }
+        .icon-button { background: none; border: none; cursor: pointer; font-size: 1.3em; color: var(--text-dark); position: relative; text-decoration: none; display: inline-block; }
+        .cart-badge { position: absolute; top: -8px; right: -8px; background: var(--primary-color); color: white; border-radius: 50%; width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 0.75em; font-weight: bold; }
+
+        /* ===== 페이지 타이틀 ===== */
+        .page-hero { background: linear-gradient(135deg, var(--primary-color), var(--primary-dark)); color: white; padding: 40px 20px; text-align: center; }
+        .page-hero h1 { font-size: 2em; }
+        .breadcrumb { max-width: 1400px; margin: 20px auto 0; padding: 0 20px; font-size: 0.9em; color: var(--text-gray); }
+        .breadcrumb a { color: var(--primary-dark); text-decoration: underline; }
+
+        /* ===== PRODUCT GRID (index.html과 동일) ===== */
+        .products-section { max-width: 1400px; margin: 40px auto 80px; padding: 0 20px; }
+        .product-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; }
+        .product-card { background: var(--bg-white); border: 1px solid var(--border-color); border-radius: 12px; overflow: hidden; transition: all 0.3s; display: flex; flex-direction: column; }
+        .product-card:hover { box-shadow: 0 8px 24px rgba(233, 30, 99, 0.15); transform: translateY(-4px); border-color: var(--primary-color); }
+        .product-image { width: 100%; height: 200px; background: var(--bg-light); position: relative; overflow: hidden; display: flex; align-items: center; justify-content: center; font-size: 3em; color: #ddd; }
+        .product-actions { position: absolute; top: 10px; right: 10px; display: flex; gap: 8px; opacity: 0; transition: opacity 0.3s; }
+        .product-card:hover .product-actions { opacity: 1; }
+        .action-btn { background: rgba(255,255,255,0.9); border: none; width: 36px; height: 36px; border-radius: 50%; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 1.1em; }
+        .action-btn:hover { background: var(--primary-color); color: white; }
+        .mileage-badge { position: absolute; top: 10px; left: 10px; background: rgba(0, 0, 0, 0.72); backdrop-filter: blur(3px); color: #fff; padding: 5px 10px; border-radius: 6px; font-size: 11px; font-weight: 600; display: flex; align-items: baseline; gap: 4px; line-height: 1.3; letter-spacing: 0.01em; }
+        .mileage-badge .individual { font-size: 11px; color: var(--primary-color); font-weight: 700; }
+        .mileage-badge .bonus { font-size: 10px; opacity: 0.9; }
+        .product-info { padding: 15px; flex: 1; display: flex; flex-direction: column; }
+        .product-name { font-weight: 600; margin-bottom: 8px; font-size: 0.95em; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .product-price { display: flex; gap: 8px; align-items: center; margin-bottom: 8px; }
+        .current-price { font-size: 1.1em; font-weight: bold; color: var(--primary-color); }
+        .original-price { font-size: 0.85em; color: var(--text-gray); text-decoration: line-through; }
+        .discount-rate { font-size: 0.8em; color: var(--success); font-weight: bold; }
+        .product-meta { font-size: 0.8em; color: var(--text-gray); margin-top: auto; padding-top: 8px; border-top: 1px solid var(--border-color); }
+        .add-to-cart-btn { width: 100%; padding: 10px; background: var(--primary-color); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: 600; margin-top: 12px; }
+        .add-to-cart-btn:hover { background: var(--primary-dark); }
+        .add-to-cart-btn:disabled { background: #ccc; cursor: not-allowed; }
+
+        /* ===== 상태 표시(로딩/빈 상태) ===== */
+        .state-box { text-align: center; padding: 80px 20px; color: var(--text-gray); }
+        .state-box .emoji { font-size: 3em; margin-bottom: 16px; }
+        .state-box h3 { font-size: 1.2em; margin-bottom: 10px; color: var(--text-dark); }
+        .state-box a { display: inline-block; margin-top: 20px; padding: 10px 24px; background: var(--primary-color); color: white; text-decoration: none; border-radius: 24px; font-weight: 600; }
+
+        /* ===== FOOTER (간소화) ===== */
+        .footer { background: var(--text-dark); color: rgba(255,255,255,0.7); padding: 30px 20px; text-align: center; font-size: 0.85em; }
+        .footer a { color: #FF7FA8; text-decoration: underline; }
+
+        @media (max-width: 768px) {
+            .header-main { flex-direction: column; gap: 12px; }
+            /* 모바일에서는 카테고리 메뉴를 세로로 쌓지 않고 한 줄 가로 스크롤로 보여준다.
+               (8개 링크가 세로로 쌓이면 헤더가 화면 대부분을 차지해 실제 상품이 안 보임) */
+            .nav-menu {
+                flex-direction: row;
+                flex-wrap: nowrap;
+                overflow-x: auto;
+                -webkit-overflow-scrolling: touch;
+                scrollbar-width: none;
+                gap: 18px;
+                padding-bottom: 2px;
+            }
+            .nav-menu::-webkit-scrollbar { display: none; }
+            .nav-menu a { white-space: nowrap; flex-shrink: 0; }
+            .product-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+        }
+        .cat-sort-bar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 16px; }
+        .cat-sort-bar .cat-count { font-size: 0.92em; color: var(--text-gray); }
+        .cat-sort-bar .cat-count b { color: var(--text-dark); }
+        .cat-sort-bar select { padding: 8px 12px; border: 1px solid var(--border-color); border-radius: 10px; background: #fff; font-size: 0.9em; font-family: inherit; color: var(--text-dark); }
+    </style>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="stylesheet" href="/typography.css">
+    <style>
+        .best-bar { display: flex; justify-content: space-between; align-items: center; gap: 6px 10px; margin-bottom: 16px; flex-wrap: wrap; font-size: .92em; color: var(--text-gray); }
+        .best-bar b { color: var(--text-dark); }
+        .product-image[data-rank]::before { content: attr(data-rank); position: absolute; left: 0; top: 0; z-index: 4; min-width: 30px; height: 30px; padding: 0 8px; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 15px; color: #fff; background: rgba(28,29,34,0.88); border-radius: 10px 0 10px 0; }
+        .product-image[data-rank="1"]::before, .product-image[data-rank="2"]::before, .product-image[data-rank="3"]::before { background: var(--primary-color); }
+        .best-sentinel { height: 1px; }
+        .best-load { display: block; margin: 26px auto 0; padding: 12px 28px; border-radius: 999px; border: 1px solid var(--primary-color); background: #fff; color: var(--primary-color); font-weight: 700; cursor: pointer; font-family: inherit; }
+        .best-load[hidden] { display: none; }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="header-top">
+            <div class="header-top-left">
+                <a href="/" class="logo" aria-label="WITH+ 홈"><img src="/images/brand/withplus-logo.webp" alt="WITH+" class="wp-logo-img" width="130" height="40"><span class="wp-logo-tagline">함께할수록 <b>더해지는 가치</b></span></a>
+            </div>
+        </div>
+        <div class="header-main">
+            <nav class="nav-menu" id="nav-menu">
+                <a href="/category/diet">🥗 다이어트</a>
+                <a href="/category/beauty">💄 화장품</a>
+                <a href="/category/functional">💊 건강식품</a>
+                <a href="/category/tea">🍎 식품</a>
+                <a href="/category/lifestyle">🏠 생활용품</a>
+                <a href="/category/fashion">👕 패션</a>
+                <a href="/category/special">🎁 기획전</a>
+            </nav>
+            <div class="header-actions">
+                <div class="search-box">
+                    <input type="text" placeholder="상품을 검색해주세요">
+                    <button type="submit">🔍</button>
+                </div>
+                <a class="icon-button" id="account-link" href="/login">👤</a>
+                <a class="icon-button" href="/cart">🛒<span class="cart-badge">0</span></a>
+            </div>
+        </div>
+    </header>
+
+    <div class="page-hero">
+        <h1>⭐ 베스트 상품</h1>
+    </div>
+    <div class="breadcrumb"><a href="/">홈</a> &gt; <span>베스트 상품</span></div>
+
+    <section class="products-section">
+        <div class="best-bar" id="best-bar"></div>
+        <div id="content-area">
+            <div class="state-box"><div class="emoji">⏳</div><h3>베스트 상품을 불러오는 중입니다...</h3></div>
+        </div>
+        <div class="best-sentinel" id="best-sentinel"></div>
+        <button type="button" class="best-load" id="best-load" hidden>상품 더 보기</button>
+    </section>
+
+    <footer class="footer">
+        <p>&copy; 2024-2026 WITH+ Co., Ltd. All Rights Reserved. | <a href="/">홈으로</a></p>
+    </footer>
+
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script src="/withplus-common.js"></script>
+    <script>
+        (async function () {
+            WithPlus.initHeader();
+            WithPlus.initSearchBox();
+            WithPlus.initCategoryNav();
+            WithPlus.attachProductCardInteractions();
+            const PAGE = 24;
+            const area = document.getElementById('content-area');
+            const bar = document.getElementById('best-bar');
+            const moreBtn = document.getElementById('best-load');
+            const sentinel = document.getElementById('best-sentinel');
+            let offset = 0, total = 0, loading = false, done = false, grid = null;
+
+            // 순위 번호를 사진 왼쪽 위에 표시(1~3위는 강조색)
+            function withRank(html, rank) {
+                return html.replace('<div class="product-image"', `<div class="product-image" data-rank="${rank}"`);
+            }
+            async function loadMore() {
+                if (loading || done) return;
+                loading = true;
+                moreBtn.disabled = true;
+                try {
+                    const url = WithPlus.withCommunityParam(`/api/home/best?limit=${PAGE}&offset=${offset}`);
+                    const { ok, json } = await WithPlus.fetchJSON(url);
+                    if (!ok || !json.success) throw new Error((json && json.message) || '베스트 상품을 불러오지 못했습니다');
+                    total = json.total || 0;
+                    if (offset === 0) {
+                        if (!json.data.length) {
+                            area.innerHTML = '<div class="state-box"><div class="emoji">⭐</div><h3>아직 베스트 상품이 없습니다</h3><a href="/">홈으로 돌아가기</a></div>';
+                            done = true;
+                            return;
+                        }
+                        bar.innerHTML = `<span>베스트 상품 <b>${total.toLocaleString('ko-KR')}</b>개</span><span>최근 ${json.period_days}일 판매·후기·장바구니·찜을 반영한 자동 순위</span>`;
+                        area.innerHTML = '<div class="product-grid" id="best-grid"></div>';
+                        grid = document.getElementById('best-grid');
+                    }
+                    grid.insertAdjacentHTML('beforeend', json.data.map(p => withRank(WithPlus.renderProductCard(p), p.best_rank)).join(''));
+                    WithPlus.syncWishlistHearts();
+                    offset += json.data.length;
+                    done = !json.has_more;
+                } catch (err) {
+                    if (offset === 0) area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>베스트 상품을 불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p><a href="/">홈으로 돌아가기</a></div>`;
+                } finally {
+                    loading = false;
+                    moreBtn.disabled = false;
+                    moreBtn.hidden = done;
+                }
+                // 불러온 뒤에도 화면 끝(센티넬)이 여전히 보이면 이어서 더 불러온다(관찰자는 '보이기 시작할 때'만 알려주므로)
+                setTimeout(() => { if (!done && sentinel.getBoundingClientRect().top < window.innerHeight + 600) loadMore(); }, 50);
+            }
+            moreBtn.addEventListener('click', loadMore);
+            // 화면 끝에 닿으면 자동으로 다음 24개를 더 불러온다(무한 스크롤). 지원 안 되는 브라우저는 '상품 더 보기' 버튼.
+            if ('IntersectionObserver' in window) {
+                new IntersectionObserver(entries => { if (entries.some(e => e.isIntersecting)) loadMore(); }, { rootMargin: '600px 0px' }).observe(sentinel);
+            }
+            // 관찰자가 동작하지 않는 환경 대비: 스크롤할 때도 끝에 가까워졌는지 확인
+            let scrollTimer = null;
+            window.addEventListener('scroll', () => {
+                if (scrollTimer) return;
+                scrollTimer = setTimeout(() => { scrollTimer = null; if (!done && sentinel.getBoundingClientRect().top < window.innerHeight + 600) loadMore(); }, 200);
+            }, { passive: true });
+            await loadMore();
+        })();
+    </script>
+</body>
+</html>

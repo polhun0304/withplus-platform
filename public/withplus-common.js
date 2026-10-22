@@ -152,6 +152,7 @@
             </span>`;
         }).join('');
       }
+      insertFlashDealsLink(navEl, 'nav');
     }
     const gridEl = document.getElementById('category-grid');
     if (gridEl) {
@@ -165,7 +166,24 @@
               <div class="category-name">${escapeHtml(c.label)}</div>
           </a>`).join('');
       }
+      insertFlashDealsLink(gridEl, 'grid');
     }
+  }
+
+  // ⚡ '초특가' 메뉴 — 카테고리(DB) 메뉴가 아니라 고정 메뉴라서, '기획전'(special) 바로 오른쪽에 끼워 넣는다(없으면 맨 끝).
+  const FLASH_MENU = { slug: 'flash-deals', label: '초특가', href: '/deals' };
+  function flashDealsLinkHtml(kind) {
+    const active = location.pathname.replace(/\/$/, '') === FLASH_MENU.href ? ' class="active"' : '';
+    if (kind === 'nav') return `<a href="${FLASH_MENU.href}"${active} data-wp-flash-menu="1"><span class="wp-nav-ico">${getCategory3DIcon(FLASH_MENU, 24)}</span>${FLASH_MENU.label}</a>`;
+    if (kind === 'grid') return `<a href="${FLASH_MENU.href}" class="category-item" data-wp-flash-menu="1"><div class="category-icon">${getCategory3DIcon(FLASH_MENU, 46)}</div><div class="category-name">${FLASH_MENU.label}</div></a>`;
+    return `<a href="${FLASH_MENU.href}" data-wp-flash-menu="1"><span class="wp-cat-ico">${getCategory3DIcon(FLASH_MENU, 30)}</span><span>${FLASH_MENU.label}</span></a>`;
+  }
+  function insertFlashDealsLink(container, kind) {
+    if (!container || container.querySelector('[data-wp-flash-menu]')) return;
+    const special = [...container.querySelectorAll(':scope > a, :scope > .wp-nav-item')]
+      .find(el => /\/category\/special(?:$|[/?#])/.test(el.getAttribute('href') || (el.querySelector('a') ? el.querySelector('a').getAttribute('href') : '') || ''));
+    if (special) special.insertAdjacentHTML('afterend', flashDealsLinkHtml(kind));
+    else container.insertAdjacentHTML('beforeend', flashDealsLinkHtml(kind));
   }
 
   // refreshCategoryMap + renderCategoryNav를 함께 호출하는 편의 함수 (nav-menu/category-grid가 있는 페이지에서 사용)
@@ -182,11 +200,40 @@
     return Number(price).toLocaleString('ko-KR') + '원';
   }
 
+  // ============================================
+  // 구매수량별 가격 옵션 (서버 getQuantityTierPrice / computeProductLineTotal 과 동일 규칙 - 표시용)
+  // 수량이 등록된 묶음 수량과 정확히 같으면 묶음 총액, 아니면 1개 가격(할인가 반영) x 수량.
+  // 실제 결제 금액은 항상 서버가 다시 계산한다.
+  // ============================================
+  function getEffectiveUnitPrice(p) {
+    const price = Number(p && p.price) || 0;
+    const dp = p && p.discount_price !== null && p.discount_price !== undefined && p.discount_price !== '' ? Number(p.discount_price) : null;
+    return (dp !== null && Number.isFinite(dp) && dp > 0 && dp < price) ? dp : price;
+  }
+  function getQuantityPriceOptions(p) {
+    const opts = p && Array.isArray(p.quantity_price_options) ? p.quantity_price_options : [];
+    return opts
+      .map(o => ({ qty: Number(o.qty), price: Number(o.price), label: o.label || '', badge: o.badge || '' }))
+      .filter(o => Number.isInteger(o.qty) && o.qty >= 1 && Number.isFinite(o.price) && o.price > 0)
+      .sort((a, b) => a.qty - b.qty);
+  }
+  function getQuantityTierPrice(p, qty) {
+    const tier = getQuantityPriceOptions(p).find(o => o.qty === Number(qty));
+    return tier ? tier.price : null;
+  }
+  function computeLineTotal(p, qty, priceAdjustment) {
+    const q = Number(qty) || 1;
+    const adj = Number(priceAdjustment) || 0;
+    const tierTotal = getQuantityTierPrice(p, q);
+    if (tierTotal !== null) return { lineTotal: tierTotal + adj * q, tierApplied: true };
+    return { lineTotal: (getEffectiveUnitPrice(p) + adj) * q, tierApplied: false };
+  }
+
   function getShippingBadgeLabel(stock) {
     const n = Number(stock);
     if (!Number.isFinite(n) || n <= 0) return '';
     if (n <= 5) return `⏰ 재고 ${n}개 남음 - 서둘러 주문해주세요`;
-    return '🚚 오늘 주문하면 빠르게 배송해드립니다';
+    return '🚚 오후 2시까지 주문하면 당일 출고';
   }
 
   // ============================================
@@ -237,10 +284,78 @@
     return (Math.round(n * 100) / 100).toString();
   }
 
+  // 상품 API(/api/products...) 응답은 받자마자 "채널별 자동 가격"(공동체가/도매가)으로 바꿔서 돌려준다 -
+  // 그래서 상품 카드·상세·묶음가·정렬 등 모든 화면이 따로 손대지 않아도 실제 결제 금액과 같은 가격을 보여준다.
+  // 장바구니처럼 공동체를 직접 고르는 화면은 options.skipPriceContext = true 로 받아서 직접 적용한다.
   async function fetchJSON(path, options) {
+    const skip = !!(options && options.skipPriceContext);
     const res = await fetch(API_BASE + path, options);
     const json = await res.json();
+    if (!skip && res.ok && json && json.success && isProductPricePath(path)) {
+      try {
+        const ctx = await loadPriceContext();
+        if (Array.isArray(json.data)) json.data = applyPriceContext(json.data, ctx);
+        else if (json.data && typeof json.data === 'object') json.data = applyPriceContext(json.data, ctx);
+      } catch (e) { /* 가격 컨텍스트 조회 실패 시 기본가 그대로 표시 (결제는 항상 서버가 다시 계산) */ }
+    }
     return { ok: res.ok, status: res.status, json };
+  }
+
+  // ============================================
+  // 채널별 자동 가격 (분양몰 공동체가 / 도매가) - 계산식은 /withplus-pricing.js (서버와 같은 파일)
+  // ============================================
+  function isProductPricePath(path) {
+    const p = String(path || '').split('?')[0];
+    if (!/^\/api\/products(\/|$)/.test(p)) return false;
+    // 가격 이력·후기·알림 등 "상품 목록/상품 객체"가 아닌 하위 경로는 건드리지 않는다
+    return !/\/(price-history|band-reviews|reviews|restock-notify|cost|channel-prices)(\/|$)/.test(p);
+  }
+  const priceContextPromises = {};
+  // opts.communityId: 장바구니에서 고른 공동체(빈 문자열 = 선택 안 함) - 주문에 실제로 붙는 community_id 와 같은 값
+  // 지정하지 않으면 서버가 장바구니 자동 선택과 같은 규칙(들어온 분양몰 매장 → 가입한 공동체가 1개면 그 공동체)으로 고른다
+  function loadPriceContext(opts) {
+    const o = opts || {};
+    const hasExplicit = Object.prototype.hasOwnProperty.call(o, 'communityId');
+    const slug = getPreferredCommunitySlug();
+    const key = (hasExplicit ? 'id:' + (o.communityId || '') : 'slug:' + (slug || '')) + (o.force ? ':' + Date.now() : '');
+    if (!priceContextPromises[key]) {
+      priceContextPromises[key] = (async () => {
+        const headers = {};
+        try {
+          const token = await getAccessToken();
+          if (token) headers['Authorization'] = 'Bearer ' + token;
+        } catch (e) {}
+        const qs = hasExplicit ? 'community_id=' + encodeURIComponent(o.communityId || '') : (slug ? 'community=' + encodeURIComponent(slug) : '');
+        const res = await fetch(API_BASE + '/api/me/price-context' + (qs ? '?' + qs : ''), { headers });
+        const json = await res.json();
+        return (res.ok && json && json.success && json.data) ? json.data : { mode: 'default' };
+      })().catch(() => {
+        delete priceContextPromises[key];
+        return { mode: 'default' };
+      });
+    }
+    return priceContextPromises[key];
+  }
+  function getPricingLib() { return global.WithPlusPricing || null; }
+  // 상품(또는 상품 배열)의 price / discount_price / 묶음가를 컨텍스트 가격으로 바꾼 사본을 돌려준다 (이미 적용된 건 그대로)
+  function applyPriceContext(products, ctx) {
+    const lib = getPricingLib();
+    if (!lib || !ctx || ctx.mode === 'default') return products;
+    const one = (p) => (p && typeof p === 'object' && p.id !== undefined && p.price !== undefined && p.name !== undefined) ? lib.adjustProduct(p, ctx) : p;
+    return Array.isArray(products) ? products.map(one) : one(products);
+  }
+  // 금액 하나를 컨텍스트로 조정 (공동체가: 비율 가감, 도매: 도매 할인율) - 상품 정보가 없을 때만 쓴다
+  function adjustPrice(amount, ctx) {
+    const lib = getPricingLib();
+    if (!lib || !ctx || ctx.mode === 'default') return Number(amount) || 0;
+    return lib.unitPrice({ id: null, price: amount, discount_price: null }, ctx);
+  }
+  // 가격 옆에 붙는 작은 라벨 ("○○ 공동체가" / "도매가")
+  function renderPriceLabel(p) {
+    const label = p && p.price_label;
+    if (!label) return '';
+    const isWs = p._price_ctx_applied === 'wholesale';
+    return `<span class="wp-price-label" style="display:inline-block;font-size:11px;font-weight:600;line-height:1.4;padding:1px 6px;border-radius:4px;margin-left:4px;vertical-align:middle;white-space:nowrap;${isWs ? 'background:#E3F2FD;color:#1565C0;' : 'background:#FFF3E0;color:#E65100;'}">${escapeHtml(label)}</span>`;
   }
 
   function escapeHtml(str) {
@@ -531,9 +646,18 @@
       const days = Math.ceil((new Date(product.expiry_date) - new Date()) / 86400000);
       if (days >= 0 && days <= EXPIRY_SOON_DAYS) badges.push({ label: '유통임박', cls: 'is-expiry' });
     }
-    if (stock <= 0) badges.push({ label: '품절', cls: 'is-soldout' });
+    if (isProductSoldOut(product)) badges.push({ label: '품절', cls: 'is-soldout' });
     else if (stock <= 5) badges.push({ label: '품절임박', cls: 'is-low' });
     return badges;
+  }
+  // 품절 판단(서버 isProductSoldOut 과 같은 기준): 품절(구 단종) 상태값이거나 재고 0.
+  // 상세 API 가 is_sold_out(옵션 재고까지 반영)을 내려주면 그 값을 그대로 쓴다.
+  const SOLD_OUT_STATUSES = ['discontinued', 'soldout', 'sold_out', 'out_of_stock'];
+  function isProductSoldOut(product) {
+    if (!product) return false;
+    if (typeof product.is_sold_out === 'boolean') return product.is_sold_out;
+    if (SOLD_OUT_STATUSES.indexOf(String(product.status || '')) !== -1) return true;
+    return product.stock != null && Number(product.stock) <= 0;
   }
   function getProductCatchLine(product) {
     const text = String(product.description || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -544,14 +668,16 @@
 
   function renderProductCard(product) {
     const emoji = CATEGORY_EMOJI[product.category] || CATEGORY_EMOJI.default;
-    const hasDiscount = product.discount_price && Number(product.discount_price) < Number(product.price);
-    const currentPrice = hasDiscount ? product.discount_price : product.price;
+    // ⚡ 진행중인 한정수량 초특가가 있으면 그 가격을 보여준다(서버가 붙여준 flash_deal — 주문 시 서버가 같은 가격으로 계산)
+    const flash = product.flash_deal && Number(product.flash_deal.deal_price) < Number(product.price) ? product.flash_deal : null;
+    const hasDiscount = !!flash || (product.discount_price && Number(product.discount_price) < Number(product.price));
+    const currentPrice = flash ? flash.deal_price : (hasDiscount ? product.discount_price : product.price);
     const discountRate = hasDiscount
-      ? Math.round((1 - Number(product.discount_price) / Number(product.price)) * 100)
+      ? Math.round((1 - Number(currentPrice) / Number(product.price)) * 100)
       : 0;
     const rating = Number(product.rating || 0).toFixed(1);
     const reviewCount = product.review_count || 0;
-    const outOfStock = Number(product.stock) <= 0;
+    const outOfStock = isProductSoldOut(product);
     const imageUrl = Array.isArray(product.images_urls) && product.images_urls.length > 0 ? product.images_urls[0] : null;
     const rates = cachedMileageRates;
     const badges = getProductBadges(product);
@@ -564,15 +690,18 @@
                 <button class="action-btn wishlist-btn" type="button">❤️</button>
             </div>
             ${imageUrl ? '' : emoji}
+            ${outOfStock ? '<div class="wp-soldout-overlay" aria-label="품절"><span>품절</span></div>' : ''}
             ${badges.length ? `<div class="wp-card-badges">${badges.map(b => `<span class="wp-card-badge ${b.cls}">${b.label}</span>`).join('')}</div>` : ''}
         </div>
         <div class="product-info">
+            ${flash ? `<p class="wp-card-catch" style="color:#E8125C;font-weight:700;">⚡ 한정수량 초특가 · 잔여 ${Number(flash.remaining).toLocaleString('ko-KR')}개</p>` : ''}
             ${catchLine ? `<p class="wp-card-catch">${escapeHtml(catchLine)}</p>` : ''}
             <h3 class="product-name">${escapeHtml(product.name)}</h3>
             <div class="product-price">
                 ${hasDiscount ? `<span class="discount-rate">${discountRate}%</span>` : ''}
                 <span class="current-price">${formatPrice(currentPrice)}</span>
                 ${hasDiscount ? `<span class="original-price">${formatPrice(product.price)}</span>` : ''}
+                ${renderPriceLabel(product)}
             </div>
             <div class="wp-card-earn">적립 ${formatPercent(rates.personalPercent)}% <span>+${formatPercent(rates.communityPercent)}%</span></div>
             <div class="product-rating-line">${renderStars(rating, 14)} <span class="product-review-count">(${Number(reviewCount).toLocaleString('ko-KR')})</span></div>
@@ -650,7 +779,7 @@
       const session = await getSession();
       if (!session) {
         if (confirm('찜하기는 로그인 후 이용할 수 있습니다. 로그인 화면으로 이동할까요?')) {
-          location.href = '/login';
+          location.href = loginUrl();
         }
         return;
       }
@@ -777,12 +906,14 @@
         debounceTimer = setTimeout(async () => {
           try {
             const { json } = await fetchJSON('/api/search/autocomplete?q=' + encodeURIComponent(q));
-            const items = (json && json.data) || [];
+            let items = (json && json.data) || [];
             if (items.length === 0) { dropdown.style.display = 'none'; return; }
+            // 채널별 자동 가격(공동체가/도매가) 반영 - 상품 카드와 같은 가격
+            try { items = applyPriceContext(items, await loadPriceContext()); } catch (e) {}
             dropdown.innerHTML = items.map(it => `
               <div class="wp-autocomplete-item" data-id="${it.id}" style="padding:10px 14px; cursor:pointer; font-size:0.88em; display:flex; justify-content:space-between; align-items:center; gap:10px; border-bottom:1px solid #F5F5F5; text-align:left; color:#333;">
                 <span>${escapeHtml(it.name)}</span>
-                ${it.price ? `<span style="color:#999; white-space:nowrap;">${formatPrice(it.price)}원</span>` : ''}
+                ${it.price ? `<span style="color:#999; white-space:nowrap;">${formatPrice(getEffectiveUnitPrice(it))}</span>` : ''}
               </div>`).join('');
             dropdown.style.display = 'block';
             dropdown.querySelectorAll('.wp-autocomplete-item').forEach(el => {
@@ -896,6 +1027,7 @@
     function render(count) {
       const shown = (count == null) ? items : items.slice(0, count);
       gridEl.innerHTML = shown.map(renderItem).join('');
+      gridEl.scrollLeft = 0; // 가로 스크롤 목록이면 처음으로 되돌린다(개수를 바꿨는데 빈 칸만 보이는 현상 방지)
       syncWishlistHearts();
       attachProductCardInteractions();
     }
@@ -1023,6 +1155,14 @@
   // 같은 화면에 여러 번 그려도 그라데이션이 꼬이지 않게 그릴 때마다 고유 id 접미사를 붙인다.
   let cat3dSeq = 0;
   const CATEGORY_3D_ICONS = [
+    // ⚡ 한정수량 초특가 (상단 메뉴 '초특가') — '특가' 키워드보다 먼저 매칭되도록 맨 앞에 둔다
+    { keys: ['flash-deals', '초특가'], svg: (u) => `
+      <defs><linearGradient id="z1${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFD36E"/><stop offset=".55" stop-color="#FF8A3D"/><stop offset="1" stop-color="#F0457A"/></linearGradient>
+      <radialGradient id="z2${u}" cx=".5" cy=".55" r=".55"><stop offset="0" stop-color="#FFE7EF"/><stop offset="1" stop-color="#FFB3C7" stop-opacity="0"/></radialGradient></defs>
+      <circle cx="24" cy="25" r="18" fill="url(#z2${u})"/>
+      <path d="M27.5 4L11 27h11l-3.5 17L37 20H25.5z" fill="url(#z1${u})" stroke="#E5326B" stroke-width="1.2" stroke-linejoin="round"/>
+      <path d="M25.5 9.5L16.5 23" stroke="#fff" stroke-opacity=".7" stroke-width="2" stroke-linecap="round"/>
+      <path d="M38 8l1 2.4 2.4 1-2.4 1-1 2.4-1-2.4-2.4-1 2.4-1z" fill="#FFC93C"/><circle cx="9" cy="14" r="1.4" fill="#FF8A3D"/>` },
     { keys: ['diet', '다이어트', '슬림'], svg: (u) => `
       <defs><linearGradient id="d1${u}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FFB3C7"/><stop offset="1" stop-color="#F0457A"/></linearGradient>
       <linearGradient id="d2${u}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FFE9A8"/><stop offset="1" stop-color="#F5B83D"/></linearGradient></defs>
@@ -1316,6 +1456,13 @@
       .wp-drawer-link { display: flex; align-items: center; justify-content: space-between; padding: 12px 18px; color: #222; text-decoration: none; font-size: 15px; }
       .wp-drawer-link:hover { background: #FFF7F9; color: #E8125C; }
       .wp-drawer-link svg { color: #C9AAB4; }
+      .wp-drawer-app { display: flex; align-items: center; gap: 10px; margin: 4px 16px 6px; padding: 11px 12px; border: 1px solid #F3D3DE; border-radius: 12px; text-decoration: none; color: #222; background: #fff; }
+      .wp-drawer-app:hover { background: #FFF7F9; }
+      .wp-drawer-app-ico { font-size: 22px; line-height: 1; flex-shrink: 0; }
+      .wp-drawer-app-txt { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+      .wp-drawer-app-txt b { font-size: 15px; color: #E8125C; }
+      .wp-drawer-app-txt small { font-size: 12px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .wp-drawer-app svg { color: #C9AAB4; flex-shrink: 0; }
       body.wp-drawer-lock { overflow: hidden; }
 
       /* 상품 카드 공통 (이유몰식): 상태 배지 · 한 줄 소개 · 빨간 할인율 */
@@ -1324,6 +1471,9 @@
       .wp-card-badge.is-expiry { color: #8E24AA; }
       .wp-card-badge.is-low { color: #E8590C; }
       .wp-card-badge.is-soldout { color: #fff; background: #555; border-color: #555; }
+      .product-image .wp-soldout-overlay { position: absolute; inset: 0; z-index: 1; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,0.55); border-radius: inherit; pointer-events: none; }
+      .product-image .wp-soldout-overlay ~ .wp-card-badges .is-soldout { display: none; }
+      .product-image .wp-soldout-overlay span { display: inline-flex; align-items: center; justify-content: center; width: 64px; height: 64px; border-radius: 50%; background: rgba(34,34,34,0.82); color: #fff; font-size: 15px; font-weight: 800; letter-spacing: .04em; }
       .product-card .wp-card-catch { font-size: 12px; color: #888; margin: 0 0 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .product-card .product-price { flex-wrap: wrap; align-items: baseline; }
       .product-card .discount-rate { color: #E8125C; font-size: 1.15em; font-weight: 800; }
@@ -1393,6 +1543,20 @@
     });
   }
 
+  // 📱 앱 버전 — 이미 설치된 앱(홈 화면 아이콘·Play 스토어 앱)으로 열린 경우엔 "앱 설치" 메뉴를 숨긴다
+  function isRunningAsApp() {
+    try {
+      return (global.matchMedia && global.matchMedia('(display-mode: standalone)').matches)
+        || global.navigator.standalone === true
+        || /^android-app:\/\//.test(document.referrer || '');
+    } catch (e) { return false; }
+  }
+  // 설치 안내 창 열기(pwa-install.js 가 실제 처리). 스크립트가 없는 화면이면 마이페이지 안내로 보낸다.
+  function openAppInstall() {
+    if (global.WithPlusPWA && typeof global.WithPlusPWA.open === 'function') global.WithPlusPWA.open();
+    else location.href = '/mypage#app-install';
+  }
+
   function buildDrawer() {
     if (document.getElementById('wp-drawer')) return;
     const backdrop = document.createElement('div');
@@ -1410,6 +1574,7 @@
         <button type="button" class="wp-icon-btn" id="wp-drawer-close" aria-label="메뉴 닫기">${shellIcon('close')}</button>
       </div>
       <div class="wp-drawer-user" id="wp-drawer-user"><span>로그인하고 적립 혜택을 받아보세요</span><a href="/login">로그인</a></div>
+      ${isRunningAsApp() ? '' : `<a class="wp-drawer-app" href="#app-install" data-wp-app-install><span class="wp-drawer-app-ico">📱</span><span class="wp-drawer-app-txt"><b>앱 설치</b><small>홈 화면에 추가하고 앱처럼 바로 열기</small></span>${shellIcon('chevronRight', 18)}</a>`}
       <div class="wp-drawer-body">
         <div class="wp-drawer-section" id="wp-drawer-cats-title">카테고리</div>
         <div class="wp-drawer-cats" id="wp-drawer-cats"></div>
@@ -1432,6 +1597,13 @@
     document.body.appendChild(drawer);
     backdrop.addEventListener('click', closeDrawer);
     drawer.querySelector('#wp-drawer-close').addEventListener('click', closeDrawer);
+    const appBtn = drawer.querySelector('[data-wp-app-install]');
+    if (appBtn) appBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation(); // pwa-install.js 의 공통 클릭 처리와 중복 실행 방지
+      closeDrawer();
+      openAppInstall();
+    });
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDrawer(); });
   }
 
@@ -1445,6 +1617,7 @@
           <span class="wp-cat-ico">${getCategory3DIcon(c, 30)}</span>
           <span>${escapeHtml(c.label)}</span>
         </a>`).join('');
+      insertFlashDealsLink(catsEl, 'drawer');
       catsEl.dataset.loaded = '1';
     }
     const userEl = document.getElementById('wp-drawer-user');
@@ -1868,11 +2041,63 @@
 
   // ============================================
   // 🔑 카카오·네이버 간편 로그인 — 준비된(키 등록된) 방식만 바로 동작하고, 아니면 '준비중' 안내
+  // - 카카오·네이버: 서버가 직접 처리(/api/auth/{provider}/login → 카카오/네이버 동의화면 → 콜백 → 로그인 화면이
+  //   세션을 받아 원래 보던 페이지로 이동). 카카오 서버 키가 없고 Supabase에 Kakao가 켜져 있으면 Supabase 방식.
+  // - 로그인 후 돌아갈 곳: ?next= → 직전 페이지(같은 사이트) → 이번 탭에서 기억해둔 값 순서. 같은 사이트의
+  //   상대경로만 허용(외부 주소로 튕기는 오픈 리다이렉트 방지 - 서버 sanitizeNextPath와 같은 규칙).
   // ============================================
+  function safeReturnPath(raw) {
+    if (typeof raw !== 'string') return '/';
+    const s = raw.trim();
+    if (!s || s.length > 512 || s.charAt(0) !== '/' || s.indexOf('//') === 0 || /[\\\u0000-\u001f\u007f]/.test(s)) return '/';
+    let u;
+    try { u = new URL(s, 'http://same-site.invalid'); } catch (e) { return '/'; }
+    if (u.origin !== 'http://same-site.invalid') return '/';
+    if (/^\/(login|join|reset-password|api\/auth)(\.html)?(\/|$)/i.test(u.pathname)) return '/';
+    return u.pathname + u.search;
+  }
+  function getLoginReturnPath() {
+    let cand = null;
+    try { cand = new URLSearchParams(location.search).get('next'); } catch (e) { /* ignore */ }
+    if (safeReturnPath(cand) === '/' && document.referrer) {
+      try {
+        const r = new URL(document.referrer);
+        if (r.origin === location.origin) cand = r.pathname + r.search;
+      } catch (e) { /* ignore */ }
+    }
+    if (safeReturnPath(cand) === '/') { try { cand = sessionStorage.getItem('wp_login_next'); } catch (e) { /* ignore */ } }
+    const safe = safeReturnPath(cand);
+    try { if (safe !== '/') sessionStorage.setItem('wp_login_next', safe); } catch (e) { /* ignore */ }
+    return safe;
+  }
+  // 로그인 완료 후 원래 페이지로 (가입 화면에서 미뤄둔 마케팅 동의도 이때 반영)
+  async function goAfterLogin(delayMs) {
+    const dest = getLoginReturnPath();
+    try { sessionStorage.removeItem('wp_login_next'); } catch (e) { /* ignore */ }
+    try {
+      if (localStorage.getItem('withplus_pending_marketing_consent') === '1') {
+        const session = await getSession();
+        if (session) {
+          await fetch(API_BASE + '/api/me/profile', {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + session.access_token },
+            body: JSON.stringify({ marketing_consent: true })
+          });
+          localStorage.removeItem('withplus_pending_marketing_consent');
+        }
+      }
+    } catch (e) { /* 로그인은 이미 성공 - 동의 반영 실패는 조용히 무시 */ }
+    setTimeout(() => { location.replace(dest); }, delayMs || 0);
+  }
+  // 로그인이 필요한 곳에서 로그인 화면으로 보낼 때 - 지금 페이지로 돌아오도록 next를 붙인다
+  function loginUrl(nextPath) {
+    const next = safeReturnPath(nextPath === undefined ? (location.pathname + location.search) : nextPath);
+    return next === '/' ? '/login' : '/login?next=' + encodeURIComponent(next);
+  }
   let socialStatusPromise = null;
   function getSocialStatus() {
     if (!socialStatusPromise) {
-      socialStatusPromise = fetch(API_BASE + '/api/auth/social-status').then(r => r.json()).then(j => (j && j.data) || {}).catch(() => ({}));
+      socialStatusPromise = fetch(API_BASE + '/api/auth/social-status', { cache: 'no-store' }).then(r => r.json()).then(j => (j && j.data) || {}).catch(() => ({}));
     }
     return socialStatusPromise;
   }
@@ -1880,13 +2105,21 @@
     const status = await getSocialStatus();
     const name = { kakao: '카카오', naver: '네이버', google: '구글' }[provider] || provider;
     if (!status[provider]) throw new Error(`${name} 로그인은 아직 준비 중입니다. 이메일로 계속해주세요.`);
-    if (provider === 'naver') { location.href = API_BASE + '/api/auth/naver/login'; return; }
+    const next = getLoginReturnPath();
+    const from = /^\/join(\.html)?$/.test(location.pathname) ? 'join' : 'login';
+    if (provider === 'naver' || (provider === 'kakao' && status.kakao_via !== 'supabase')) {
+      location.href = API_BASE + '/api/auth/' + provider + '/login?' + new URLSearchParams({ next, from }).toString();
+      return;
+    }
     const client = await getClient();
-    const { error } = await client.auth.signInWithOAuth({ provider, options: { redirectTo: location.origin + '/' } });
+    const redirectTo = location.origin + '/login' + (next !== '/' ? '?next=' + encodeURIComponent(next) : '');
+    const { error } = await client.auth.signInWithOAuth({ provider, options: { redirectTo } });
     if (error) throw new Error(`${name} 로그인을 시작하지 못했습니다: ${error.message}`);
   }
   // 버튼에 준비 상태를 표시하고 클릭을 연결한다. buttons: { kakao: el, naver: el }, msgEl: 안내 문구 영역
-  async function bindSocialButtons(buttons, msgEl) {
+  // options.beforeNavigate: 이동 직전에 호출(가입 화면의 추천인코드·마케팅 동의를 임시 저장하는 용도)
+  async function bindSocialButtons(buttons, msgEl, options) {
+    options = options || {};
     const status = await getSocialStatus();
     Object.entries(buttons).forEach(([provider, btn]) => {
       if (!btn) return;
@@ -1895,8 +2128,16 @@
       btn.classList.remove('disabled');
       btn.addEventListener('click', async (e) => {
         e.preventDefault();
-        try { await socialLogin(provider); }
-        catch (err) { if (msgEl) { msgEl.textContent = err.message; msgEl.classList.add('show'); msgEl.style.display = 'block'; } }
+        if (btn.dataset.busy === '1') return;
+        try {
+          if (status[provider] && typeof options.beforeNavigate === 'function') options.beforeNavigate(provider);
+          btn.dataset.busy = '1';
+          await socialLogin(provider);
+          setTimeout(() => { btn.dataset.busy = ''; }, 4000); // 뒤로가기로 돌아온 경우 다시 누를 수 있게
+        } catch (err) {
+          btn.dataset.busy = '';
+          if (msgEl) { msgEl.textContent = err.message; msgEl.classList.add('show', 'error'); msgEl.classList.remove('success'); msgEl.style.display = 'block'; }
+        }
       });
     });
   }
@@ -1917,6 +2158,14 @@
     renderCategoryNav,
     initCategoryNav,
     formatPrice,
+    getEffectiveUnitPrice,
+    loadPriceContext,
+    applyPriceContext,
+    adjustPrice,
+    renderPriceLabel,
+    getQuantityPriceOptions,
+    getQuantityTierPrice,
+    computeLineTotal,
     getShippingBadgeLabel,
     fetchJSON,
     refreshMileageRates,
@@ -1925,6 +2174,9 @@
     getPageTemplatesCached,
     formatPercent,
     renderProductCard,
+    isProductSoldOut,
+    openAppInstall,
+    isRunningAsApp,
     escapeHtml,
     safeUrlAttr,
     timeAgo,
@@ -1972,6 +2224,10 @@
     mountSlideToPay,
     getSocialStatus,
     socialLogin,
+    safeReturnPath,
+    getLoginReturnPath,
+    goAfterLogin,
+    loginUrl,
     bindSocialButtons,
     renderRatingSummary,
     renderReviewItem,

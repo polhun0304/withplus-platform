@@ -1195,7 +1195,15 @@
             justify-content: space-between;
             gap: 12px;
         }
-        .wcb-select-wrap { position: relative; }
+        .wcb-select-wrap { position: relative; min-width: 0; }
+        .wcb-select #wcb-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+        .wcb-points { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; margin: -2px 0 2px 30px; font-size: 12.5px; color: #6B5A60; line-height: 1.35; }
+        .wcb-points[hidden], .wcb-login[hidden], .wcb-menu a[hidden] { display: none; }
+        .wcb-points b { color: var(--wp-pink); font-weight: 800; }
+        .wcb-points .wcb-sep { color: #D9B8C3; }
+        .wcb-login { display: block; width: max-content; margin: -2px 0 2px 30px; font-size: 12.5px; color: var(--wp-pink); font-weight: 600; text-decoration: none; }
+        .wcb-login:hover { text-decoration: underline; }
+        .wcb-menu .wcb-menu-label { padding: 8px 16px 2px; font-size: 12px; color: #999; }
         .wcb-select { display: inline-flex; align-items: center; gap: 8px; background: none; border: none; cursor: pointer; font: inherit; font-size: 17px; font-weight: 700; color: #222; padding: 4px 0; }
         .wcb-select svg:first-child { color: var(--wp-pink); }
         .wcb-menu { position: absolute; top: calc(100% + 8px); left: 0; z-index: 120; background: #fff; border: 1px solid #F1E1E6; border-radius: 12px; box-shadow: 0 10px 24px rgba(0,0,0,0.10); min-width: 210px; padding: 6px 0; }
@@ -1302,7 +1310,10 @@
             .wh-actions { margin-left: auto; }
             .wh-search.search-box { order: 3; flex-basis: 100%; max-width: none; padding-left: 18px; }
             .wp-community-bar { margin: 10px 14px 0; padding: 8px 10px 8px 14px; border-radius: 14px; }
-            .wcb-select { font-size: 15px; }
+            .wcb-select { font-size: 15px; gap: 6px; max-width: 100%; }
+            .wcb-select #wcb-name { max-width: calc(100vw - 210px); }
+            .wcb-points { margin-left: 28px; font-size: 11.5px; gap: 0 5px; }
+            .wcb-login { margin-left: 28px; font-size: 11.5px; }
             .wcb-slogan { display: none; }
             .wcb-cta { font-size: 13px; padding: 7px 12px; }
             .hero { margin: 12px 14px 0; padding: 26px 22px; border-radius: 18px; }
@@ -1377,6 +1388,22 @@
             .recently-viewed .add-to-cart-btn { display: none; }
         }
 
+        /* 🖼️ 메인 이미지 배너 — 슬라이드 전체를 사진으로 꽉 채운다(PC 3:1 · 모바일 3:2, 넘치는 부분은 가운데 기준으로 잘림) */
+        .hero-slide.img-slide { padding: 0 !important; display: block; position: relative; aspect-ratio: 3 / 1; overflow: hidden; background: #F4E9ED; color: inherit; text-decoration: none; }
+        .img-slide picture, .img-slide img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: cover; object-position: center; }
+        .hero.has-img-banners .hero-dots span { box-shadow: 0 0 0 1px rgba(255,255,255,.75); }
+        @media (max-width: 768px) {
+            .hero-slide.img-slide { aspect-ratio: 3 / 2; }
+            .hero-slide.img-slide:not(.has-mobile) { aspect-ratio: 2 / 1; }
+        }
+
+        /* 공동체 바 — 좁은 화면에서는 라벨을 줄여 두 줄로 유지 */
+        @media (max-width: 480px) {
+            .wcb-long { display: none; }
+            .wcb-select #wcb-name { max-width: calc(100vw - 180px); }
+            .wcb-cta { padding: 7px 10px; }
+        }
+
         /* ===== 오늘의 특가 슬라이더 (이유몰식 메인 상품 배너) ===== */
         .hero.hero-slider { position: relative; padding: 0; overflow: hidden; }
         .hero-track { display: flex; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
@@ -1409,6 +1436,7 @@
         }
         #pub-biz-phone:not(:empty)::before, #pub-biz-email:not(:empty)::before { content: ' · '; }
         .footer-bottom .pub-mail-order:not(:empty)::before { content: ' · 통신판매업 '; }
+        .footer-bottom .pub-health-food:not(:empty)::before { content: ' · 건강기능식품 영업신고 '; }
 
         /* 🔥 실시간 랭킹 */
         .rank-tabs { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; margin: -10px 0 18px; padding-bottom: 2px; }
@@ -1426,33 +1454,50 @@
         .category-icon svg.wp-cat3d { width: 48px !important; height: 48px !important; filter: drop-shadow(0 4px 3px rgba(150,20,60,.25)); transition: transform .2s; }
         .category-item:hover .category-icon svg.wp-cat3d { transform: rotate(-6deg); }
         @media (max-width: 768px) { .category-icon svg.wp-cat3d { width: 38px !important; height: 38px !important; } }
-        /* 🔴 실시간 후기 + 지금 이 순간 */
-        .live-pulse { max-width: calc(var(--wp-container, 1200px) - 40px); margin: 22px auto; display: grid; grid-template-columns: 1.15fr 1fr; gap: 16px; padding: 0; }
+        /* 🔴 실시간 리뷰 + 지금 이 순간 (PC: 좌우 2칸, 모바일: 위아래) */
+        .live-pulse { max-width: calc(var(--wp-container, 1200px) - 40px); margin: 22px auto; display: grid; grid-template-columns: 1.15fr 1fr; gap: 16px; padding: 0; box-sizing: border-box; }
         .lp-card { background: #fff; border: 1px solid #F3E3E8; border-radius: 18px; padding: 16px 18px; box-shadow: 0 6px 18px rgba(232,18,92,.05); min-width: 0; }
-        .lp-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-        .lp-head h2 { font-size: 1.12em; font-weight: 800; margin: 0; }
+        .lp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+        .lp-head h2 { font-size: 1.12em; font-weight: 800; margin: 0; display: flex; align-items: center; gap: 6px; min-width: 0; }
         .lp-head h2 b { color: var(--wp-pink, #E8125C); }
-        .lp-more { font-size: .86em; color: #777; text-decoration: none; }
+        .lp-more { font-size: .86em; color: #777; text-decoration: none; white-space: nowrap; }
         .lp-more:hover { color: var(--wp-pink, #E8125C); }
-        .lp-dot { width: 9px; height: 9px; border-radius: 50%; background: #E8125C; box-shadow: 0 0 0 0 rgba(232,18,92,.5); animation: lpPulse 1.6s infinite; }
+        .lp-dot { width: 9px; height: 9px; flex: 0 0 9px; border-radius: 50%; background: #E8125C; box-shadow: 0 0 0 0 rgba(232,18,92,.5); animation: lpPulse 1.6s infinite; }
         @keyframes lpPulse { 0% { box-shadow: 0 0 0 0 rgba(232,18,92,.5); } 70% { box-shadow: 0 0 0 9px rgba(232,18,92,0); } 100% { box-shadow: 0 0 0 0 rgba(232,18,92,0); } }
-        .lp-review-scroll { display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 6px; scrollbar-width: thin; }
-        .lp-rv { flex: 0 0 132px; scroll-snap-align: start; text-decoration: none; color: inherit; }
+        .lp-review-scroll { display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 6px; scrollbar-width: thin; overscroll-behavior-x: contain; }
+        .lp-rv { flex: 0 0 132px; min-width: 0; scroll-snap-align: start; text-decoration: none; color: inherit; }
         .lp-rv-img { width: 132px; height: 132px; border-radius: 12px; background: #F6F1F3 center/cover no-repeat; position: relative; }
         .lp-src { position: absolute; left: 6px; top: 6px; font-size: 10.5px; font-weight: 700; padding: 2px 6px; border-radius: 6px; background: rgba(255,255,255,.92); color: #2E7D32; }
         .lp-src.with { color: #E8125C; }
-        .lp-stars { color: #FFB400; font-size: 12px; margin-top: 6px; letter-spacing: 1px; }
-        .lp-rv-text { font-size: 12.5px; line-height: 1.45; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+        .lp-stars { color: #FFB400; font-size: 12px; margin-top: 6px; letter-spacing: 1px; min-height: 14px; }
+        .lp-rv-text { font-size: 12.5px; line-height: 1.45; margin-top: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-all; }
         .lp-rv-who { font-size: 11.5px; color: #8A8A8A; margin-top: 3px; }
-        .lp-feed { list-style: none; margin: 0; padding: 0; }
-        .lp-feed li { display: flex; align-items: center; gap: 10px; padding: 9px 2px; border-bottom: 1px dashed #F2E6EA; font-size: 13.5px; }
+        .lp-feed { list-style: none; margin: 0; padding: 0; max-height: 372px; overflow: hidden; }
+        .lp-feed li { display: flex; align-items: center; gap: 10px; padding: 8px 2px; border-bottom: 1px dashed #F2E6EA; font-size: 13.5px; }
         .lp-feed li:last-child { border-bottom: none; }
-        .lp-ava { width: 30px; height: 30px; border-radius: 50%; flex: 0 0 30px; display: flex; align-items: center; justify-content: center; font-size: 14px; background: #FFF0F4; }
-        .lp-feed .lp-msg { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .lp-feed li.lp-new { animation: lpIn .6s ease-out both; background: linear-gradient(90deg, #FFF3F7, rgba(255,243,247,0)); }
+        @keyframes lpIn { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+        .lp-thumb { position: relative; width: 38px; height: 38px; flex: 0 0 38px; border-radius: 10px; background: #FFF0F4 center/cover no-repeat; }
+        .lp-thumb .wp-emoji { position: absolute; right: -5px; bottom: -5px; width: 20px; height: 20px; filter: drop-shadow(0 1px 1px rgba(0,0,0,.15)); }
+        .lp-thumb.lp-noimg .wp-emoji { position: static; width: 26px; height: 26px; margin: 6px; }
+        .lp-feed .lp-msg { flex: 1; min-width: 0; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; word-break: break-all; }
         .lp-feed .lp-msg a { color: inherit; font-weight: 700; text-decoration: none; }
+        .lp-feed .lp-msg a:hover { color: var(--wp-pink, #E8125C); }
+        .lp-feed .lp-msg .lp-verb { color: #E8125C; font-weight: 700; }
         .lp-feed .lp-time { color: #9A9A9A; font-size: 12px; white-space: nowrap; }
-        .lp-stats { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: linear-gradient(135deg, #FFF0F4, #FFE6EE); font-size: 13px; font-weight: 700; color: #C2185B; }
-        @media (max-width: 860px) { .live-pulse { grid-template-columns: 1fr; margin: 16px 12px; } .lp-rv { flex-basis: 112px; } .lp-rv-img { width: 112px; height: 112px; } }
+        .lp-stats { margin-top: 10px; padding: 10px 12px; border-radius: 12px; background: linear-gradient(135deg, #FFF0F4, #FFE6EE); font-size: 13px; font-weight: 700; color: #C2185B; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+        .lp-empty { color: #999; font-size: .9em; padding: 8px 2px; }
+        @media (max-width: 860px) { .live-pulse { grid-template-columns: 1fr; margin: 16px 12px; max-width: none; } .lp-rv { flex-basis: 112px; } .lp-rv-img { width: 112px; height: 112px; } }
+        @media (max-width: 400px) { .lp-card { padding: 14px 12px; } .lp-feed li { font-size: 13px; gap: 8px; } .lp-feed .lp-time { font-size: 11px; } }
+        /* 🧊 입체(3D) 이모지 아이콘 — Windows/삼성/아이폰 어디서나 같은 모양 (public/images/emoji, Fluent Emoji 3D·MIT) */
+        .wp-emoji { display: inline-block; width: 1.2em; height: 1.2em; vertical-align: -0.25em; object-fit: contain; margin-right: .25em; flex-shrink: 0; }
+        .wms-icon .wp-emoji { width: 1.2em; height: 1.2em; margin: 0; vertical-align: middle; filter: drop-shadow(0 3px 4px rgba(0,0,0,.18)); }
+        .banner-card h3 .wp-emoji { width: 1.3em; height: 1.3em; filter: drop-shadow(0 2px 3px rgba(0,0,0,.2)); }
+        .community-image .wp-emoji { width: 1.1em; height: 1.1em; margin: 0; }
+        .carousel-slide .wp-emoji { width: 1.25em; height: 1.25em; }
+        .lp-head h2 .wp-emoji, .lp-stats .wp-emoji { width: 1.3em; height: 1.3em; margin: 0; }
+        /* 구매 적립 P 코인도 입체감 있게 */
+        .wms-coin { background: radial-gradient(circle at 34% 28%, #FFF1B8 0, #FFD54A 38%, #F5A800 78%, #D98B00 100%) !important; color: #fff; text-shadow: 0 1px 2px rgba(150,90,0,.6); box-shadow: inset 0 -3px 0 rgba(150,90,0,.25), inset 0 3px 4px rgba(255,255,255,.6), 0 3px 6px rgba(0,0,0,.18) !important; }
         /* 🛠 특가 배너 사진 칸 — 관리자가 저장한 크기·위치(--deal-*) 적용 */
         .deal-slide { grid-template-columns: 1fr minmax(140px, var(--deal-col, 54%)) !important; }
         .deal-img { aspect-ratio: var(--deal-ar, 1.39) !important; border-radius: var(--deal-radius, 18px) !important; overflow: hidden; position: relative; transform: translate(var(--deal-dx, 0px), var(--deal-dy, 0px)); }
@@ -1476,6 +1521,20 @@
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
+    <link rel="stylesheet" href="/flash-deals.css?v=1">
+    <style>
+        /* ⭐ 베스트 상품 — 휴대폰에서는 가로 스크롤 대신 2열로 펼쳐서, 8/16/24/전체 버튼을 누르면 늘어난 상품이 바로 보이게 */
+        .best-more-link { display: block; width: max-content; max-width: 100%; margin: 22px auto 0; padding: 11px 26px; border-radius: 999px; border: 1px solid var(--primary-color); color: var(--primary-color); text-decoration: none; font-weight: 700; }
+        .best-more-link[hidden] { display: none; }
+        @media (max-width: 768px) {
+            #best-section .section-header { flex-wrap: wrap; gap: 10px; margin-bottom: 16px; }
+            #best-section .section-header-actions { flex: 1 1 100%; justify-content: space-between; flex-wrap: nowrap; gap: 8px; min-width: 0; }
+            #best-section .count-selector { overflow-x: auto; scrollbar-width: none; min-width: 0; }
+            #best-section .count-btn { padding: 7px 12px; }
+            #best-section .view-all { white-space: nowrap; font-size: .92em; }
+            #best-section .product-grid { grid-auto-flow: row; grid-template-rows: none; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-columns: auto; overflow-x: visible; scroll-snap-type: none; margin-right: 0; padding-right: 0; gap: 22px 10px; }
+        }
+    </style>
 </head>
 <body>
     <!-- HEADER (WITH+ 기본틀: ☰ · 로고 · 검색 · 🔔 · 🛒) -->
@@ -1517,6 +1576,7 @@
                 <a href="/category/special">🎁 기획전</a>
             </nav>
             <div class="header-top-right">
+                <a href="#app-install" data-wp-app-install>📱 앱 설치</a>
                 <a href="/notice">공지사항</a>
                 <a href="/board/review">사용후기</a>
                 <a href="/board/qa">Q&A</a>
@@ -1533,27 +1593,32 @@
                 <span id="wcb-name">전체 쇼핑몰</span>
                 <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
             </button>
+            <div class="wcb-points" id="wcb-points" hidden>
+                <span>공동체<span class="wcb-long"> 적립금</span> <b id="wcb-cp">-</b></span><span class="wcb-sep" aria-hidden="true">·</span><span>나의<span class="wcb-long"> 적립금</span> <b id="wcb-mp">-</b></span>
+            </div>
+            <a class="wcb-login" id="wcb-login" href="/login" hidden>로그인하고 적립금 확인 ›</a>
             <div class="wcb-menu" id="wcb-menu" hidden>
                 <a href="#" id="wcb-current" hidden>내 공동체 매장 바로가기</a>
+                <div id="wcb-others"></div>
                 <a href="#" id="wcb-reset">전체 쇼핑몰 보기</a>
                 <a href="/communities">다른 공동체 찾아보기</a>
             </div>
         </div>
         <span class="wcb-slogan">함께할수록 더 큰 나눔</span>
-        <a class="wcb-cta" href="/communities">공동체 혜택 안내 <span aria-hidden="true">›</span></a>
+        <a class="wcb-cta" href="/communities"><span class="wcb-long">공동체 </span>혜택 안내 <span aria-hidden="true">›</span></a>
     </div>
 
     <!-- HERO SECTION -->
-    <section class="hero hero-slider" id="hero-slider" aria-roledescription="carousel" aria-label="오늘의 특가">
+    <section class="hero hero-slider" id="hero-slider" aria-roledescription="carousel" aria-label="메인 배너">
         <div class="hero-track" id="hero-track">
         <div class="hero-content hero-slide">
             <h1>함께할수록 더 큰 나눔</h1>
             <p>구매할 때마다 개인 1% + 커뮤니티 2% 적립</p>
             <div class="hero-carousel">
-                <a href="#category-grid" class="carousel-slide active">🛍️ 쇼핑</a>
-                <a href="/mypage" class="carousel-slide">💰 적립</a>
-                <a href="/communities" class="carousel-slide">🤝 공유</a>
-                <a href="#community-highlight" class="carousel-slide">🌟 성장</a>
+                <a href="#category-grid" class="carousel-slide active"><img class="wp-emoji" src="/images/emoji/bags.png" width="128" height="128" alt="" aria-hidden="true">쇼핑</a>
+                <a href="/mypage" class="carousel-slide"><img class="wp-emoji" src="/images/emoji/moneybag.png" width="128" height="128" alt="" aria-hidden="true">적립</a>
+                <a href="/communities" class="carousel-slide"><img class="wp-emoji" src="/images/emoji/handshake.png" width="128" height="128" alt="" aria-hidden="true">공유</a>
+                <a href="#community-highlight" class="carousel-slide"><img class="wp-emoji" src="/images/emoji/glowstar.png" width="128" height="128" alt="" aria-hidden="true">성장</a>
             </div>
         </div>
         </div>
@@ -1579,7 +1644,7 @@
         <a class="wms-cell" id="wms-grade" href="/login">
             <span class="wms-label">회원등급</span>
             <span class="wms-value" id="wms-grade-value">비회원</span>
-            <span class="wms-icon" aria-hidden="true">👑</span>
+            <span class="wms-icon" aria-hidden="true"><img class="wp-emoji" src="/images/emoji/crown.png" width="128" height="128" alt="" aria-hidden="true"></span>
             <span class="wms-link" id="wms-grade-link">로그인하기 ›</span>
         </a>
         <a class="wms-cell" id="wms-rate" href="/communities">
@@ -1591,13 +1656,13 @@
         <a class="wms-cell" id="wms-coupon" href="/join">
             <span class="wms-label">쿠폰</span>
             <span class="wms-value" id="wms-coupon-value">가입 혜택</span>
-            <span class="wms-icon" aria-hidden="true">🎟️</span>
+            <span class="wms-icon" aria-hidden="true"><img class="wp-emoji" src="/images/emoji/ticket.png" width="128" height="128" alt="" aria-hidden="true"></span>
             <span class="wms-link" id="wms-coupon-link">회원가입 ›</span>
         </a>
         <a class="wms-cell" id="wms-mileage" href="/join">
             <span class="wms-label">보유 적립금</span>
             <span class="wms-value" id="wms-mileage-value">0<small>P</small></span>
-            <span class="wms-icon" aria-hidden="true">🪙</span>
+            <span class="wms-icon" aria-hidden="true"><img class="wp-emoji" src="/images/emoji/coin.png" width="128" height="128" alt="" aria-hidden="true"></span>
             <span class="wms-link" id="wms-mileage-link">적립금 내역 ›</span>
         </a>
     </section>
@@ -1607,21 +1672,21 @@
         <div class="banner-grid">
             <a href="/join" class="banner-card" style="text-decoration:none; display:block;">
                 <div class="banner-card-content">
-                    <h3>🎁 신규 회원 혜택</h3>
-                    <p>첫 구매 시 10% 할인 + 5,000원 마일리지</p>
+                    <h3><img class="wp-emoji" src="/images/emoji/gift.png" width="128" height="128" alt="" aria-hidden="true">신규 회원 혜택</h3>
+                    <p>구매 금액의 1% 적립 · 적립금은 다음 구매에 바로 사용</p>
                     <button type="button">지금 가입하기</button>
                 </div>
             </a>
             <a href="/mypage" class="banner-card" style="background: linear-gradient(135deg, #667EEA, #764BA2); text-decoration:none; display:block;">
                 <div class="banner-card-content">
-                    <h3>⭐ VIP 회원 전용</h3>
+                    <h3><img class="wp-emoji" src="/images/emoji/glowstar.png" width="128" height="128" alt="" aria-hidden="true">VIP 회원 전용</h3>
                     <p>매월 특별 할인 상품 & 빠른 배송</p>
                     <button type="button">등급 올리기</button>
                 </div>
             </a>
             <a href="/communities" class="banner-card" style="background: linear-gradient(135deg, #F093FB, #F5576C); text-decoration:none; display:block;">
                 <div class="banner-card-content">
-                    <h3>🤝 커뮤니티 참여</h3>
+                    <h3><img class="wp-emoji" src="/images/emoji/handshake.png" width="128" height="128" alt="" aria-hidden="true">커뮤니티 참여</h3>
                     <p>구매 시 추가 2% 적립 + 커뮤니티 혜택</p>
                     <button type="button">커뮤니티 보기</button>
                 </div>
@@ -1630,200 +1695,51 @@
     </section>
 
     <!-- 🔥 실시간 랭킹 (실시간 인기 · 구매순 · 오래 본 순 · 노출순 — 서버가 3분마다 자동 계산) -->
-    <!-- 🔴 실시간 후기 + 지금 이 순간 (밴드 후기·구매 후기·실제 주문만 — 이름은 가려서) -->
-    <section class="live-pulse" id="live-pulse" style="display:none;">
+    <!-- 🔴 실시간 리뷰 + 지금 이 순간 (장바구니 담기·결제완료·후기·밴드 후기 — 실제 이벤트만, 이름은 가려서, 30초마다 갱신) -->
+    <section class="live-pulse" id="live-pulse" style="display:none;" aria-label="실시간 활동">
         <div class="lp-card lp-reviews">
-            <div class="lp-head"><h2>💬 실시간 후기</h2><a href="/reviews" class="lp-more">전체보기 ›</a></div>
+            <div class="lp-head"><h2><img class="wp-emoji" src="/images/emoji/speech.png" width="128" height="128" alt="" aria-hidden="true">실시간 리뷰</h2><a href="/reviews" class="lp-more">전체보기 ›</a></div>
             <div class="lp-review-scroll" id="lp-review-scroll"></div>
         </div>
         <div class="lp-card lp-now">
             <div class="lp-head"><h2>지금 이 순간, <b>WITH+</b></h2><span class="lp-dot" aria-hidden="true"></span></div>
-            <ul class="lp-feed" id="lp-feed"></ul>
+            <ul class="lp-feed" id="lp-feed" aria-live="polite"></ul>
             <div class="lp-stats" id="lp-stats"></div>
         </div>
     </section>
 
     <section class="products-section wp-ranking" id="ranking-section">
         <div class="section-header">
-            <h2 class="section-title">🔥 실시간 랭킹</h2>
+            <h2 class="section-title"><img class="wp-emoji" src="/images/emoji/fire.png" width="128" height="128" alt="" aria-hidden="true">실시간 랭킹</h2>
             <span class="rank-updated" id="rank-updated"></span>
         </div>
         <div class="rank-tabs" id="rank-tabs" role="tablist"></div>
         <div class="product-grid" id="ranking-grid"></div>
     </section>
 
-    <!-- BEST PRODUCTS -->
-    <section class="products-section">
+    <!-- ⚡ 한정수량 초특가 (진행중인 초특가가 있을 때만 보임 — /api/flash-deals 실제 데이터) -->
+    <section class="wp-flash" id="flash-section" hidden aria-label="한정수량 초특가">
+        <div class="fd-head">
+            <h2>🔥 한정수량 초특가</h2>
+            <span class="fd-timer" role="timer" aria-label="초특가 종료까지 남은 시간"></span>
+            <a href="/deals" class="fd-more">전체보기 ›</a>
+        </div>
+        <div class="fd-row"></div>
+    </section>
+
+    <!-- BEST PRODUCTS (판매·후기·평점·장바구니·찜 자동 점수 + 관리자 고정/제외 — /api/home/best) -->
+    <section class="products-section" id="best-section">
         <div class="section-header">
             <h2 class="section-title">⭐ 베스트 상품</h2>
             <div class="section-header-actions">
                 <div class="count-selector" id="best-products-count"></div>
-                <a href="/api/products" class="view-all">전체보기 →</a>
+                <a href="/best" class="view-all">전체보기 →</a>
             </div>
         </div>
         <div class="product-grid" id="best-products-grid">
-            <!-- Product 1 -->
-            <div class="product-card">
-                <div class="product-image">
-                    <div class="mileage-badge">
-                        <span class="individual">적립 1%</span>
-                        <span class="bonus">+2%</span>
-                    </div>
-                    <div class="product-actions">
-                        <button class="action-btn">❤️</button>
-                        <button class="action-btn">🛒</button>
-                    </div>
-                    💊
-                </div>
-                <div class="product-info">
-                    <h3 class="product-name">프리미엄 비타민 B 컴플렉스</h3>
-                    <div class="product-price">
-                        <span class="current-price">28,000원</span>
-                        <span class="original-price">35,000원</span>
-                        <span class="discount-rate">20%</span>
-                    </div>
-                    <div class="product-meta">
-                        ⭐ 4.8 (284개 리뷰) | 배송비 무료
-                    </div>
-                    <button class="add-to-cart-btn">장바구니 담기</button>
-                </div>
-            </div>
-
-            <!-- Product 2 -->
-            <div class="product-card">
-                <div class="product-image">
-                    <div class="mileage-badge">
-                        <span class="individual">적립 1%</span>
-                        <span class="bonus">+2%</span>
-                    </div>
-                    <div class="product-actions">
-                        <button class="action-btn">❤️</button>
-                        <button class="action-btn">🛒</button>
-                    </div>
-                    🧬
-                </div>
-                <div class="product-info">
-                    <h3 class="product-name">유산균 프로바이오틱스 30포</h3>
-                    <div class="product-price">
-                        <span class="current-price">35,900원</span>
-                        <span class="original-price">44,900원</span>
-                        <span class="discount-rate">20%</span>
-                    </div>
-                    <div class="product-meta">
-                        ⭐ 4.9 (512개 리뷰) | 배송비 무료
-                    </div>
-                    <button class="add-to-cart-btn">장바구니 담기</button>
-                </div>
-            </div>
-
-            <!-- Product 3 -->
-            <div class="product-card">
-                <div class="product-image">
-                    <div class="mileage-badge">
-                        <span class="individual">적립 1%</span>
-                        <span class="bonus">+2%</span>
-                    </div>
-                    <div class="product-actions">
-                        <button class="action-btn">❤️</button>
-                        <button class="action-btn">🛒</button>
-                    </div>
-                    🥗
-                </div>
-                <div class="product-info">
-                    <h3 class="product-name">다이어트 쉐이크 1kg</h3>
-                    <div class="product-price">
-                        <span class="current-price">42,000원</span>
-                        <span class="original-price">56,000원</span>
-                        <span class="discount-rate">25%</span>
-                    </div>
-                    <div class="product-meta">
-                        ⭐ 4.7 (198개 리뷰) | 배송비 무료
-                    </div>
-                    <button class="add-to-cart-btn">장바구니 담기</button>
-                </div>
-            </div>
-
-            <!-- Product 4 -->
-            <div class="product-card">
-                <div class="product-image">
-                    <div class="mileage-badge">
-                        <span class="individual">적립 1%</span>
-                        <span class="bonus">+2%</span>
-                    </div>
-                    <div class="product-actions">
-                        <button class="action-btn">❤️</button>
-                        <button class="action-btn">🛒</button>
-                    </div>
-                    💄
-                </div>
-                <div class="product-info">
-                    <h3 class="product-name">프리미엄 콜라겐 팩 100ml</h3>
-                    <div class="product-price">
-                        <span class="current-price">32,000원</span>
-                        <span class="original-price">45,000원</span>
-                        <span class="discount-rate">29%</span>
-                    </div>
-                    <div class="product-meta">
-                        ⭐ 4.9 (389개 리뷰) | 배송비 무료
-                    </div>
-                    <button class="add-to-cart-btn">장바구니 담기</button>
-                </div>
-            </div>
-
-            <!-- Product 5 -->
-            <div class="product-card">
-                <div class="product-image">
-                    <div class="mileage-badge">
-                        <span class="individual">적립 1%</span>
-                        <span class="bonus">+2%</span>
-                    </div>
-                    <div class="product-actions">
-                        <button class="action-btn">❤️</button>
-                        <button class="action-btn">🛒</button>
-                    </div>
-                    🌿
-                </div>
-                <div class="product-info">
-                    <h3 class="product-name">오가닉 녹차 30티백</h3>
-                    <div class="product-price">
-                        <span class="current-price">18,900원</span>
-                        <span class="original-price">24,900원</span>
-                        <span class="discount-rate">24%</span>
-                    </div>
-                    <div class="product-meta">
-                        ⭐ 4.8 (156개 리뷰) | 배송비 2,500원
-                    </div>
-                    <button class="add-to-cart-btn">장바구니 담기</button>
-                </div>
-            </div>
-
-            <!-- Product 6 -->
-            <div class="product-card">
-                <div class="product-image">
-                    <div class="mileage-badge">
-                        <span class="individual">적립 1%</span>
-                        <span class="bonus">+2%</span>
-                    </div>
-                    <div class="product-actions">
-                        <button class="action-btn">❤️</button>
-                        <button class="action-btn">🛒</button>
-                    </div>
-                    🏠
-                </div>
-                <div class="product-info">
-                    <h3 class="product-name">프리미엄 아로마 디퓨저</h3>
-                    <div class="product-price">
-                        <span class="current-price">19,900원</span>
-                        <span class="original-price">29,900원</span>
-                        <span class="discount-rate">33%</span>
-                    </div>
-                    <div class="product-meta">
-                        ⭐ 4.6 (127개 리뷰) | 배송비 무료
-                    </div>
-                    <button class="add-to-cart-btn">장바구니 담기</button>
-                </div>
-            </div>
+            <p style="grid-column:1/-1; text-align:center; color:var(--text-gray); padding:40px 0;">베스트 상품을 불러오는 중...</p>
         </div>
+        <a href="/best" class="best-more-link" id="best-more-link" hidden>베스트 상품 전체 보기 →</a>
     </section>
 
     <!-- PERSONALIZED HOME SECTIONS -->
@@ -1834,7 +1750,7 @@
     <!-- RECENTLY VIEWED -->
     <section class="recently-viewed" id="recently-viewed-section" style="display:none;">
         <div class="section-header">
-            <h2 class="section-title">👀 최근 본 상품</h2>
+            <h2 class="section-title"><img class="wp-emoji" src="/images/emoji/eyes.png" width="128" height="128" alt="" aria-hidden="true">최근 본 상품</h2>
             <div class="count-selector" id="recently-viewed-count"></div>
         </div>
         <div class="horizontal-scroll" id="recently-viewed-grid">
@@ -1842,23 +1758,15 @@
         </div>
     </section>
 
-    <!-- REALTIME ACTIVITY -->
+    <!-- WITH+ 현황 (실시간 활동·리뷰는 위쪽 "실시간 리뷰 / 지금 이 순간" 카드로 통합) -->
     <!-- 상품 탐색 흐름(베스트→개인화 추천→최근 본 상품)이 끊기지 않도록,
          참여형 콘텐츠(실시간 활동/커뮤니티)는 상품 섹션들이 모두 끝난 뒤 배치한다. -->
     <section class="realtime-section">
-        <h2 class="section-title">🔥 실시간 활동</h2>
+        <h2 class="section-title"><img class="wp-emoji" src="/images/emoji/sparkles.png" width="128" height="128" alt="" aria-hidden="true">WITH+ 한눈에 보기</h2>
         <div class="activity-grid">
-            <!-- Recent Reviews (실제 리뷰 데이터, 작성자는 가운데를 *로 가린 이름만 표시) -->
-            <div class="activity-card">
-                <h3 style="margin-bottom: 15px; font-size: 1.1em;">⭐ 최근 리뷰</h3>
-                <div id="recent-reviews-list">
-                    <div class="activity-item"><span class="activity-action">불러오는 중...</span></div>
-                </div>
-            </div>
-
             <!-- Platform Stats (실제 집계 데이터) -->
             <div class="activity-card">
-                <h3 style="margin-bottom: 15px; font-size: 1.1em;">📊 플랫폼 현황</h3>
+                <h3 style="margin-bottom: 15px; font-size: 1.1em;"><img class="wp-emoji" src="/images/emoji/chart.png" width="128" height="128" alt="" aria-hidden="true">플랫폼 현황</h3>
                 <div id="platform-stats-list">
                     <div class="activity-item"><span class="activity-action">불러오는 중...</span></div>
                 </div>
@@ -1866,7 +1774,7 @@
 
             <!-- Mileage Stats (실제 누적 적립 데이터) -->
             <div class="activity-card">
-                <h3 style="margin-bottom: 15px; font-size: 1.1em;">💰 마일리지 현황</h3>
+                <h3 style="margin-bottom: 15px; font-size: 1.1em;"><img class="wp-emoji" src="/images/emoji/moneybag.png" width="128" height="128" alt="" aria-hidden="true">마일리지 현황</h3>
                 <div id="mileage-stats-list">
                     <div class="activity-item"><span class="activity-action">불러오는 중...</span></div>
                 </div>
@@ -1878,7 +1786,7 @@
     <section class="community-section" id="community-highlight">
         <div class="community-content">
             <div class="community-text">
-                <h2>🤝 WITH+ 커뮤니티</h2>
+                <h2><img class="wp-emoji" src="/images/emoji/handshake.png" width="128" height="128" alt="" aria-hidden="true">WITH+ 커뮤니티</h2>
                 <p>
                     WITH+ 커뮤니티에 참여하면, 단순한 쇼핑을 넘어
                     함께 성장하는 경험을 할 수 있습니다.
@@ -1892,7 +1800,7 @@
                 </ul>
                 <a href="/communities" class="community-cta">커뮤니티 보기</a>
             </div>
-            <div class="community-image">🌍</div>
+            <div class="community-image"><img class="wp-emoji" src="/images/emoji/globe.png" width="128" height="128" alt="" aria-hidden="true"></div>
         </div>
     </section>
 
@@ -1931,8 +1839,8 @@
 
             <div class="footer-bottom">
                 <p>
-                    <span id="pub-biz-company-name">WITH+ (주식회사 지엠티이노베이션)</span> · 대표 <span id="pub-biz-ceo-name">김대기</span> · 사업자번호 <span id="pub-biz-business-number">640-81-03444</span><span class="pub-mail-order" id="pub-biz-mail-order-number">2024-경기김포-1785호</span><br>
-                    <span id="pub-biz-address">경기도 김포시 양촌읍 양곡4로 13</span><span id="pub-biz-phone">010-2871-7174</span><span id="pub-biz-email">gmtinno@naver.com</span>
+                    <span id="pub-biz-company-name">WITH+ (주식회사 위더스)</span> · 대표 <span id="pub-biz-ceo-name">박성복</span> · 사업자번호 <span id="pub-biz-business-number">511-88-03602</span><span class="pub-mail-order" id="pub-biz-mail-order-number">2025-경기김포-8233호</span><span class="pub-health-food" id="pub-biz-health-food-number">2026-0558419호</span><br>
+                    <span id="pub-biz-address">경기도 김포시 대곶면 율마로 113-1</span><span id="pub-biz-phone">070-8098-0300</span><span id="pub-biz-email">with8803@naver.com</span><br><span class="pub-po">개인정보보호책임자 <span id="pub-biz-po-name">김대기</span>(<span id="pub-biz-po-contact">lhfnb00735@naver.com</span>)</span>
                 </p>
                 <p class="footer-copy">&copy; 2024-2026 WITH+ Co., Ltd. All Rights Reserved.</p>
             </div>
@@ -1940,7 +1848,9 @@
     </footer>
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script src="/withplus-pricing.js"></script>
     <script src="/withplus-common.js"></script>
+    <script src="/flash-deals.js?v=1"></script>
     <script>
         (async function () {
             WithPlus.initHeader();
@@ -1956,24 +1866,58 @@
                 const slug = WithPlus.getPreferredCommunitySlug();
                 let name = '';
                 try { name = localStorage.getItem('withplus_preferred_community_name') || ''; } catch (e) {}
+                const nameEl = document.getElementById('wcb-name');
                 const resetLink = document.getElementById('wcb-reset');
                 const currentLink = document.getElementById('wcb-current');
-                if (slug) {
-                    document.getElementById('wcb-name').textContent = name || '내 공동체';
-                    currentLink.href = '/c/' + encodeURIComponent(slug);
-                    currentLink.textContent = (name || '내 공동체') + ' 매장 바로가기';
+                const setCurrent = (n, s) => {
+                    nameEl.textContent = n || '내 공동체';
+                    btn.title = n || '';
+                    currentLink.href = '/c/' + encodeURIComponent(s);
+                    currentLink.textContent = (n || '내 공동체') + ' 매장 바로가기';
                     currentLink.hidden = false;
-                } else {
-                    resetLink.hidden = true;
-                }
+                };
+                if (slug) setCurrent(name, slug);
+                // "전체 쇼핑몰 보기"는 특정 공동체 매장을 보고 있을 때(선호 공동체가 기억돼 있을 때)만 의미가 있다
+                resetLink.hidden = !slug;
                 const setOpen = (open) => { menu.hidden = !open; btn.setAttribute('aria-expanded', String(open)); };
                 btn.addEventListener('click', (e) => { e.stopPropagation(); setOpen(menu.hidden); });
                 document.addEventListener('click', (e) => { if (!menu.contains(e.target)) setOpen(false); });
+                document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !menu.hidden) { setOpen(false); btn.focus(); } });
                 resetLink.addEventListener('click', (e) => {
                     e.preventDefault();
                     WithPlus.clearPreferredCommunity();
                     location.href = '/';
                 });
+
+                // 로그인 회원: 내가 속한 공동체 이름 + 공동체 적립금 · 나의 적립금(실제 잔액)을 바에 표시
+                (async () => {
+                    const pointsEl = document.getElementById('wcb-points');
+                    const loginEl = document.getElementById('wcb-login');
+                    const token = await WithPlus.getAccessToken().catch(() => null);
+                    if (!token) { loginEl.hidden = false; return; }
+                    let res = null;
+                    try {
+                        const r = await fetch('/api/me/community-summary' + (slug ? '?prefer=' + encodeURIComponent(slug) : ''), { headers: { Authorization: 'Bearer ' + token } });
+                        res = r.ok ? await r.json() : null;
+                    } catch (e) { res = null; }
+                    if (!res || !res.success || !res.data) return;
+                    const d = res.data;
+                    const fmt = (n) => Number(n || 0).toLocaleString('ko-KR') + 'P';
+                    const primary = d.primary;
+                    if (!primary) return; // 소속 공동체가 없으면 기존 "전체 쇼핑몰" 그대로
+                    // 전체 쇼핑몰을 보고 있어도 바에는 내가 속한 공동체 이름을 보여준다(서버가 지금 매장이 내 공동체면 그곳을 대표로 골라준다)
+                    setCurrent(primary.name, primary.slug);
+                    document.getElementById('wcb-cp').textContent = primary.community_points === null || primary.community_points === undefined ? '-' : fmt(primary.community_points);
+                    document.getElementById('wcb-mp').textContent = fmt(d.my_points);
+                    pointsEl.title = primary.name + ' 공동체 적립금 · 나의 사용 가능 적립금';
+                    pointsEl.hidden = false;
+                    const others = (d.communities || []).filter(c => c.slug !== primary.slug);
+                    const othersEl = document.getElementById('wcb-others');
+                    if (others.length) {
+                        othersEl.innerHTML = '<div class="wcb-menu-label">내 공동체</div>' + others.map(c =>
+                            `<a href="/c/${encodeURIComponent(c.slug)}">${WithPlus.escapeHtml(c.name)} 매장 바로가기</a>`).join('');
+                    }
+                })();
             })();
 
             // ============================================
@@ -2032,11 +1976,14 @@
                     setIfPresent('pub-biz-address', info.address);
                     setIfPresent('pub-biz-phone', info.phone);
                     setIfPresent('pub-biz-email', info.email);
+                    setIfPresent('pub-biz-health-food-number', info.health_food_registration_number);
+                    setIfPresent('pub-biz-po-name', info.privacy_officer_name);
+                    setIfPresent('pub-biz-po-contact', info.privacy_officer_contact);
                 } catch (e) { /* 실패해도 위 HTML의 기본값을 그대로 보여준다 */ }
             })();
 
             // ============================================
-            // 베스트 상품: 실제 API에서 로드 (평점순)
+            // 상품 섹션 공통 설정
             // ============================================
             // 상품이 계속 이어지는 섹션들에 공통으로 쓸 "개수 선택" 옵션.
             // 각 섹션의 전체 상품 수가 이보다 적으면 해당 버튼은 자동으로 숨겨진다(mountCountControl 참고).
@@ -2044,56 +1991,156 @@
 
 
             // ============================================
-            // 오늘의 특가 슬라이더: 할인율이 큰 실제 상품(재고 있는 것) 최대 6개를 메인 배너 뒤에 이어 붙이고,
-            // 손가락으로 넘기거나 4초마다 자동으로 넘어간다. 할인 상품이 없으면 기존 배너 한 장만 보인다.
+            // 메인 슬라이더 설정 + 이미지 배너 — 관리자 > 🖼 배너 관리에서 정한 값(한 번만 불러와 공유)
+            // config: 자동 넘김 간격(초), 순서(images_first: 이미지→소개→특가 / deals_first: 특가→소개→이미지),
+            //         소개 배너 표시 여부, 특가 상품 선택(auto: 할인율 순 / manual: 관리자가 고른 상품·순서)
             // ============================================
-            function mountDealSlider(products) {
+            const HERO_DEFAULT_CONFIG = { interval_sec: 4, order: 'images_first', show_intro: true, deals: { mode: 'auto', product_ids: [] } };
+            const heroDataP = fetch('/api/home/hero-banners')
+                .then(r => r.ok ? r.json() : null)
+                .then(j => ({
+                    banners: (j && j.success && Array.isArray(j.data)) ? j.data : [],
+                    config: Object.assign({}, HERO_DEFAULT_CONFIG, (j && j.config) || {})
+                }))
+                .catch(() => ({ banners: [], config: Object.assign({}, HERO_DEFAULT_CONFIG) }));
+
+            // ============================================
+            // 메인 슬라이더 공통 동작: 점·숫자(1/N) 표시, 손가락 넘김, 자동 넘김(기본 4초).
+            // 이미지 배너·오늘의 특가 배너가 각자 비동기로 붙을 때마다 refresh()로 순서를 맞추고 다시 센다(이벤트는 한 번만 연결).
+            // ============================================
+            const heroSlider = (() => {
                 const track = document.getElementById('hero-track');
-                if (!track || track.dataset.deals) return;
-                const deals = (products || [])
+                const counter = document.getElementById('hero-counter');
+                const dots = document.getElementById('hero-dots');
+                let index = 0;
+                let started = false;
+                let paused = false;
+                let touched = false;
+                let config = Object.assign({}, HERO_DEFAULT_CONFIG);
+                const slides = () => track ? track.querySelectorAll('.hero-slide:not(.hero-slide-off)') : [];
+                const update = () => {
+                    const n = slides().length;
+                    index = Math.min(n - 1, Math.max(0, Math.round(track.scrollLeft / (track.clientWidth || 1))));
+                    counter.textContent = `${index + 1}/${n}`;
+                    dots.querySelectorAll('span').forEach((d, i) => d.classList.toggle('on', i === index));
+                };
+                // 슬라이드 묶음 순서를 설정대로 실제 DOM 순서로 맞춘다(스크롤 위치·편집 버튼이 DOM 순서를 그대로 쓰므로 CSS order는 쓰지 않음)
+                function arrange() {
+                    const intro = track.querySelector('.hero-content.hero-slide');
+                    const imgs = Array.from(track.querySelectorAll('.img-slide'));
+                    const deals = Array.from(track.querySelectorAll('.deal-slide'));
+                    if (intro) {
+                        // 소개 배너를 끄더라도 보여줄 다른 배너가 하나도 없으면 빈 화면이 되지 않게 남겨 둔다
+                        const hideIntro = config.show_intro === false && (imgs.length + deals.length) > 0;
+                        intro.hidden = hideIntro;
+                        intro.classList.toggle('hero-slide-off', hideIntro);
+                    }
+                    const groups = config.order === 'deals_first' ? [deals, [intro], imgs] : [imgs, [intro], deals];
+                    groups.flat().filter(Boolean).forEach(el => track.appendChild(el));
+                }
+                function scheduleNext() {
+                    setTimeout(() => {
+                        const total = slides().length;
+                        if (!paused && !document.hidden && !window.__wpLayoutEditing && total > 1) {
+                            const next = (index + 1) % total;
+                            track.scrollTo({ left: next * track.clientWidth, behavior: 'smooth' });
+                        }
+                        scheduleNext();
+                    }, Math.max(2, Number(config.interval_sec) || 4) * 1000);
+                }
+                function refresh() {
+                    if (!track || !counter || !dots) return;
+                    arrange();
+                    if (!touched) track.scrollLeft = 0;
+                    const n = slides().length;
+                    dots.innerHTML = Array.from({ length: n }, () => '<span></span>').join('');
+                    counter.hidden = n < 2;
+                    dots.hidden = n < 2;
+                    update();
+                    if (started || n < 2) return;
+                    started = true;
+                    track.addEventListener('scroll', () => requestAnimationFrame(update), { passive: true });
+                    // 자동 넘김 — 사용자가 만지는 동안/화면 밖일 때는 멈춘다
+                    ['pointerdown', 'touchstart', 'mouseenter'].forEach(ev => track.addEventListener(ev, () => { paused = true; touched = true; }, { passive: true }));
+                    ['pointerup', 'touchend', 'mouseleave'].forEach(ev => track.addEventListener(ev, () => { setTimeout(() => { paused = false; }, 3000); }, { passive: true }));
+                    scheduleNext();
+                }
+                return { refresh, current: () => index, setConfig: (c) => { config = Object.assign({}, HERO_DEFAULT_CONFIG, c || {}); } };
+            })();
+            // 소개 배너를 숨기는 설정이면 슬라이드 개수에서도 빠지게 한다
+            (function () { const st = document.createElement('style'); st.textContent = '.hero-slide.hero-slide-off{display:none !important}'; document.head.appendChild(st); })();
+
+            // ============================================
+            // 🖼️ 메인 이미지 배너: 관리자 > 🖼 배너 관리에서 올린 통이미지 광고를 슬라이더에 붙인다.
+            // PC 사진은 넓게(3:1), 모바일 사진이 있으면 좁은 화면에서 그 사진(3:2)을 쓴다. 배너가 없으면 기존 화면 그대로.
+            // ============================================
+            async function mountImageBanners() {
+                const track = document.getElementById('hero-track');
+                if (!track || track.dataset.imgBanners) return;
+                const { banners, config } = await heroDataP;
+                heroSlider.setConfig(config);
+                const list = banners.filter(b => b && /^https:\/\//i.test(b.pc_image || ''));
+                track.dataset.imgBanners = String(list.length);
+                if (list.length) {
+                    const html = list.map((b, i) => {
+                        const alt = WithPlus.escapeHtml(b.alt || '메인 배너');
+                        const mobile = /^https:\/\//i.test(b.mobile_image || '') ? `<source media="(max-width: 768px)" srcset="${WithPlus.safeUrlAttr(b.mobile_image)}">` : '';
+                        const pic = `<picture>${mobile}<img src="${WithPlus.safeUrlAttr(b.pc_image)}" alt="${alt}" ${i === 0 && config.order !== 'deals_first' ? 'fetchpriority="high"' : 'loading="lazy"'} decoding="async"></picture>`;
+                        const link = String(b.link_url || '');
+                        const safeLink = (/^\/(?!\/)/.test(link) || /^https?:\/\//i.test(link)) ? link : '';
+                        return safeLink
+                            ? `<a class="hero-slide img-slide${mobile ? ' has-mobile' : ''}" href="${WithPlus.safeUrlAttr(safeLink)}" aria-label="${alt}">${pic}</a>`
+                            : `<div class="hero-slide img-slide${mobile ? ' has-mobile' : ''}" role="img" aria-label="${alt}">${pic}</div>`;
+                    }).join('');
+                    track.insertAdjacentHTML('afterbegin', html);
+                    document.getElementById('hero-slider').classList.add('has-img-banners');
+                }
+                heroSlider.refresh();
+            }
+            mountImageBanners();
+
+            // ============================================
+            // 오늘의 특가 슬라이더: 기본은 할인율이 큰 실제 상품(재고 있는 것) 최대 6개, 관리자가 "직접 선택"으로 고정했으면
+            // 그 상품들을 고른 순서대로(이 화면에서 보이는 상품·재고 있는 것만) 붙인다. 손가락으로 넘기거나 자동으로 넘어간다.
+            // ============================================
+            function pickDealProducts(products, dealsCfg) {
+                const list = products || [];
+                const rateOf = (p) => (p.discount_price && Number(p.discount_price) < Number(p.price)) ? Math.round((1 - Number(p.discount_price) / Number(p.price)) * 100) : 0;
+                if (dealsCfg && dealsCfg.mode === 'manual' && Array.isArray(dealsCfg.product_ids) && dealsCfg.product_ids.length) {
+                    const byId = new Map(list.map(p => [String(p.id), p]));
+                    return dealsCfg.product_ids.map(id => byId.get(String(id)))
+                        .filter(p => p && Number(p.stock) > 0)
+                        .map(p => ({ p, rate: rateOf(p) }));
+                }
+                return list
                     .filter(p => p.discount_price && Number(p.discount_price) < Number(p.price) && Number(p.stock) > 0)
-                    .map(p => ({ p, rate: Math.round((1 - Number(p.discount_price) / Number(p.price)) * 100) }))
+                    .map(p => ({ p, rate: rateOf(p) }))
                     .sort((a, b) => b.rate - a.rate)
                     .slice(0, 6);
-                if (deals.length === 0) return;
+            }
+            async function mountDealSlider(products) {
+                const track = document.getElementById('hero-track');
+                if (!track || track.dataset.deals) return;
                 track.dataset.deals = '1';
+                const { config } = await heroDataP;
+                const deals = pickDealProducts(products, config.deals);
+                if (deals.length === 0) return;
                 track.insertAdjacentHTML('beforeend', deals.map(({ p, rate }) => {
                     const img = Array.isArray(p.images_urls) && p.images_urls[0] ? p.images_urls[0] : null;
+                    const onSale = rate > 0;
                     return `
                     <a class="hero-slide deal-slide" href="/product/${encodeURIComponent(p.id)}">
                         <div>
-                            <span class="deal-kicker">오늘의 특가 <b>-${rate}%</b></span>
+                            <span class="deal-kicker">오늘의 특가${onSale ? ` <b>-${rate}%</b>` : ''}</span>
                             <div class="deal-name">${WithPlus.escapeHtml(p.name)}</div>
-                            <div class="deal-price"><span class="now">${WithPlus.formatPrice(p.discount_price)}</span><span class="was">${WithPlus.formatPrice(p.price)}</span></div>
+                            <div class="deal-price"><span class="now">${WithPlus.formatPrice(onSale ? p.discount_price : p.price)}</span>${onSale ? `<span class="was">${WithPlus.formatPrice(p.price)}</span>` : ''}</div>
                             <span class="deal-cta">특가 상품 보러가기 ›</span>
                         </div>
                         <div class="deal-img" data-pid="${WithPlus.escapeHtml(String(p.id))}">${img ? `<img class="deal-pic" src="${WithPlus.safeUrlAttr(img)}" alt="${WithPlus.escapeHtml(p.name)}" loading="lazy">` : '🎁'}</div>
                     </a>`;
                 }).join(''));
 
-                const slides = track.querySelectorAll('.hero-slide');
-                const counter = document.getElementById('hero-counter');
-                const dots = document.getElementById('hero-dots');
-                dots.innerHTML = Array.from(slides).map((_, i) => `<span class="${i === 0 ? 'on' : ''}"></span>`).join('');
-                counter.hidden = false;
-                dots.hidden = false;
-                let index = 0;
-                const update = () => {
-                    index = Math.round(track.scrollLeft / track.clientWidth);
-                    counter.textContent = `${index + 1}/${slides.length}`;
-                    dots.querySelectorAll('span').forEach((d, i) => d.classList.toggle('on', i === index));
-                };
-                update();
-                track.addEventListener('scroll', () => requestAnimationFrame(update), { passive: true });
-                // 자동 넘김 — 사용자가 만지는 동안/화면 밖일 때는 멈춘다
-                let paused = false;
-                ['pointerdown', 'touchstart', 'mouseenter'].forEach(ev => track.addEventListener(ev, () => { paused = true; }, { passive: true }));
-                ['pointerup', 'touchend', 'mouseleave'].forEach(ev => track.addEventListener(ev, () => { setTimeout(() => { paused = false; }, 3000); }, { passive: true }));
-                setInterval(() => {
-                    if (paused || document.hidden || window.__wpLayoutEditing) return;
-                    const next = (index + 1) % slides.length;
-                    track.scrollTo({ left: next * track.clientWidth, behavior: 'smooth' });
-                }, 4000);
+                heroSlider.refresh();
                 applyBannerLayout();
             }
 
@@ -2121,7 +2168,7 @@
                 applyBannerLayout();
                 WithPlus.addLayoutEditButton('🛠 배너 사진 편집', () => {
                     const track = document.getElementById('hero-track');
-                    const slides = Array.from(track.querySelectorAll('.hero-slide'));
+                    const slides = Array.from(track.querySelectorAll('.hero-slide:not(.hero-slide-off)'));
                     let idx = Math.round(track.scrollLeft / track.clientWidth);
                     if (!slides[idx] || !slides[idx].classList.contains('deal-slide')) {
                         idx = slides.findIndex(s => s.classList.contains('deal-slide'));
@@ -2201,28 +2248,42 @@
                 const upd = document.getElementById('rank-updated');
                 if (upd) upd.textContent = '실시간 자동 집계';
             }
+            // 오늘의 특가 슬라이더 + 실시간 랭킹 (전체 상품 목록 기반). 베스트 상품은 loadBestProducts가 따로 불러온다.
             async function loadProductSections() {
-                const bestGrid = document.getElementById('best-products-grid');
-                const bestCount = document.getElementById('best-products-count');
                 try {
                     const { ok, json } = await WithPlus.fetchJSON(WithPlus.withCommunityParam('/api/products'));
                     if (!ok || !json.success || !Array.isArray(json.data)) throw new Error('상품 목록을 불러오지 못했습니다');
-
                     const products = json.data;
-                    if (products.length === 0) {
+                    if (products.length === 0) return;
+                    mountDealSlider(products);
+                    mountRanking(products);
+                } catch (err) { /* 랭킹·특가 배너는 비어 있는 채로 둔다(베스트 상품은 별도 로딩) */ }
+            }
+
+            // ============================================
+            // ⭐ 베스트 상품: 서버 자동 순위(/api/home/best — 최근 판매수량·후기·평점·장바구니·찜 + 관리자 고정/제외)
+            // 처음엔 8개, 버튼으로 16/24/전체(최대 48개)까지 펼쳐보고, 더 있으면 /best 전체 페이지로 안내한다.
+            // ============================================
+            async function loadBestProducts() {
+                const bestGrid = document.getElementById('best-products-grid');
+                const bestCount = document.getElementById('best-products-count');
+                const moreLink = document.getElementById('best-more-link');
+                try {
+                    const { ok, json } = await WithPlus.fetchJSON(WithPlus.withCommunityParam('/api/home/best?limit=48'));
+                    if (!ok || !json.success || !Array.isArray(json.data)) throw new Error((json && json.message) || '베스트 상품을 불러오지 못했습니다');
+                    if (json.data.length === 0) {
                         if (bestCount) bestCount.innerHTML = '';
                         if (bestGrid) bestGrid.innerHTML = '<p style="grid-column:1/-1; text-align:center; color:var(--text-gray); padding:40px 0;">등록된 상품이 아직 없습니다.</p>';
                         return;
                     }
-
-                    mountDealSlider(products);
-                    mountRanking(products);
-                    const byRating = [...products].sort((a, b) => (Number(b.rating) || 0) - (Number(a.rating) || 0));
-                    // 평점순 전체를 넘겨두고, 처음엔 일부만(기본 8개) 보여준 뒤 버튼으로 늘려볼 수 있게 한다
-                    WithPlus.mountCountControl(bestCount, bestGrid, byRating, {
+                    WithPlus.mountCountControl(bestCount, bestGrid, json.data, {
                         counts: COUNT_OPTIONS,
                         storageKey: 'wp_count_best'
                     });
+                    if (moreLink) {
+                        moreLink.hidden = !(json.total > json.data.length);
+                        moreLink.textContent = `베스트 상품 전체 보기 (${Number(json.total).toLocaleString('ko-KR')}개) →`;
+                    }
                 } catch (err) {
                     if (bestGrid) bestGrid.innerHTML = `<p style="grid-column:1/-1; text-align:center; color:var(--text-gray); padding:40px 0;">상품을 불러오는 중 문제가 발생했습니다: ${WithPlus.escapeHtml(err.message)}</p>`;
                 }
@@ -2251,6 +2312,11 @@
                     if (!res.ok || !json.success) throw new Error(json.message || '추천 상품을 불러오지 못했습니다');
 
                     const sections = json.sections || [];
+                    // 채널별 자동 가격(공동체가/도매가) - 다른 상품 목록(WithPlus.fetchJSON)과 같은 가격으로 보여준다
+                    try {
+                        const priceCtx = await WithPlus.loadPriceContext();
+                        sections.forEach(sec => { sec.products = WithPlus.applyPriceContext(sec.products || [], priceCtx); });
+                    } catch (e) { /* 실패 시 기본가 표시 */ }
                     if (sections.length === 0) { container.innerHTML = ''; return; }
 
                     container.innerHTML = sections.map(sec => `
@@ -2307,8 +2373,29 @@
             }
 
             // ============================================
-            // 🔴 실시간 후기 + 지금 이 순간 — /api/home/live (실제 데이터만, 이름은 가려서)
+            // 🔴 실시간 리뷰 + 지금 이 순간 — /api/home/live (실제 이벤트만, 이름은 가려서)
+            // 장바구니 담기 · 결제완료 · 리뷰 작성 · 밴드 후기를 최신순으로 보여주고 30초마다 새 소식을 위에 끼워 넣는다.
             // ============================================
+            const LP_EMOJI = n => `<img class="wp-emoji" src="/images/emoji/${n}.png" width="128" height="128" alt="" aria-hidden="true">`;
+            const LP_TYPES = {
+                cart_add: { icon: 'cart', verb: '장바구니에 담았습니다', josa: '을(를) ' },
+                order: { icon: 'card', verb: '구매했습니다', josa: '을(를) ' },
+                review: { icon: 'memo', verb: '리뷰를 작성했습니다', josa: ' ' },
+                band_review: { icon: 'speech', verb: '후기를 남겼습니다', josa: ' ', pre: '밴드에 ' }
+            };
+            let lpSeen = null;
+            function renderLpItem(e, isNew) {
+                const esc = WithPlus.escapeHtml;
+                const t = LP_TYPES[e.type] || { icon: 'sparkles', verb: '', josa: '' };
+                const prod = e.product_name
+                    ? (e.product_id ? `<a href="/product/${encodeURIComponent(e.product_id)}">${esc(e.product_name)}</a>` : `<b>${esc(e.product_name)}</b>`) + (e.extra ? ` 외 ${e.extra}건` : '') + t.josa
+                    : '';
+                const img = e.product_image ? WithPlus.safeUrlAttr(e.product_image) : '';
+                return `<li class="${isNew ? 'lp-new' : ''}" data-key="${esc(e.key || '')}">`
+                    + `<span class="lp-thumb${img ? '' : ' lp-noimg'}"${img ? ` style="background-image:url('${img}')"` : ''}>${LP_EMOJI(t.icon)}</span>`
+                    + `<span class="lp-msg">${esc(e.author)}님이 ${t.pre || ""}${prod}<span class="lp-verb">${t.verb}</span></span>`
+                    + `<span class="lp-time" data-at="${esc(e.at)}">${WithPlus.timeAgo(e.at)}</span></li>`;
+            }
             async function loadLivePulse() {
                 const sec = document.getElementById('live-pulse');
                 if (!sec) return;
@@ -2319,49 +2406,45 @@
                     const reviews = d.reviews || [], feed = d.feed || [];
                     if (!reviews.length && !feed.length) return; // 보여줄 실제 데이터가 없으면 섹션을 숨긴 채로 둔다
                     const esc = WithPlus.escapeHtml;
-                    document.getElementById('lp-review-scroll').innerHTML = reviews.length ? reviews.map(r => `
+                    const rvEl = document.getElementById('lp-review-scroll');
+                    if (lpSeen === null || !rvEl.children.length) {
+                        rvEl.innerHTML = reviews.length ? reviews.map(r => `
                         <a class="lp-rv" href="${r.product ? '/product/' + encodeURIComponent(r.product.id) : '/reviews'}">
-                            <div class="lp-rv-img" style="${r.photo ? `background-image:url('${WithPlus.safeUrlAttr(r.photo)}')` : ''}"></div>
+                            <div class="lp-rv-img" style="${r.photo ? `background-image:url('${WithPlus.safeUrlAttr(r.photo)}')` : ''}"><span class="lp-src${r.source === 'band' ? '' : ' with'}">${r.source === 'band' ? '밴드' : 'WITH+'}</span></div>
                             <div class="lp-stars">${r.rating ? '★'.repeat(r.rating) + '<span style="color:#E6E6E6">' + '★'.repeat(5 - r.rating) + '</span>' : ''}</div>
                             <div class="lp-rv-text">${esc(r.text || (r.product ? r.product.name : ''))}</div>
                             <div class="lp-rv-who">${esc(r.author)}님</div>
-                        </a>`).join('') : '<p style="color:#999;font-size:.9em;">아직 공개된 후기가 없습니다</p>';
-                    const icon = { order: '🛍️', review: '⭐', band_review: '⭐' };
-                    const verb = { order: '구매했습니다', review: '후기를 남겼습니다', band_review: '후기를 남겼습니다' };
-                    document.getElementById('lp-feed').innerHTML = feed.map(e => {
-                        const prod = e.product_name ? (e.product_id ? `<a href="/product/${encodeURIComponent(e.product_id)}">${esc(e.product_name)}</a>` : `<b>${esc(e.product_name)}</b>`) + (e.extra ? ` 외 ${e.extra}건` : '') + (e.type === 'order' ? '을(를) ' : ' ') : '';
-                        return `<li><span class="lp-ava">${icon[e.type] || '✨'}</span><span class="lp-msg">${esc(e.author)}님이 ${prod}${verb[e.type] || ''}</span><span class="lp-time">${WithPlus.timeAgo(e.at)}</span></li>`;
-                    }).join('');
-                    const s = d.stats || {};
-                    document.getElementById('lp-stats').textContent = `🛒 누적 주문 ${(s.orders || 0).toLocaleString('ko-KR')}건 · ⭐ 후기 ${((s.reviews || 0) + (s.bandReviews || 0)).toLocaleString('ko-KR')}건`;
-                    sec.style.display = '';
-                } catch (e) { /* 실패하면 섹션을 숨긴 채로 둔다 */ }
-            }
-
-            // ============================================
-            // 최근 리뷰: 실제 리뷰 데이터 (작성자는 개인정보 보호로 비공개)
-            // ============================================
-            async function loadRecentReviews() {
-                const list = document.getElementById('recent-reviews-list');
-                if (!list) return;
-                try {
-                    const { ok, json } = await WithPlus.fetchJSON('/api/reviews/recent?limit=4');
-                    if (!ok || !json.success) throw new Error('리뷰를 불러오지 못했습니다');
-
-                    if (json.data.length === 0) {
-                        list.innerHTML = '<div class="activity-item"><span class="activity-action">아직 작성된 리뷰가 없습니다</span></div>';
-                        return;
+                        </a>`).join('') : '<p class="lp-empty">아직 공개된 후기가 없습니다</p>';
                     }
-
-                    list.innerHTML = json.data.map(r => `
-                        <div class="activity-item">
-                            <span class="activity-action">${'⭐'.repeat(r.rating)} "${WithPlus.escapeHtml(r.comment || '')}" - ${WithPlus.escapeHtml(r.product_name)} · <strong>${WithPlus.escapeHtml(r.author_name || '구매자')}</strong>님</span>
-                            <span class="activity-time">${WithPlus.timeAgo(r.created_at)}</span>
-                        </div>`).join('');
-                } catch (err) {
-                    list.innerHTML = `<div class="activity-item"><span class="activity-action">불러오지 못했습니다: ${WithPlus.escapeHtml(err.message)}</span></div>`;
-                }
+                    const feedEl = document.getElementById('lp-feed');
+                    if (lpSeen === null) {
+                        // 첫 화면: 목록을 그대로 그린다
+                        lpSeen = new Set(feed.map(e => e.key));
+                        feedEl.innerHTML = feed.length ? feed.map(e => renderLpItem(e, false)).join('') : '<li class="lp-empty">최근 활동을 기다리는 중입니다</li>';
+                    } else {
+                        // 갱신: 새 이벤트만 위에 하나씩 부드럽게 끼워 넣는다(최신이 맨 위)
+                        // (늦게 동기화된 옛날 후기처럼 지금 맨 위 소식보다 오래된 건 위에 끼우지 않는다)
+                        const topEl = feedEl.querySelector('.lp-time[data-at]');
+                        const topAt = topEl ? new Date(topEl.dataset.at).getTime() : 0;
+                        const fresh = feed.filter(e => !lpSeen.has(e.key) && new Date(e.at).getTime() >= topAt).reverse();
+                        feed.forEach(e => lpSeen.add(e.key)); // 다음 확인 때 같은 소식을 또 끼우지 않도록 바로 표시
+                        fresh.forEach((e, i) => setTimeout(() => {
+                            const empty = feedEl.querySelector('.lp-empty');
+                            if (empty) empty.remove();
+                            feedEl.insertAdjacentHTML('afterbegin', renderLpItem(e, true));
+                            while (feedEl.children.length > 20) feedEl.lastElementChild.remove();
+                        }, i * 1200));
+                    }
+                    // 상대 시간("7분 전")은 매번 다시 계산
+                    feedEl.querySelectorAll('.lp-time[data-at]').forEach(el => { el.textContent = WithPlus.timeAgo(el.dataset.at); });
+                    const s = d.stats || {};
+                    document.getElementById('lp-stats').innerHTML = `${LP_EMOJI('bags')}누적 주문 ${(s.orders || 0).toLocaleString('ko-KR')}건 · ${LP_EMOJI('star')}후기 ${((s.reviews || 0) + (s.bandReviews || 0)).toLocaleString('ko-KR')}건`;
+                    sec.style.display = '';
+                } catch (e) { /* 실패하면 지금 보이는 내용을 그대로 둔다 */ }
             }
+            // 30초마다 새 소식 확인(탭이 안 보일 때는 쉬었다가, 다시 보이면 바로 확인)
+            setInterval(() => { if (!document.hidden) loadLivePulse(); }, 30000);
+            document.addEventListener('visibilitychange', () => { if (!document.hidden && lpSeen !== null) loadLivePulse(); });
 
             // ============================================
             // 플랫폼 통계 / 마일리지 현황: 실제 집계 데이터
@@ -2404,9 +2487,10 @@
 
             await Promise.all([
                 loadProductSections(),
+                loadBestProducts(),
+                (window.WPFlash ? WPFlash.mountHomeSection('flash-section') : Promise.resolve()),
                 loadRecommendedProducts(),
                 loadRecentlyViewed(),
-                loadRecentReviews(),
                 loadLivePulse(),
                 initBannerLayout(),
                 loadPlatformStats(),
