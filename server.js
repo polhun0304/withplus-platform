@@ -13770,6 +13770,14 @@ app.post('/api/admin/prospects/bulk-import', authenticate, requireRole(['admin',
         dedup_key: raw?.dedup_key ? String(raw.dedup_key).trim() : computeDedupKeyForProspect(orgType, name, address),
         admin_note: raw?.admin_note || null
       });
+      // 선택: 로고 주소(https만) — 파일 업로드는 등록 후 POST /api/admin/prospects/:id/logo 로 따로 올린다
+      if (raw?.logo_url) {
+        const logoCheck = normalizeProspectLogoUrl(raw.logo_url);
+        if (!logoCheck.ok) {
+          return res.status(400).json({ error: 'Bad Request', message: logoCheck.message, timestamp: new Date().toISOString() });
+        }
+        rows[rows.length - 1].logo_url = logoCheck.url;
+      }
     }
 
     const { data, error } = await supabase
@@ -13784,6 +13792,7 @@ app.post('/api/admin/prospects/bulk-import', authenticate, requireRole(['admin',
       inserted: insertedCount,
       skipped: rows.length - insertedCount,
       requested: rows.length,
+      ids: (data || []).map(r => r.id),
       message: `${insertedCount}건 신규 등록, ${rows.length - insertedCount}건은 중복이라 건너뛰었습니다`,
       timestamp: new Date().toISOString()
     });
@@ -13836,6 +13845,11 @@ app.put('/api/admin/prospects/:id/promote', authenticate, requireRole(['admin', 
         .select()
         .maybeSingle();
       if (reErr) throw reErr;
+      if (reactivated && prospect.logo_url && !reactivated.logo_url) {
+        // 재전환: 조직 쪽 로고가 비어 있을 때만 영업리스트 로고로 채운다(조직에서 직접 넣은 로고는 보존)
+        const { data: withLogo } = await supabase.from('communities').update({ logo_url: prospect.logo_url }).eq('id', reactivated.id).select().maybeSingle();
+        if (withLogo) Object.assign(reactivated, withLogo);
+      }
       if (reactivated) {
         const { data: updatedProspect, error: upErr } = await supabase
           .from('community_prospects')
@@ -13869,6 +13883,7 @@ app.put('/api/admin/prospects/:id/promote', authenticate, requireRole(['admin', 
         description: '',
         address: prospect.address || null,
         phone: prospect.phone || null,
+        logo_url: prospect.logo_url || null, // 영업리스트에서 관리하던 로고를 랜딩페이지·조직 바 로고로 그대로 가져간다
         landing_template: LANDING_TEMPLATES.includes(landing_template) ? landing_template : 'classic',
         business_info_mode: BUSINESS_INFO_MODES.includes(business_info_mode) ? business_info_mode : 'platform',
         org_type: resolvedOrgType,
@@ -13943,6 +13958,157 @@ app.put('/api/admin/prospects/:id/demote', authenticate, requireRole(['admin', '
   } catch (err) {
     console.error('Error demoting prospect:', err);
     res.status(500).json({ error: 'Failed to demote prospect', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// ============================================
+// 🖼️ 분양 영업 리스트 로고 관리 (업로드·주소 입력·교체·삭제) - 관리자 전용
+// - 파일은 상품 사진과 같은 'product-images' 버킷의 사이트별 폴더에 저장: <사이트>/prospect-logos/<후보ID>/<시간>-<랜덤>.<확장자>
+//   (버킷 허용 형식이 JPG·PNG·WEBP·GIF라 SVG는 관리자 화면에서 PNG로 변환해 올린다 → SVG 안의 스크립트가 저장되지 않음)
+// - 서버는 PNG·JPG·WEBP만, 2MB 이하만 받는다(매직 바이트로 실제 이미지인지 확인).
+// - 교체·삭제 시 "이 기능으로 올린 파일"(logo_storage_path, 위 폴더 안)만 지운다. 붙여넣은 외부 주소는 지우지 않는다.
+// - 공개 전환된 후보라면 연결된 조직(communities.logo_url)에도 반영하되,
+//   조직 로고가 비어 있거나 "직전 영업리스트 로고와 같은 주소"(=영업리스트에서 온 로고)일 때만 바꾼다.
+//   분양 조직 관리 화면에서 따로 넣은 로고는 덮어쓰지 않는다.
+// ============================================
+const PROSPECT_LOGO_MAX_BYTES = 2 * 1024 * 1024;
+const PROSPECT_LOGO_PREFIX = `${UPLOAD_PLATFORM}/prospect-logos/`;
+
+function normalizeProspectLogoUrl(raw) {
+  const url = String(raw || '').trim();
+  if (!url) return { ok: false, message: '로고 주소가 비어 있습니다' };
+  if (url.length > 1000) return { ok: false, message: '로고 주소가 너무 깁니다(1000자 이하)' };
+  let parsed;
+  try { parsed = new URL(url); } catch (_) { return { ok: false, message: '올바른 로고 주소(https://…)가 아닙니다' }; }
+  if (parsed.protocol !== 'https:') return { ok: false, message: '로고 주소는 https:// 로 시작해야 합니다' };
+  return { ok: true, url: parsed.toString() };
+}
+
+async function removeProspectLogoFile(storagePath) {
+  if (!storagePath || !String(storagePath).startsWith(PROSPECT_LOGO_PREFIX)) return;
+  const { error } = await supabase.storage.from(PRODUCT_IMAGE_BUCKET).remove([storagePath]);
+  if (error) console.error('prospect logo file remove failed', storagePath, error.message);
+}
+
+// 공개 전환된 후보의 로고 변경을 연결 조직에 반영 - 결과: 'synced' | 'kept_community_logo' | null(연결 조직 없음)
+async function syncProspectLogoToCommunity(prospect, prevUrl, nextUrl) {
+  if (!prospect.promoted_community_id) return null;
+  const { data: community, error } = await supabase.from('communities').select('id, logo_url').eq('id', prospect.promoted_community_id).maybeSingle();
+  if (error) throw error;
+  if (!community) return null;
+  const current = community.logo_url || '';
+  if (current && current !== (prevUrl || '')) return 'kept_community_logo';
+  if (current === (nextUrl || '')) return 'synced';
+  const { error: upErr } = await supabase.from('communities').update({ logo_url: nextUrl || null, updated_at: new Date().toISOString() }).eq('id', community.id);
+  if (upErr) throw upErr;
+  return 'synced';
+}
+
+async function applyProspectLogo(prospect, nextUrl, nextStoragePath) {
+  const { data, error } = await supabase
+    .from('community_prospects')
+    .update({ logo_url: nextUrl, logo_storage_path: nextStoragePath, updated_at: new Date().toISOString() })
+    .eq('id', prospect.id)
+    .select()
+    .single();
+  if (error) throw error;
+  const communitySync = await syncProspectLogoToCommunity(prospect, prospect.logo_url, nextUrl);
+  // 조직 반영까지 끝난 뒤에 이전 파일을 지운다(어느 화면도 지운 파일을 가리키지 않도록)
+  if (prospect.logo_storage_path && prospect.logo_storage_path !== nextStoragePath) await removeProspectLogoFile(prospect.logo_storage_path);
+  return { data, communitySync };
+}
+
+function prospectLogoSyncMessage(base, communitySync) {
+  if (communitySync === 'synced') return `${base} (공개 랜딩페이지 로고에도 반영했습니다)`;
+  if (communitySync === 'kept_community_logo') return `${base} (공개 조직에는 따로 등록한 로고가 있어 그대로 두었습니다)`;
+  return base;
+}
+
+async function findProspectForLogo(req, res) {
+  if (!/^[0-9a-f-]{36}$/i.test(String(req.params.id || ''))) {
+    res.status(400).json({ error: 'Bad Request', message: '잘못된 후보 ID입니다', timestamp: new Date().toISOString() });
+    return null;
+  }
+  const { data, error } = await supabase.from('community_prospects').select('*').eq('id', req.params.id).maybeSingle();
+  if (error) throw error;
+  if (!data) {
+    res.status(404).json({ error: 'Not Found', message: '해당 영업리스트 항목을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    return null;
+  }
+  return data;
+}
+
+// 로고 파일 업로드(신규·교체) - 본문은 이미지 바이너리 그대로
+app.post('/api/admin/prospects/:id/logo',
+  authenticate,
+  requireRole(['admin', 'super_admin']),
+  express.raw({ type: ['image/jpeg', 'image/png', 'image/webp', 'image/svg+xml', 'image/gif', 'application/octet-stream'], limit: '6mb' }),
+  async (req, res) => {
+    try {
+      const buf = req.body;
+      // 감사로그(요청 본문 스냅샷)에 바이너리가 통째로 남지 않도록 요약으로 바꿔둔다
+      req.body = { logo_upload: { bytes: Buffer.isBuffer(buf) ? buf.length : 0, content_type: req.headers['content-type'] || null } };
+      if (!Buffer.isBuffer(buf) || buf.length === 0) {
+        return res.status(400).json({ error: 'Bad Request', message: '로고 파일이 비어 있습니다', timestamp: new Date().toISOString() });
+      }
+      if (buf.length > PROSPECT_LOGO_MAX_BYTES) {
+        return res.status(413).json({ error: 'Payload Too Large', message: '로고는 2MB 이하만 올릴 수 있습니다', timestamp: new Date().toISOString() });
+      }
+      const type = detectImageType(buf);
+      if (!type || type.ext === 'gif') {
+        return res.status(400).json({ error: 'Bad Request', message: 'PNG·JPG·WEBP·SVG 로고만 올릴 수 있습니다(SVG는 관리자 화면에서 PNG로 자동 변환)', timestamp: new Date().toISOString() });
+      }
+      const prospect = await findProspectForLogo(req, res);
+      if (!prospect) return;
+
+      const objectPath = `${PROSPECT_LOGO_PREFIX}${prospect.id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${type.ext}`;
+      const { error: upErr } = await supabase.storage.from(PRODUCT_IMAGE_BUCKET).upload(objectPath, buf, { contentType: type.mime, cacheControl: '31536000', upsert: false });
+      if (upErr) throw upErr;
+      const publicUrl = supabase.storage.from(PRODUCT_IMAGE_BUCKET).getPublicUrl(objectPath).data.publicUrl;
+      req.body.logo_upload.path = objectPath;
+
+      let result;
+      try {
+        result = await applyProspectLogo(prospect, publicUrl, objectPath);
+      } catch (e) {
+        await removeProspectLogoFile(objectPath); // 저장 실패 시 방금 올린 파일이 고아로 남지 않게 정리
+        throw e;
+      }
+      res.status(201).json({ success: true, data: result.data, community_sync: result.communitySync, message: prospectLogoSyncMessage(prospect.logo_url ? '로고를 교체했습니다' : '로고를 등록했습니다', result.communitySync), timestamp: new Date().toISOString() });
+    } catch (err) {
+      console.error('Error uploading prospect logo:', err);
+      res.status(500).json({ error: 'Failed to upload logo', message: (process.env.NODE_ENV === 'production' ? '로고 업로드에 실패했습니다' : err.message), timestamp: new Date().toISOString() });
+    }
+  });
+
+// 로고 주소(https) 직접 입력(신규·교체)
+app.put('/api/admin/prospects/:id/logo', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const check = normalizeProspectLogoUrl(req.body?.logo_url);
+    if (!check.ok) return res.status(400).json({ error: 'Bad Request', message: check.message, timestamp: new Date().toISOString() });
+    const prospect = await findProspectForLogo(req, res);
+    if (!prospect) return;
+    const result = await applyProspectLogo(prospect, check.url, null);
+    res.json({ success: true, data: result.data, community_sync: result.communitySync, message: prospectLogoSyncMessage(prospect.logo_url ? '로고를 교체했습니다' : '로고를 등록했습니다', result.communitySync), timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error setting prospect logo url:', err);
+    res.status(500).json({ error: 'Failed to set logo', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 로고 삭제 - 이 기능으로 올린 파일이면 저장소에서도 지운다
+app.delete('/api/admin/prospects/:id/logo', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const prospect = await findProspectForLogo(req, res);
+    if (!prospect) return;
+    if (!prospect.logo_url && !prospect.logo_storage_path) {
+      return res.status(400).json({ error: 'Bad Request', message: '등록된 로고가 없습니다', timestamp: new Date().toISOString() });
+    }
+    const result = await applyProspectLogo(prospect, null, null);
+    res.json({ success: true, data: result.data, community_sync: result.communitySync, message: prospectLogoSyncMessage('로고를 삭제했습니다', result.communitySync), timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting prospect logo:', err);
+    res.status(500).json({ error: 'Failed to delete logo', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
