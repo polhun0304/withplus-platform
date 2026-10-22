@@ -5889,18 +5889,7 @@
                     document.querySelector('[data-tab="community-settlements"]').addEventListener('click', async () => {
                         const area = document.getElementById('community-settlements-area');
                         if (area.dataset.loaded) return;
-                        if (typeof window.__ensureOwnerStepUpOrBootstrap === 'function') {
-                            try {
-                                await window.__ensureOwnerStepUpOrBootstrap();
-                            } catch (err) {
-                                if (err.message === 'CANCELLED') {
-                                    area.innerHTML = `<div class="state-box"><div class="emoji">🔒</div><h3>대표자 2단계 인증이 필요합니다</h3><p>이 탭은 조직별 매출·수수료·은행계좌를 보여주므로 인증 후에만 볼 수 있습니다.</p></div>`;
-                                } else {
-                                    area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>인증 확인 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
-                                }
-                                return;
-                            }
-                        }
+                        // 관리자(admin)도 바로 사용 (형님 결정 2026-10-22) — 대표자 2단계 인증 단계 없음
                         area.dataset.loaded = '1';
                         loadCommunitySettlementsTab();
                     });
@@ -9851,18 +9840,7 @@
                 document.querySelector('[data-tab="communities"]').addEventListener('click', async () => {
                     const tableArea = document.getElementById('communities-table-area');
                     if (tableArea.dataset.loaded) return;
-                    if (typeof window.__ensureOwnerStepUpOrBootstrap === 'function') {
-                        try {
-                            await window.__ensureOwnerStepUpOrBootstrap();
-                        } catch (err) {
-                            if (err.message === 'CANCELLED') {
-                                tableArea.innerHTML = `<div class="state-box"><div class="emoji">🔒</div><h3>대표자 2단계 인증이 필요합니다</h3><p>이 탭은 조직별 사업자등록번호·은행계좌를 보여주므로 인증 후에만 볼 수 있습니다.</p></div>`;
-                            } else {
-                                tableArea.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>인증 확인 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
-                            }
-                            return;
-                        }
-                    }
+                    // 관리자(admin)도 바로 사용 (형님 결정 2026-10-22) — 대표자 2단계 인증 단계 없음
                     tableArea.dataset.loaded = '1';
                     loadCommunitiesAdmin();
                 });
@@ -14253,16 +14231,8 @@
                     }
                 }
                 async function lvOwnerGate(area) {
-                    if (!isOwner) { area.innerHTML = lvOwnerOnlyHtml; return false; }
-                    if (typeof window.__ensureOwnerStepUpOrBootstrap === 'function') {
-                        try { await window.__ensureOwnerStepUpOrBootstrap(); }
-                        catch (err) {
-                            area.innerHTML = err.message === 'CANCELLED'
-                                ? '<div class="state-box"><div class="emoji">🔒</div><h3>대표자 2단계 인증이 필요합니다</h3><button type="button" class="btn btn-secondary lv-retry-gate">🔓 인증하고 불러오기</button></div>'
-                                : `<div class="state-box"><div class="emoji">⚠️</div><h3>인증 확인 중 문제가 발생했습니다</h3><p>${lvEsc(err.message)}</p></div>`;
-                            return false;
-                        }
-                    }
+                    // 관리자(admin)도 크리에이터 커미션·계좌·정산을 관리 (형님 결정 2026-10-22)
+                    if (!isAdmin) { area.innerHTML = lvOwnerOnlyHtml; return false; }
                     return true;
                 }
 
@@ -14420,9 +14390,6 @@
                     try {
                         let res;
                         if (lvcrEditing) {
-                            // 수정은 requireOwnerStepUp(부트스트랩 예외 없음) - 공급자 수수료율 저장과 같은 패턴으로 스텝업을 확실히 받는다
-                            if (typeof window.__ensureOwnerStepUp !== 'function') return showErr('대표자 계정만 수정할 수 있습니다');
-                            await window.__ensureOwnerStepUp();
                             const body = Object.assign({
                                 display_name: name,
                                 status: document.getElementById('lvcr-status').value,
