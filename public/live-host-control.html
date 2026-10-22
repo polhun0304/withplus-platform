@@ -1,0 +1,1670 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <!-- 설치형 앱(PWA) 표준 v1 -->
+    <link rel="manifest" href="/manifest.webmanifest">
+    <meta name="theme-color" content="#D32F5B">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
+    <meta name="apple-mobile-web-app-title" content="WITH+">
+    <link rel="apple-touch-icon" sizes="180x180" href="/pwa/icon/apple">
+    <script src="/pwa-install.js" defer></script>
+    <title>라이브 방송 진행 - WITH+</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        :root {
+            --primary-color: #D32F5B; --primary-dark: #B0154F;
+            --bg-white: #FFFFFF; --bg-light: #F5F5F5;
+            --text-dark: #333333; --text-gray: #666666;
+            --border-color: #E0E0E0; --success: #2E7D32; --warning: #FFC107;
+        }
+        body { font-family: 'Noto Sans KR', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; color: var(--text-dark); line-height: 1.6; background: var(--bg-light); padding-bottom: 60px; }
+        .header { background: var(--bg-white); border-bottom: 1px solid var(--border-color); position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .header-main { max-width: 1100px; margin: 0 auto; padding: 14px 20px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+        .header-main a.back-link { color: var(--text-gray); text-decoration: none; font-size: 0.85em; }
+        .header-main a.back-link:hover { color: var(--primary-color); }
+        .wrap { max-width: 1100px; margin: 24px auto; padding: 0 20px; }
+        .state-box { text-align: center; padding: 60px 20px; background: white; border-radius: 12px; }
+        .state-box .emoji { font-size: 2.4em; margin-bottom: 10px; }
+        .state-box h3 { margin-bottom: 8px; }
+        .state-box a { color: var(--primary-color); text-decoration: none; font-weight: 600; }
+
+        .live-badge { display: inline-flex; align-items: center; gap: 5px; background: #C62828; color: white; font-weight: 700; font-size: 0.78em; padding: 4px 10px; border-radius: 12px; }
+        .live-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: white; animation: pulse 1.4s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        .badge { display: inline-block; padding: 3px 10px; border-radius: 10px; font-size: 0.78em; font-weight: 600; }
+        .badge.scheduled { background: #FFF3E0; color: #E65100; }
+        .badge.ended { background: #EEEEEE; color: #757575; }
+
+        .card { background: white; border-radius: 12px; padding: 20px; margin-bottom: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.04); }
+        .card h2 { font-size: 1.05em; margin-bottom: 14px; display: flex; align-items: center; gap: 8px; justify-content: space-between; flex-wrap: wrap; }
+        .card h2 .title-left { display: flex; align-items: center; gap: 8px; }
+
+        .btn { padding: 9px 16px; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; font-size: 0.85em; }
+        .btn-primary { background: var(--primary-color); color: white; }
+        .btn-primary:hover { background: var(--primary-dark); }
+        .btn-danger { background: white; border: 1px solid #E57373; color: #C62828; }
+        .btn-danger:hover { background: #FDECEA; }
+        .btn-secondary { background: white; border: 1px solid var(--border-color); color: var(--text-dark); }
+        .btn-secondary:hover { border-color: var(--primary-color); color: var(--primary-color); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .session-meta { font-size: 0.82em; color: var(--text-gray); margin-bottom: 12px; }
+        select, input[type=number] { padding: 7px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.85em; font-family: inherit; }
+
+        .sched-row { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--border-color); font-size: 0.88em; gap: 10px; flex-wrap: wrap; }
+        .sched-row:last-child { border-bottom: none; }
+        .new-session-row { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+        .new-session-row input { flex: 1; min-width: 160px; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.85em; }
+
+        .pin-row { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+        .pin-row label { font-size: 0.82em; color: var(--text-gray); }
+
+        table.inv-table { width: 100%; border-collapse: collapse; font-size: 0.85em; }
+        table.inv-table th { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border-color); color: var(--text-gray); font-weight: 600; font-size: 0.9em; }
+        table.inv-table td { padding: 8px 6px; border-bottom: 1px solid var(--border-color); vertical-align: middle; }
+        table.inv-table tr:last-child td { border-bottom: none; }
+        .qty-low { color: #C62828; font-weight: 700; }
+        .inv-edit { display: flex; gap: 4px; align-items: center; }
+        .inv-edit input { width: 64px; }
+
+        .chat-log { max-height: 320px; overflow-y: auto; border: 1px solid var(--border-color); border-radius: 8px; padding: 8px; margin-bottom: 10px; background: #FAFAFA; }
+        .chat-row { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; font-size: 0.82em; padding: 5px 6px; border-radius: 4px; }
+        .chat-row.hidden-msg { opacity: 0.5; background: white; }
+        .chat-row .name { font-weight: 700; color: var(--primary-color); margin-right: 4px; }
+        .chat-row button { flex-shrink: 0; background: none; border: 1px solid var(--border-color); border-radius: 5px; padding: 2px 7px; font-size: 0.78em; cursor: pointer; color: var(--text-gray); }
+        .chat-row button:hover { color: var(--primary-color); border-color: var(--primary-color); }
+        .chat-empty { text-align: center; color: var(--text-gray); font-size: 0.85em; padding: 20px; }
+
+        .msg { font-size: 0.8em; margin-top: 6px; }
+        .msg.error { color: #C62828; }
+        .msg.success { color: var(--success); }
+
+        .dest-row, .target-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--border-color); font-size: 0.85em; gap: 8px; flex-wrap: wrap; }
+        .dest-row:last-child, .target-row:last-child { border-bottom: none; }
+        .dest-row .plat-tag { display: inline-block; padding: 2px 8px; border-radius: 8px; font-size: 0.78em; font-weight: 600; background: #F3E5F5; color: #6A1B9A; margin-right: 6px; }
+        .dest-row .plat-tag.youtube { background: #FFEBEE; color: #C62828; }
+        .dest-row .plat-tag.facebook { background: #E3F2FD; color: #1565C0; }
+        .dest-row .plat-tag.custom_rtmp { background: #ECEFF1; color: #455A64; }
+        .dest-row .plat-tag.cloudflare_stream { background: #FFF3E0; color: #E65100; }
+        .target-row .plat-status { font-size: 0.78em; padding: 2px 8px; border-radius: 8px; font-weight: 600; }
+        .target-row .plat-status.created { background: #FFF3E0; color: #E65100; }
+        .target-row .plat-status.live { background: #FFEBEE; color: #C62828; }
+        .target-row .plat-status.ended { background: #EEEEEE; color: #757575; }
+        .target-row .plat-status.error { background: #FFEBEE; color: #C62828; }
+        .omnicast-add-row { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; align-items: center; }
+        .omnicast-add-row select { flex: 1; min-width: 160px; }
+        .ingest-box { font-size: 0.76em; background: #FAFAFA; border: 1px solid var(--border-color); border-radius: 6px; padding: 6px 8px; margin-top: 4px; word-break: break-all; color: var(--text-gray); width: 100%; }
+        .platform-cfg-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 0; border-bottom: 1px dashed var(--border-color); font-size: 0.82em; }
+        .platform-cfg-row:last-child { border-bottom: none; }
+        .platform-cfg-row input { flex: 1; min-width: 140px; padding: 6px 8px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.85em; }
+        .unsupported-note { font-size: 0.78em; color: var(--text-gray); padding: 6px 0; }
+        details.omnicast-settings { margin-top: 14px; }
+        details.omnicast-settings summary { cursor: pointer; font-size: 0.82em; color: var(--text-gray); }
+
+        .webrtc-preview-box { position: relative; width: 100%; max-width: 360px; aspect-ratio: 16 / 9; background: #000; border-radius: 8px; overflow: hidden; margin-bottom: 10px; }
+        .webrtc-preview-box video { width: 100%; height: 100%; object-fit: cover; }
+        .webrtc-preview-box .webrtc-live-flag { position: absolute; top: 8px; left: 8px; background: #C62828; color: white; font-size: 0.72em; font-weight: 700; padding: 3px 9px; border-radius: 10px; }
+
+        .cf-connect-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+        .cf-connect-row input { flex: 1; min-width: 160px; padding: 7px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.85em; }
+    </style>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+    <link rel="stylesheet" href="/typography.css">
+    <link rel="stylesheet" href="/withplus-live.css">
+</head>
+<body>
+    <div class="header">
+        <div class="header-main">
+            <div class="lhc-brand">
+                <a href="/" class="lhc-logo" aria-label="WITH+ 홈"><img src="/images/brand/withplus-logo.webp" alt="WITH+" width="104" height="32"></a>
+                <span class="lhc-title">라이브 방송 진행</span>
+                <a href="/admin" class="back-link">← 관리자 페이지로</a>
+            </div>
+            <span id="who-am-i" style="font-size:0.82em; color:var(--text-gray);"></span>
+        </div>
+    </div>
+
+    <div class="wrap" id="host-area">
+        <div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>
+    </div>
+
+    <script src="/vendor/supabase.min.js"></script>
+    <script src="/vendor/livekit-client.min.js"></script>
+    <script src="/withplus-common.js"></script>
+    <script src="/voice-dictation.js?v=1" defer></script>
+    <script>
+    (async function () {
+        const area = document.getElementById('host-area');
+        const pathParts = location.pathname.split('/').filter(Boolean);
+        const channelId = pathParts[pathParts.length - 1];
+
+        const session = await WithPlus.getSession();
+        if (!session) {
+            area.innerHTML = `<div class="state-box"><div class="emoji">🔒</div><h3>로그인이 필요한 페이지입니다</h3><a href="/login">로그인하러 가기</a></div>`;
+            return;
+        }
+        let ME = null;
+        try {
+            const token = await WithPlus.getAccessToken();
+            const res = await fetch('/api/me', { headers: { 'Authorization': 'Bearer ' + token } });
+            const json = await res.json();
+            if (!res.ok || !json.success) throw new Error('프로필 조회 실패');
+            ME = json.data;
+        } catch (e) {
+            area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>권한 확인 중 오류가 발생했습니다</h3><p>${WithPlus.escapeHtml(e.message)}</p></div>`;
+            return;
+        }
+        // 방송 진행 화면은 이 세션 전체에서 사용해온 것과 동일하게 admin/super_admin 전용이다.
+        // (채널/세션 관련 엔드포인트가 전부 이 두 role로만 게이트되어 있고, 지금은 별도의 "호스트" 계정
+        // 체계를 새로 만들지 않는다 - 채널은 실제 권리계약 여부와 무관하게 플랫폼/관리자가 위탁 운영한다는
+        // FAN+/CREATOR+/BRAND+ 구조의 기존 원칙과 일치)
+        if (!['admin', 'super_admin'].includes(ME.role)) {
+            area.innerHTML = `<div class="state-box"><div class="emoji">🚫</div><h3>방송 진행 화면 접근 권한이 없습니다</h3><p>관리자(admin) 권한이 있는 계정으로 로그인해주세요.</p><a href="/">홈으로 돌아가기</a></div>`;
+            return;
+        }
+        document.getElementById('who-am-i').textContent = `${ME.email} (${ME.role})`;
+
+        async function authedFetch(url, opts) {
+            const token = await WithPlus.getAccessToken();
+            const o = Object.assign({}, opts);
+            o.headers = Object.assign({ 'Authorization': 'Bearer ' + token }, o.headers || {});
+            const r = await fetch(url, o);
+            let j = null;
+            try { j = await r.json(); } catch (e) { /* no body */ }
+            return { ok: r.ok, status: r.status, json: j || {} };
+        }
+
+        let channel = null;
+        let sessions = [];
+        let curatedProducts = [];
+        let flashSales = [];
+        let quizzes = [];
+        let guests = [];
+        let auctions = [];
+        let focusSession = null; // live 세션이 있으면 그것, 없으면 가장 최근 세션
+        let chatRows = [];
+        let chatHasMore = false;
+        let pollTimer = null;
+        let chatPollTimer = null;
+        let omnicastPlatforms = [];
+        let omnicastDestinations = [];
+        let omnicastTargets = [];
+        let pendingFacebookSelectionId = null;
+        let pendingFacebookPages = null;
+        // 📹 브라우저로 방송(WebRTC/LiveKit) - webrtcRoom/webrtcLocalTrack은 이 탭이 지금 발행 중인 연결/트랙을
+        // 클로저에 직접 들고 있는다. render()가 8초마다 area.innerHTML을 통째로 다시 그려도 이 값들은
+        // DOM이 아니므로 그대로 살아있고, 다시 그려진 <video id="webrtc-local-preview">에 매번 다시 붙여주기만(attach) 하면 된다.
+        let webrtcConfigured = null;
+        let webrtcRoom = null;
+        let webrtcLocalTrack = null;
+        let webrtcBroadcasting = false;
+        // 📩 카카오 알림톡 - 채널별이 아니라 서비스 전체에 공통으로 적용되는 설정이라 focusSession과 무관하게 1회만 불러온다.
+        let alimtalkConfig = null;
+        // 🎁 라이브 전용 구매 캐시백율 - 마찬가지로 서비스 전체 공통 설정
+        let liveCashbackRate = null;
+        // 🎁 바이럴 공유쿠폰(소문내면 할인) 설정 - 마찬가지로 서비스 전체 공통 설정
+        let liveShareCouponSettings = null;
+        // 📅 방송 예약 알림 설정 - 마찬가지로 서비스 전체 공통 설정
+        let liveReminderSettings = null;
+        const OMNICAST_PLATFORM_LABELS = { youtube: '유튜브', facebook: '페이스북', custom_rtmp: '커스텀 RTMP', cloudflare_stream: '자체 사이트(Cloudflare)', tiktok: '틱톡', instagram: '인스타그램', x: 'X' };
+        const OMNICAST_STATUS_LABELS = { created: '준비됨', live: '송출중', ended: '종료됨', error: '오류' };
+
+        async function loadChannel() {
+            const { ok, json } = await authedFetch('/api/admin/live/channels');
+            if (!ok || !json.success) throw new Error(json.message || '채널 정보를 불러오지 못했습니다');
+            channel = (json.data || []).find(c => c.id === channelId);
+            if (!channel) throw new Error('채널을 찾을 수 없습니다');
+        }
+
+        async function loadSessions() {
+            const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions`);
+            if (!ok || !json.success) throw new Error(json.message || '세션 목록을 불러오지 못했습니다');
+            sessions = json.data || [];
+            focusSession = sessions.find(s => s.status === 'live') || sessions[0] || null;
+        }
+
+        async function loadCuratedProducts() {
+            const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/products`);
+            if (ok && json.success) curatedProducts = json.data || [];
+        }
+
+        async function loadInventory(sessionId) {
+            const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${sessionId}/inventory`);
+            return (ok && json.success) ? (json.data || []) : [];
+        }
+
+        async function loadFlashSales(sessionId) {
+            const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${sessionId}/flash-sales`);
+            flashSales = (ok && json.success) ? (json.data || []) : [];
+        }
+
+        async function loadQuizzes(sessionId) {
+            const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${sessionId}/quizzes`);
+            quizzes = (ok && json.success) ? (json.data || []) : [];
+        }
+
+        async function loadGuests(sessionId) {
+            const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${sessionId}/guests`);
+            guests = (ok && json.success) ? (json.data || []) : [];
+        }
+
+        async function loadAuctions(sessionId) {
+            const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${sessionId}/auctions`);
+            auctions = (ok && json.success) ? (json.data || []) : [];
+        }
+
+        // 🎟️ 선착순 다운로드 쿠폰함(경쟁사 기능 격차 백로그 7번)
+        let couponDrops = [];
+        async function loadCouponDrops(sessionId) {
+            const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${sessionId}/coupon-drops`);
+            couponDrops = (ok && json.success) ? (json.data || []) : [];
+        }
+        function couponDropStatusLabel(c) {
+            if (!c.is_active) return '⏹ 마감됨';
+            if (c.claimed_count >= c.claim_limit) return '🎉 전량 소진';
+            if (c.valid_until && new Date(c.valid_until).getTime() <= Date.now()) return '⏱ 기간만료';
+            return '🟢 진행중';
+        }
+        function renderCouponDropArea() {
+            const listArea = document.getElementById('cd-list-area');
+            if (!listArea || !focusSession) return;
+            if (couponDrops.length === 0) {
+                listArea.innerHTML = '<p style="font-size:0.82em; color:var(--text-gray);">아직 발급한 선착순 쿠폰이 없습니다.</p>';
+                return;
+            }
+            const canCancel = c => c.is_active && c.claimed_count < c.claim_limit && (!c.valid_until || new Date(c.valid_until).getTime() > Date.now());
+            listArea.innerHTML = couponDrops.map(c => `
+                <div class="sched-row" data-id="${c.id}">
+                    <span>${couponDropStatusLabel(c)} ${WithPlus.escapeHtml(c.label)} <span style="color:var(--text-gray);">(${c.claimed_count}/${c.claim_limit}장 다운로드됨)</span></span>
+                    ${canCancel(c) ? `<button type="button" class="btn btn-danger btn-sm cd-cancel-btn" data-id="${c.id}">조기마감</button>` : ''}
+                </div>`).join('');
+            listArea.querySelectorAll('.cd-cancel-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    if (!confirm('아직 남은 수량이 있어도 더 이상 받을 수 없게 마감할까요?')) return;
+                    btn.disabled = true;
+                    await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${focusSession.id}/coupon-drops/${btn.dataset.id}/cancel`, { method: 'PATCH' });
+                    await loadCouponDrops(focusSession.id);
+                    renderCouponDropArea();
+                });
+            });
+        }
+
+        // 🎁 실시간 가상 선물/후원(경쟁사 기능 격차 백로그 6번) - 세션별 누적 선물 요약
+        let giftSummary = null;
+        async function loadGiftSummary(sessionId) {
+            const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${sessionId}/gifts`);
+            giftSummary = (ok && json.success) ? json.data : null;
+        }
+        function renderGiftSummary() {
+            const area = document.getElementById('gift-summary-area');
+            if (!area) return;
+            if (!giftSummary || giftSummary.total_count === 0) {
+                area.innerHTML = '<p style="font-size:0.82em; color:var(--text-gray);">아직 받은 선물이 없습니다.</p>';
+                return;
+            }
+            const recentHtml = giftSummary.recent.slice(0, 10).map(g =>
+                `<div class="sched-row"><span>${g.emoji} ${WithPlus.escapeHtml(g.label)} <span style="color:var(--text-gray);">(${Number(g.cost).toLocaleString('ko-KR')}P · ${fmtTime(g.created_at)})</span></span></div>`
+            ).join('');
+            area.innerHTML = `
+                <div style="display:flex; gap:16px; margin-bottom:10px;">
+                    <div><strong style="font-size:1.3em;">${giftSummary.total_count}</strong><div style="font-size:0.75em; color:var(--text-gray);">받은 선물 수</div></div>
+                    <div><strong style="font-size:1.3em;">${Number(giftSummary.total_cost).toLocaleString('ko-KR')}P</strong><div style="font-size:0.75em; color:var(--text-gray);">누적 마일리지</div></div>
+                </div>
+                ${recentHtml}`;
+        }
+
+        async function loadChat(sessionId, loadMore) {
+            const beforeQs = (loadMore && chatRows.length > 0) ? '?before=' + encodeURIComponent(chatRows[chatRows.length - 1].created_at) : '';
+            const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${sessionId}/chat${beforeQs}`);
+            if (!ok || !json.success) return;
+            chatRows = loadMore ? chatRows.concat(json.data) : (json.data || []);
+            chatHasMore = !!json.has_more;
+        }
+
+        // ===== OmniCast (동시송출) =====
+        async function loadOmnicastPlatforms() {
+            const { ok, json } = await authedFetch('/api/admin/live/omnicast/platforms');
+            omnicastPlatforms = (ok && json.success) ? json.data : [];
+        }
+        async function loadOmnicastDestinations() {
+            const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/omnicast/destinations`);
+            omnicastDestinations = (ok && json.success) ? json.data : [];
+        }
+        async function loadOmnicastTargets(sessionId) {
+            const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${sessionId}/omnicast/targets`);
+            omnicastTargets = (ok && json.success) ? json.data : [];
+        }
+
+        // ===== 📹 브라우저로 방송(WebRTC) =====
+        async function loadWebrtcStatus() {
+            const { ok, json } = await authedFetch('/api/admin/live/webrtc/status');
+            webrtcConfigured = (ok && json.success) ? !!json.data.configured : false;
+        }
+
+        // ===== 📩 카카오 알림톡 =====
+        async function loadAlimtalkConfig() {
+            const { ok, json } = await authedFetch('/api/admin/live/kakao-alimtalk/config');
+            alimtalkConfig = (ok && json.success) ? json.data : { has_api_key: false, user_id: null, sender_key: null, sender_phone: null, tpl_code_live_start: null, enabled: false };
+        }
+
+        // ===== 🎁 라이브 전용 구매 캐시백 =====
+        async function loadCashbackRate() {
+            const { ok, json } = await authedFetch('/api/settings/live-cashback-rate');
+            liveCashbackRate = (ok && json.success) ? Number(json.data.rate) || 0 : 0;
+        }
+
+        function renderCashbackArea(forceRefresh) {
+            const area = document.getElementById('host-cashback-area');
+            if (!area || liveCashbackRate === null) return;
+            if (area.dataset.rendered === '1' && !forceRefresh) return;
+            area.dataset.rendered = '1';
+            area.innerHTML = `
+                <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="field" style="width:120px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">캐시백율(%)</label><input type="number" id="cashback-rate-input" value="${Math.round(liveCashbackRate * 1000) / 10}" min="0" max="50" step="0.5" style="width:100%;"></div>
+                    <button type="button" class="btn btn-primary btn-sm" id="cashback-save-btn">저장</button>
+                    ${liveCashbackRate > 0 ? `<span style="font-size:0.82em; color:var(--success);">현재 ${Math.round(liveCashbackRate * 1000) / 10}% 지급 중</span>` : '<span style="font-size:0.82em; color:var(--text-gray);">현재 꺼져있음(0%)</span>'}
+                </div>
+                <div class="msg" id="cashback-msg"></div>
+            `;
+            document.getElementById('cashback-save-btn').addEventListener('click', async () => {
+                const msgEl = document.getElementById('cashback-msg');
+                const pct = Number(document.getElementById('cashback-rate-input').value);
+                if (!Number.isFinite(pct) || pct < 0 || pct > 50) { msgEl.textContent = '0~50 사이 숫자를 입력해주세요'; msgEl.className = 'msg error'; return; }
+                const { ok, json } = await authedFetch('/api/admin/settings/live-cashback-rate', {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rate: pct / 100 })
+                });
+                if (!ok) { msgEl.textContent = json.message || '저장 실패'; msgEl.className = 'msg error'; return; }
+                msgEl.textContent = '저장되었습니다'; msgEl.className = 'msg success';
+                liveCashbackRate = json.data.rate;
+                renderCashbackArea(true);
+            });
+        }
+
+        // ===== 🎁 바이럴 공유쿠폰(소문내면 할인) =====
+        async function loadShareCouponSettings() {
+            const { ok, json } = await authedFetch('/api/settings/live-share-coupon');
+            liveShareCouponSettings = (ok && json.success) ? json.data : { discount_percent: 0, valid_days: 14 };
+        }
+
+        function renderShareCouponArea(forceRefresh) {
+            const area = document.getElementById('host-sharecoupon-area');
+            if (!area || !liveShareCouponSettings) return;
+            if (area.dataset.rendered === '1' && !forceRefresh) return;
+            area.dataset.rendered = '1';
+            const pct = liveShareCouponSettings.discount_percent;
+            const days = liveShareCouponSettings.valid_days;
+            area.innerHTML = `
+                <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+                    <div class="field" style="width:120px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">할인율(%)</label><input type="number" id="sharecoupon-pct-input" value="${pct}" min="0" max="50" step="1" style="width:100%;"></div>
+                    <div class="field" style="width:120px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">쿠폰 유효기간(일)</label><input type="number" id="sharecoupon-days-input" value="${days}" min="1" max="365" step="1" style="width:100%;"></div>
+                    <button type="button" class="btn btn-primary btn-sm" id="sharecoupon-save-btn">저장</button>
+                    ${pct > 0 ? `<span style="font-size:0.82em; color:var(--success);">현재 ${pct}% 켜짐(쿠폰 ${days}일간 유효)</span>` : '<span style="font-size:0.82em; color:var(--text-gray);">현재 꺼져있음(0%) - 시청자 화면에 공유 버튼이 안 보입니다</span>'}
+                </div>
+                <div class="msg" id="sharecoupon-msg"></div>
+            `;
+            document.getElementById('sharecoupon-save-btn').addEventListener('click', async () => {
+                const msgEl = document.getElementById('sharecoupon-msg');
+                const pctVal = Number(document.getElementById('sharecoupon-pct-input').value);
+                const daysVal = Number(document.getElementById('sharecoupon-days-input').value);
+                if (!Number.isFinite(pctVal) || pctVal < 0 || pctVal > 50) { msgEl.textContent = '할인율은 0~50 사이 숫자를 입력해주세요'; msgEl.className = 'msg error'; return; }
+                if (!Number.isFinite(daysVal) || daysVal < 1 || daysVal > 365) { msgEl.textContent = '유효기간은 1~365 사이 숫자를 입력해주세요'; msgEl.className = 'msg error'; return; }
+                const { ok, json } = await authedFetch('/api/admin/settings/live-share-coupon', {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ discount_percent: pctVal, valid_days: daysVal })
+                });
+                if (!ok) { msgEl.textContent = json.message || '저장 실패'; msgEl.className = 'msg error'; return; }
+                msgEl.textContent = '저장되었습니다'; msgEl.className = 'msg success';
+                liveShareCouponSettings = json.data;
+                renderShareCouponArea(true);
+            });
+        }
+
+        // ===== 📅 방송 예약 알림 =====
+        async function loadReminderSettings() {
+            const { ok, json } = await authedFetch('/api/admin/settings/live-reminder');
+            liveReminderSettings = (ok && json.success) ? Object.assign({}, json.data, { pending_count: json.pending_count }) : { enabled: false, minutes_before: 30, pending_count: 0 };
+        }
+
+        function renderReminderArea(forceRefresh) {
+            const area = document.getElementById('host-reminder-area');
+            if (!area || !liveReminderSettings) return;
+            if (area.dataset.rendered === '1' && !forceRefresh) return;
+            area.dataset.rendered = '1';
+            const s = liveReminderSettings;
+            area.innerHTML = `
+                <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+                    <label style="display:flex; align-items:center; gap:6px; font-size:0.85em;"><input type="checkbox" id="reminder-enabled-input" ${s.enabled ? 'checked' : ''}> 사용함</label>
+                    <div class="field" style="width:130px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">몇 분 전에 알릴지</label><input type="number" id="reminder-minutes-input" value="${s.minutes_before}" min="5" max="1440" step="5" style="width:100%;"></div>
+                    <button type="button" class="btn btn-primary btn-sm" id="reminder-save-btn">저장</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="reminder-run-now-btn">지금 즉시 스캔 실행(테스트)</button>
+                    <span style="font-size:0.82em; color:var(--text-gray);">대기 중인 예정 세션: ${s.pending_count || 0}건</span>
+                </div>
+                <p style="font-size:0.76em; color:var(--text-gray); margin:6px 0 0;">5분마다 자동으로 스캔합니다(서버 재시작 시점 기준). "방송 예정" 상태의 세션이 설정한 분(分) 이내로 다가오면 채널 단골 전원에게 인앱 알림이, 카카오 알림톡이 설정돼 있으면 알림톡도 함께 발송됩니다. 한 세션당 딱 한 번만 발송됩니다.</p>
+                <div class="msg" id="reminder-msg"></div>
+            `;
+            document.getElementById('reminder-save-btn').addEventListener('click', async () => {
+                const msgEl = document.getElementById('reminder-msg');
+                const enabled = document.getElementById('reminder-enabled-input').checked;
+                const minutes = Number(document.getElementById('reminder-minutes-input').value);
+                if (!Number.isFinite(minutes) || minutes < 5 || minutes > 1440) { msgEl.textContent = '5~1440 사이 숫자를 입력해주세요'; msgEl.className = 'msg error'; return; }
+                const { ok, json } = await authedFetch('/api/admin/settings/live-reminder', {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled, minutes_before: minutes })
+                });
+                if (!ok) { msgEl.textContent = json.message || '저장 실패'; msgEl.className = 'msg error'; return; }
+                msgEl.textContent = '저장되었습니다'; msgEl.className = 'msg success';
+                await loadReminderSettings();
+                renderReminderArea(true);
+            });
+            document.getElementById('reminder-run-now-btn').addEventListener('click', async () => {
+                const msgEl = document.getElementById('reminder-msg');
+                msgEl.textContent = '실행 중...'; msgEl.className = 'msg';
+                const { ok, json } = await authedFetch('/api/admin/live-reminder/run-now', { method: 'POST' });
+                if (!ok) { msgEl.textContent = json.message || '실행 실패'; msgEl.className = 'msg error'; return; }
+                msgEl.textContent = `실행 완료 - 대상 세션 ${json.data.scanned}건 중 ${json.data.notified_sessions}건 발송(회원 ${json.data.notified_members}명)`; msgEl.className = 'msg success';
+                await loadReminderSettings();
+                renderReminderArea(true);
+            });
+        }
+
+        function renderAlimtalkArea(forceRefresh) {
+            const area = document.getElementById('host-alimtalk-area');
+            if (!area || !alimtalkConfig) return;
+            // 8초 폴링마다 render()가 이 카드를 다시 그리는데, 그때마다 입력 중이던 값을 지우면 타이핑이
+            // 끊기므로(OmniCast 설정 폼과 동일한 문제) 저장/테스트 직후처럼 꼭 새로 그려야 할 때만 다시 그린다.
+            if (area.dataset.rendered === '1' && !forceRefresh) return;
+            area.dataset.rendered = '1';
+            const cfg = alimtalkConfig;
+            area.innerHTML = `
+                <div style="display:flex; align-items:center; gap:10px; margin-bottom:8px; flex-wrap:wrap;">
+                    <label style="display:flex; align-items:center; gap:4px; font-size:0.85em;"><input type="checkbox" id="alimtalk-enabled" ${cfg.enabled ? 'checked' : ''}> 사용</label>
+                    ${cfg.last_test_status ? `<span style="font-size:0.78em; color:${cfg.last_test_status === 'success' ? 'var(--success)' : '#C62828'};">최근 테스트: ${cfg.last_test_status === 'success' ? '성공' : ('실패 - ' + WithPlus.escapeHtml(cfg.last_test_message || ''))} (${fmtTime(cfg.last_tested_at)})</span>` : ''}
+                </div>
+                <div style="display:flex; flex-direction:column; gap:6px; max-width:420px;">
+                    <input type="text" id="alimtalk-api-key" placeholder="${cfg.has_api_key ? '알리고 API KEY (등록됨 - 변경할 때만 입력)' : '알리고 API KEY'}">
+                    <input type="text" id="alimtalk-user-id" placeholder="알리고 USERID" value="${WithPlus.escapeHtml(cfg.user_id || '')}">
+                    <input type="text" id="alimtalk-sender-key" placeholder="카카오 발신프로필키 (senderkey)" value="${WithPlus.escapeHtml(cfg.sender_key || '')}">
+                    <input type="text" id="alimtalk-sender-phone" placeholder="발신번호 (알리고에 사전등록된 번호)" value="${WithPlus.escapeHtml(cfg.sender_phone || '')}">
+                    <input type="text" id="alimtalk-tpl-code" placeholder="템플릿 코드 (라이브 시작 알림용, 카카오 승인필요)" value="${WithPlus.escapeHtml(cfg.tpl_code_live_start || '')}">
+                </div>
+                <div style="display:flex; gap:8px; margin-top:8px;">
+                    <button type="button" class="btn btn-primary btn-sm" id="alimtalk-save-btn">저장</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="alimtalk-test-btn">📩 내 번호로 테스트 발송</button>
+                </div>
+                <div class="msg" id="alimtalk-msg"></div>
+            `;
+            document.getElementById('alimtalk-save-btn').addEventListener('click', async () => {
+                const msgEl = document.getElementById('alimtalk-msg');
+                const body = {
+                    user_id: document.getElementById('alimtalk-user-id').value.trim(),
+                    sender_key: document.getElementById('alimtalk-sender-key').value.trim(),
+                    sender_phone: document.getElementById('alimtalk-sender-phone').value.trim(),
+                    tpl_code_live_start: document.getElementById('alimtalk-tpl-code').value.trim(),
+                    enabled: document.getElementById('alimtalk-enabled').checked
+                };
+                const apiKeyVal = document.getElementById('alimtalk-api-key').value.trim();
+                if (apiKeyVal) body.api_key = apiKeyVal;
+                const { ok, json } = await authedFetch('/api/admin/live/kakao-alimtalk/config', {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+                });
+                if (!ok) { msgEl.textContent = json.message || '저장 실패'; msgEl.className = 'msg error'; return; }
+                msgEl.textContent = '저장되었습니다'; msgEl.className = 'msg success';
+                alimtalkConfig = json.data;
+                renderAlimtalkArea(true);
+            });
+            document.getElementById('alimtalk-test-btn').addEventListener('click', async () => {
+                const msgEl = document.getElementById('alimtalk-msg');
+                const testBtn = document.getElementById('alimtalk-test-btn');
+                testBtn.disabled = true;
+                msgEl.textContent = '테스트 발송 중입니다...'; msgEl.className = 'msg';
+                const { ok, json } = await authedFetch('/api/admin/live/kakao-alimtalk/test', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({})
+                });
+                testBtn.disabled = false;
+                msgEl.textContent = ok ? '테스트 알림톡을 보냈습니다 - 카카오톡을 확인해주세요 (내 프로필에 연락처가 등록되어 있어야 합니다)' : (json.message || '발송 실패');
+                msgEl.className = ok ? 'msg success' : 'msg error';
+                await loadAlimtalkConfig();
+                renderAlimtalkArea(true);
+            });
+        }
+
+        function fmtTime(iso) {
+            if (!iso) return '-';
+            const d = new Date(iso);
+            return d.toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+        }
+
+        function renderChatLog() {
+            const logEl = document.getElementById('host-chat-log');
+            if (!logEl) return;
+            const moreBtn = chatHasMore ? '<button type="button" id="host-chat-load-more" class="btn btn-secondary" style="width:100%; margin-bottom:8px; font-size:0.78em; padding:6px;">이전 채팅 더 보기</button>' : '';
+            if (chatRows.length === 0) {
+                logEl.innerHTML = moreBtn + '<div class="chat-empty">아직 채팅이 없습니다</div>';
+            } else {
+                logEl.innerHTML = moreBtn + chatRows.map(m => `
+                    <div class="chat-row${m.is_hidden ? ' hidden-msg' : ''}" data-id="${m.id}">
+                        <div><span class="name">${WithPlus.escapeHtml(m.sender_name || '알수없음')}</span>${WithPlus.escapeHtml(m.message)}</div>
+                        <button type="button" class="host-chat-hide-toggle" data-hidden="${m.is_hidden}">${m.is_hidden ? '다시 보이기' : '숨기기'}</button>
+                    </div>`).join('');
+            }
+            const moreEl = document.getElementById('host-chat-load-more');
+            if (moreEl) moreEl.addEventListener('click', async () => { await loadChat(focusSession.id, true); renderChatLog(); });
+            logEl.querySelectorAll('.host-chat-hide-toggle').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const row = btn.closest('.chat-row');
+                    const messageId = row.dataset.id;
+                    const nextHidden = btn.dataset.hidden !== 'true';
+                    btn.disabled = true;
+                    const { ok } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${focusSession.id}/chat/${messageId}`, {
+                        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ is_hidden: nextHidden })
+                    });
+                    if (ok) { await loadChat(focusSession.id, false); renderChatLog(); } else { btn.disabled = false; }
+                });
+            });
+        }
+
+        function render() {
+            if (!focusSession) {
+                // 8초 폴링마다 render()가 이 폼을 통째로 다시 그리면서, 관리자가 입력 중이던 "새 세션 만들기"
+                // 제목과 포커스가 매번 초기화되어 타이핑이 끊기는 문제가 있었다(OmniCast 설정 폼의
+                // renderOmnicastArea/preservedSettingsEl과 같은 문제). 다시 그리기 전에 기존 입력값과
+                // 포커스/커서 상태를 저장해뒀다가, 새로 그린 뒤 그대로 복원한다.
+                const prevTitleEl = document.getElementById('new-session-title');
+                const prevTitleValue = prevTitleEl ? prevTitleEl.value : '';
+                const prevTitleHadFocus = !!(prevTitleEl && document.activeElement === prevTitleEl);
+                const prevTitleSelStart = prevTitleHadFocus ? prevTitleEl.selectionStart : null;
+                const prevTitleSelEnd = prevTitleHadFocus ? prevTitleEl.selectionEnd : null;
+                const prevScheduledEl = document.getElementById('new-session-scheduled-at');
+                const prevScheduledValue = prevScheduledEl ? prevScheduledEl.value : '';
+
+                area.innerHTML = `
+                    <div class="card">
+                        <h2>${WithPlus.escapeHtml(channel.name)} · 진행 중인 세션 없음</h2>
+                        <p style="font-size:0.85em; color:var(--text-gray); margin-bottom:12px;">새 방송 세션을 만들어 시작하세요. 시작 예정 시각을 입력해두면 "📅 방송 예약 알림" 기능이 그 시각 전에 단골들에게 자동으로 알려줍니다(선택 사항 - 비워두면 알림 없이 바로 "방송 시작" 버튼으로만 시작).</p>
+                        <div class="new-session-row">
+                            <input type="text" id="new-session-title" placeholder="방송 제목">
+                            <input type="datetime-local" id="new-session-scheduled-at" title="방송 시작 예정 시각(선택)">
+                            <button type="button" class="btn btn-primary" id="new-session-btn">+ 새 세션 만들기</button>
+                        </div>
+                        <div class="msg" id="new-session-msg"></div>
+                    </div>`;
+
+                const titleEl = document.getElementById('new-session-title');
+                if (titleEl && prevTitleValue) {
+                    titleEl.value = prevTitleValue;
+                    if (prevTitleHadFocus) {
+                        titleEl.focus();
+                        if (prevTitleSelStart !== null) titleEl.setSelectionRange(prevTitleSelStart, prevTitleSelEnd);
+                    }
+                }
+                const scheduledEl = document.getElementById('new-session-scheduled-at');
+                if (scheduledEl && prevScheduledValue) scheduledEl.value = prevScheduledValue;
+
+                document.getElementById('new-session-btn').addEventListener('click', async () => {
+                    const title = document.getElementById('new-session-title').value.trim();
+                    const scheduledAtLocal = document.getElementById('new-session-scheduled-at').value;
+                    const msgEl = document.getElementById('new-session-msg');
+                    if (!title) { msgEl.textContent = '제목을 입력해주세요'; msgEl.className = 'msg error'; return; }
+                    const body = { title };
+                    if (scheduledAtLocal) body.scheduled_at = new Date(scheduledAtLocal).toISOString();
+                    const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+                    });
+                    if (!ok) { msgEl.textContent = json.message || '세션 생성 실패'; msgEl.className = 'msg error'; return; }
+                    await refreshAll();
+                });
+                return;
+            }
+
+            const s = focusSession;
+            const statusBadge = s.status === 'live'
+                ? '<span class="live-badge"><span class="dot"></span>LIVE</span>'
+                : (s.status === 'scheduled' ? '<span class="badge scheduled">방송 예정</span>' : '<span class="badge ended">방송 종료</span>');
+
+            const pinOptions = curatedProducts.map(p => `<option value="${p.product_id}" ${s.pinned_product_id === p.product_id ? 'selected' : ''}>${WithPlus.escapeHtml(p.products_with ? p.products_with.name : p.product_id)}</option>`).join('');
+
+            // 카카오 알림톡 설정 카드는 8초 폴링마다 이 함수가 area.innerHTML을 통째로 다시 그릴 때 같이 날아가는데,
+            // 그 안의 입력값(API키 등)을 입력하던 중이면 타이핑이 끊긴다. 기존 DOM 노드를 미리 떼어뒀다가
+            // 새로 그린 자리에 그대로 다시 끼워넣어 입력 상태/포커스를 보존한다(OmniCast 설정 폼과 동일한 패턴).
+            const preservedAlimtalkEl = document.getElementById('host-alimtalk-area');
+            const preservedCashbackEl = document.getElementById('host-cashback-area');
+            const preservedShareCouponEl = document.getElementById('host-sharecoupon-area');
+            const preservedReminderEl = document.getElementById('host-reminder-area');
+            // OmniCast(동시송출) 영역도 같은 문제가 있었다 - 8초 폴링마다 render()가 "불러오는 중..."
+            // 플레이스홀더로 통째로 갈아치운 뒤에야 renderOmnicastArea()가 다시 채워서, 관리자가 이 영역을
+            // 읽고 있거나(RTMP 주소/키 등) 입력하던 중이면 화면이 매 8초마다 순간적으로 비었다가 다시 채워지는
+            // 것처럼 보여 읽기/입력이 끊겼다. 다른 4개 영역과 동일한 패턴으로 기존 DOM을 보존한다.
+            const preservedOmnicastEl = document.getElementById('host-omnicast-area');
+
+            area.innerHTML = `
+                <div class="card">
+                    <h2>
+                        <span class="title-left">${statusBadge} <span>${WithPlus.escapeHtml(s.title)}</span></span>
+                        <span>
+                            ${s.status === 'scheduled' ? '<button type="button" class="btn btn-primary" id="host-start-btn">▶ 방송 시작</button>' : ''}
+                            ${s.status === 'live' ? '<button type="button" class="btn btn-danger" id="host-end-btn">■ 방송 종료</button>' : ''}
+                        </span>
+                    </h2>
+                    <div class="session-meta">
+                        ${WithPlus.escapeHtml(channel.name)} (${WithPlus.escapeHtml(channel.slug)})
+                        ${s.status === 'scheduled' && s.scheduled_at ? ' · 시작 예정: ' + fmtTime(s.scheduled_at) + (s.reminder_sent_at ? ' (알림 발송됨)' : '') : ''}
+                        ${s.started_at ? ' · 시작: ' + fmtTime(s.started_at) : ''}
+                        ${s.ended_at ? ' · 종료: ' + fmtTime(s.ended_at) : ''}
+                        ${channel.status === 'active' ? ` · <a href="/live/${WithPlus.escapeHtml(channel.slug)}" target="_blank" style="color:var(--primary-color);">시청 화면 열기 →</a>` : ''}
+                    </div>
+
+                    ${s.status !== 'ended' ? `
+                    <div class="pin-row">
+                        <label>📌 지금 고정할 상품</label>
+                        <select id="host-pin-select">
+                            <option value="">(고정 안 함)</option>
+                            ${pinOptions}
+                        </select>
+                        <span class="msg" id="host-pin-msg"></span>
+                    </div>` : ''}
+                </div>
+
+                <div class="card">
+                    <h2>📦 세션 재고 현황</h2>
+                    <div id="host-inventory-area"><span style="font-size:0.85em; color:var(--text-gray);">불러오는 중...</span></div>
+                </div>
+
+                <div class="card">
+                    <h2>🎟️ 라이브 전용 쿠폰</h2>
+                    <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:10px;">지금 이 방송이 진행 중(LIVE)일 때만 사용할 수 있는 한정 쿠폰을 발급합니다. 방송이 끝나면 자동으로 사용할 수 없게 됩니다.</p>
+                    <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+                        <div class="field" style="width:100px;"><label>할인율(%)</label><input type="number" id="host-coupon-percent" value="10" min="1" max="90" style="width:100%;"></div>
+                        <div class="field" style="width:120px;"><label>사용 횟수 제한(선택)</label><input type="number" id="host-coupon-limit" placeholder="제한 없음" min="1" style="width:100%;"></div>
+                        <button type="button" class="btn btn-primary" id="host-coupon-issue-btn">쿠폰 발급</button>
+                    </div>
+                    <div id="host-coupon-result" style="margin-top:8px; font-size:0.9em;"></div>
+                </div>
+
+                ${s.status !== 'ended' ? `
+                <div class="card">
+                    <h2>⚡ 타임세일 / 카운트다운</h2>
+                    <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:10px;">이 방송에서 판매 중인 상품을 정해진 시간 동안 할인가로 판매합니다. 타이머가 끝나면 자동으로 원래 가격으로 돌아가고, 결제 시점에도 서버가 만료 여부를 다시 확인합니다.</p>
+                    <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+                        <div class="field" style="min-width:160px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">대상 상품</label>
+                            <select id="fs-product-select" style="width:100%;">${pinOptions || '<option value="">(고정 상품이 없습니다)</option>'}</select>
+                        </div>
+                        <div class="field" style="width:110px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">할인율(%)</label><input type="number" id="fs-percent" value="20" min="1" max="90" style="width:100%;"></div>
+                        <div class="field" style="width:110px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">진행시간(분)</label><input type="number" id="fs-minutes" value="10" min="1" max="180" style="width:100%;"></div>
+                        <button type="button" class="btn btn-primary" id="fs-start-btn">⚡ 타임세일 시작</button>
+                    </div>
+                    <div class="msg" id="fs-start-msg"></div>
+                    <div id="fs-list-area" style="margin-top:14px;"></div>
+                </div>` : ''}
+
+                ${s.status !== 'ended' ? `
+                <div class="card">
+                    <h2>🧠 실시간 퀴즈</h2>
+                    <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:10px;">채팅으로 정답을 맞춘 시청자 중 정해진 인원(선착순)에게 자동으로 라이브 전용 쿠폰을 발급합니다. 정원이 차면 퀴즈가 자동으로 종료됩니다.</p>
+                    <div style="display:flex; flex-direction:column; gap:8px;">
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <div class="field" style="flex:2; min-width:180px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">문제</label><input type="text" id="quiz-question" placeholder="예: 오늘 방송 상품의 원산지는? (한국)" style="width:100%;"></div>
+                            <div class="field" style="flex:1; min-width:120px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">정답</label><input type="text" id="quiz-answer" placeholder="예: 한국" style="width:100%;"></div>
+                        </div>
+                        <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+                            <div class="field" style="width:110px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">정답자 인원</label><input type="number" id="quiz-limit" value="3" min="1" max="50" style="width:100%;"></div>
+                            <div class="field" style="width:110px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">보상 할인율(%)</label><input type="number" id="quiz-percent" value="10" min="1" max="90" style="width:100%;"></div>
+                            <button type="button" class="btn btn-primary" id="quiz-start-btn">🧠 퀴즈 시작</button>
+                        </div>
+                    </div>
+                    <div class="msg" id="quiz-start-msg"></div>
+                    <div id="quiz-list-area" style="margin-top:14px;"></div>
+                </div>` : ''}
+
+                ${s.status !== 'ended' ? `
+                <div class="card">
+                    <h2>🔨 실시간 경매</h2>
+                    <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:10px;">정해진 시간 동안 시청자들이 실시간으로 입찰하고, 마감 직전 입찰이 들어오면 마감시각이 자동 연장됩니다(스나이핑 방지). 낙찰자에게는 낙찰가 그대로 결제할 수 있는 전용 쿠폰이 24시간 유효로 자동 발급됩니다.</p>
+                    <div style="display:flex; flex-direction:column; gap:8px;">
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <div class="field" style="flex:1; min-width:160px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">경매 상품명</label><input type="text" id="auction-title" placeholder="예: 시그니처 한정판 세트" style="width:100%;"></div>
+                            <div class="field" style="min-width:160px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">연동 상품(선택, 원가 기준으로 낙찰쿠폰 계산)</label>
+                                <select id="auction-product-select" style="width:100%;"><option value="">(연동 안 함)</option>${pinOptions}</select>
+                            </div>
+                        </div>
+                        <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+                            <div class="field" style="width:120px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">시작가(원)</label><input type="number" id="auction-starting-price" value="10000" min="0" step="1000" style="width:100%;"></div>
+                            <div class="field" style="width:120px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">입찰 단위(원)</label><input type="number" id="auction-bid-increment" value="1000" min="100" step="100" style="width:100%;"></div>
+                            <div class="field" style="width:110px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">진행시간(초)</label><input type="number" id="auction-duration" value="60" min="10" max="3600" style="width:100%;"></div>
+                            <div class="field" style="width:110px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">연장기준(초)</label><input type="number" id="auction-soft-close" value="10" min="0" max="60" style="width:100%;"></div>
+                            <button type="button" class="btn btn-primary" id="auction-start-btn">🔨 경매 시작</button>
+                        </div>
+                    </div>
+                    <div class="msg" id="auction-start-msg"></div>
+                    <div id="auction-list-area" style="margin-top:14px;"></div>
+                </div>` : ''}
+
+                ${s.status !== 'ended' ? `
+                <div class="card">
+                    <h2>🎟️ 선착순 다운로드 쿠폰함</h2>
+                    <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:10px;">정해둔 수량만 "쿠폰함"에서 먼저 받은 시청자만 사용할 수 있는 한정 특가 쿠폰입니다. 방송이 끝나면 자동으로 사용 불가 처리됩니다.</p>
+                    <div style="display:flex; flex-direction:column; gap:8px;">
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <div class="field" style="flex:1; min-width:160px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">쿠폰명</label><input type="text" id="cd-label" placeholder="예: 방송 특가 5천원 할인" style="width:100%;"></div>
+                            <div class="field" style="width:120px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">할인 방식</label>
+                                <select id="cd-discount-type" style="width:100%;"><option value="fixed">정액(원)</option><option value="percent">정률(%)</option></select>
+                            </div>
+                            <div class="field" style="width:110px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">할인값</label><input type="number" id="cd-discount-value" value="5000" min="1" style="width:100%;"></div>
+                        </div>
+                        <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+                            <div class="field" style="width:110px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">발급 수량</label><input type="number" id="cd-claim-limit" value="50" min="1" style="width:100%;"></div>
+                            <div class="field" style="width:130px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">최소주문금액(원)</label><input type="number" id="cd-min-order" value="0" min="0" step="1000" style="width:100%;"></div>
+                            <div class="field" style="width:110px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">유효시간(분, 선택)</label><input type="number" id="cd-valid-minutes" placeholder="계속 유효" min="1" style="width:100%;"></div>
+                            <button type="button" class="btn btn-primary" id="cd-start-btn">🎟️ 쿠폰 발급</button>
+                        </div>
+                    </div>
+                    <div class="msg" id="cd-start-msg"></div>
+                    <div id="cd-list-area" style="margin-top:14px;"></div>
+                </div>` : ''}
+
+                <div class="card">
+                    <h2>🎁 선물/후원 현황</h2>
+                    <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:10px;">시청자가 채팅창에서 마일리지로 보낸 실시간 선물의 누적 현황입니다. 받은 마일리지는 채널 소유자 계정에 즉시 적립됩니다.</p>
+                    <div id="gift-summary-area">불러오는 중...</div>
+                </div>
+
+                ${s.status !== 'ended' ? `
+                <div class="card">
+                    <h2>🎤 게스트 초대 (라이트 멀티호스트)</h2>
+                    <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:10px;">실시간 다자간 영상 송출 대신, 초대코드로 게스트를 연결해 채팅에 "게스트" 배지를 붙이고 게스트 전용 추천상품을 함께 노출합니다. 영상 자체는 방송자가 별도로 화면 공유/합성해서 송출해주세요.</p>
+                    <div style="display:flex; gap:8px; align-items:flex-end; flex-wrap:wrap;">
+                        <div class="field" style="min-width:140px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">게스트 이름</label><input type="text" id="guest-name" placeholder="예: 김게스트" style="width:100%;"></div>
+                        <div class="field" style="min-width:160px;"><label style="display:block; font-size:0.78em; color:var(--text-gray); margin-bottom:4px;">게스트 추천상품(선택)</label>
+                            <select id="guest-pin-select" style="width:100%;"><option value="">(고정 안 함)</option>${pinOptions}</select>
+                        </div>
+                        <button type="button" class="btn btn-primary" id="guest-invite-btn">🎤 초대코드 발급</button>
+                    </div>
+                    <div class="msg" id="guest-invite-msg"></div>
+                    <div id="guest-list-area" style="margin-top:14px;"></div>
+                </div>` : ''}
+
+                <div class="card">
+                    <h2>💬 채팅 ${s.status !== 'scheduled' ? '' : '<span style="font-size:0.78em; color:var(--text-gray); font-weight:400;">(방송 시작 전에는 채팅을 보낼 수 없습니다)</span>'}</h2>
+                    <div class="chat-log" id="host-chat-log">불러오는 중...</div>
+                </div>
+
+                ${s.status !== 'ended' ? `
+                <div class="card">
+                    <h2>📹 브라우저로 방송 (웹캠)</h2>
+                    <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:10px;">OBS 같은 별도 프로그램 없이 이 브라우저의 카메라/마이크로 바로 시청자에게 방송을 송출합니다. 상품을 들고 직접 소개하는 화면을 그대로 보여줄 수 있습니다.</p>
+                    ${webrtcConfigured === false ? `
+                    <p style="font-size:0.82em; color:#C62828;">⚠️ 아직 연동되지 않았습니다. LiveKit Cloud(무료 플랜 있음)에 가입한 뒤 서버 환경변수에 LIVEKIT_URL / LIVEKIT_API_KEY / LIVEKIT_API_SECRET을 등록해주세요.</p>
+                    ` : `
+                    <div class="webrtc-preview-box" id="webrtc-preview-box">
+                        <video id="webrtc-local-preview" autoplay playsinline muted></video>
+                        ${webrtcBroadcasting ? '<span class="webrtc-live-flag">🔴 방송 중</span>' : ''}
+                    </div>
+                    <div style="display:flex; gap:8px;">
+                        <button type="button" class="btn btn-primary" id="webrtc-start-btn" ${webrtcBroadcasting ? 'disabled' : ''}>📹 브라우저로 방송 시작</button>
+                        <button type="button" class="btn btn-danger" id="webrtc-stop-btn" ${webrtcBroadcasting ? '' : 'disabled'}>⏹ 중지</button>
+                    </div>
+                    <div class="msg" id="webrtc-msg"></div>
+                    `}
+                </div>` : ''}
+
+                <div class="card">
+                    <h2>📡 OmniCast 동시송출</h2>
+                    <div id="host-fb-picker-area"></div>
+                    <div id="host-omnicast-area">불러오는 중...</div>
+                </div>
+
+                <div class="card">
+                    <h2>📩 카카오 알림톡 (라이브 시작 알림)</h2>
+                    <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:10px;">단골 맺은 회원 중 연락처를 등록하고 마케팅 수신에 동의한 분들에게, 이 채널이 "방송 시작"을 누르는 순간 카카오 알림톡이 자동 발송됩니다. 모든 채널에 공통으로 적용되는 설정입니다(카카오 비즈니스 채널 + 알리고 계정 필요).</p>
+                    <div id="host-alimtalk-area">불러오는 중...</div>
+                </div>
+
+                <div class="card">
+                    <h2>🎁 라이브 전용 구매 캐시백</h2>
+                    <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:10px;">방송 중 상품을 담아 결제한 주문에 한해, 일반 마일리지와 별도로 추가 적립금을 더 지급합니다(네이버쇼핑라이브 "라이브적립금"과 같은 개념). 시청자 화면에도 "지금 구매 시 N% 추가 적립" 배지로 노출되어 즉시 구매를 유도합니다. 모든 채널 공통 설정입니다.</p>
+                    <div id="host-cashback-area">불러오는 중...</div>
+                </div>
+
+                <div class="card">
+                    <h2>🎁 바이럴 공유쿠폰 (소문내면 할인)</h2>
+                    <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:10px;">시청자가 로그인 후 시청 화면의 "공유하고 둘 다 할인" 버튼으로 자신만의 링크를 만들어 친구에게 보내고, 그 친구가 이 링크로 들어와 같은 방송에서 실제로 구매를 완료하면 공유한 사람과 구매한 사람 모두에게 할인쿠폰이 지급됩니다(카카오톡딜 "소문내면 할인"과 같은 개념). 할인율을 0%로 두면 시청자 화면에 버튼 자체가 보이지 않습니다. 모든 채널 공통 설정입니다.</p>
+                    <div id="host-sharecoupon-area">불러오는 중...</div>
+                </div>
+
+                <div class="card">
+                    <h2>📅 방송 예약 알림</h2>
+                    <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:10px;">"방송 예정"으로 등록해둔 세션이 시작 시각에 가까워지면(설정한 분 전), 그 채널 단골 전원에게 자동으로 인앱 알림 + 카카오 알림톡(설정 시)을 보냅니다(네이버쇼핑라이브 "방송 예정" 알림과 같은 개념). 모든 채널 공통 설정입니다.</p>
+                    <div id="host-reminder-area">불러오는 중...</div>
+                </div>
+
+                ${sessions.length > 1 ? `
+                <div class="card">
+                    <h2>지난 세션</h2>
+                    ${sessions.filter(x => x.id !== s.id).map(x => `
+                        <div class="sched-row">
+                            <span>${x.status === 'live' ? '🔴' : (x.status === 'scheduled' ? '🕓' : '⏹')} ${WithPlus.escapeHtml(x.title)} <span style="color:var(--text-gray);">(${x.status === 'live' ? '방송 중' : (x.status === 'scheduled' ? '예정' : '종료')})</span></span>
+                            <button type="button" class="btn btn-secondary btn-sm host-switch-focus" data-id="${x.id}">보기</button>
+                        </div>`).join('')}
+                </div>` : ''}
+            `;
+
+            if (preservedAlimtalkEl && preservedAlimtalkEl.dataset.rendered === '1') {
+                document.getElementById('host-alimtalk-area').replaceWith(preservedAlimtalkEl);
+            }
+            if (preservedCashbackEl && preservedCashbackEl.dataset.rendered === '1') {
+                document.getElementById('host-cashback-area').replaceWith(preservedCashbackEl);
+            }
+            if (preservedShareCouponEl && preservedShareCouponEl.dataset.rendered === '1') {
+                document.getElementById('host-sharecoupon-area').replaceWith(preservedShareCouponEl);
+            }
+            if (preservedReminderEl && preservedReminderEl.dataset.rendered === '1') {
+                document.getElementById('host-reminder-area').replaceWith(preservedReminderEl);
+            }
+            if (preservedOmnicastEl && preservedOmnicastEl.dataset.rendered === '1') {
+                document.getElementById('host-omnicast-area').replaceWith(preservedOmnicastEl);
+            }
+
+            const startBtn = document.getElementById('host-start-btn');
+            if (startBtn) startBtn.addEventListener('click', async () => {
+                startBtn.disabled = true;
+                const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${s.id}`, {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'live' })
+                });
+                if (!ok) { alert(json.message || '방송 시작 실패'); startBtn.disabled = false; return; }
+                await refreshAll();
+            });
+            const endBtn = document.getElementById('host-end-btn');
+            if (endBtn) endBtn.addEventListener('click', async () => {
+                endBtn.disabled = true;
+                if (webrtcBroadcasting) await stopWebrtcBroadcast(); // 방송 종료 시 브라우저 송출도 함께 정리
+                const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${s.id}`, {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'ended' })
+                });
+                if (!ok) { alert(json.message || '방송 종료 실패'); endBtn.disabled = false; return; }
+                await refreshAll();
+            });
+            const couponIssueBtn = document.getElementById('host-coupon-issue-btn');
+            if (couponIssueBtn) couponIssueBtn.addEventListener('click', async () => {
+                const resultArea = document.getElementById('host-coupon-result');
+                const percent = parseInt(document.getElementById('host-coupon-percent').value, 10) || 10;
+                const limitVal = document.getElementById('host-coupon-limit').value.trim();
+                couponIssueBtn.disabled = true;
+                const code = 'LIVE' + s.id.slice(0, 4).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+                const { ok, json } = await authedFetch('/api/admin/coupons', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        code, label: `${s.title || '라이브'} 방송 전용 ${percent}% 할인`,
+                        discount_type: 'percent', discount_value: percent,
+                        usage_limit: limitVal ? parseInt(limitVal, 10) : null,
+                        per_user_limit: 1, live_session_id: s.id
+                    })
+                });
+                couponIssueBtn.disabled = false;
+                if (!ok) { resultArea.innerHTML = `<span style="color:var(--danger-color, #C62828);">${WithPlus.escapeHtml(json.message || '발급 실패')}</span>`; return; }
+                resultArea.innerHTML = `✅ 발급 완료! 채팅으로 안내해주세요 → 쿠폰코드 <strong>${WithPlus.escapeHtml(code)}</strong> (${percent}% 할인, 방송 중에만 사용 가능)`;
+            });
+            const fsStartBtn = document.getElementById('fs-start-btn');
+            if (fsStartBtn) fsStartBtn.addEventListener('click', async () => {
+                const msgEl = document.getElementById('fs-start-msg');
+                const productId = document.getElementById('fs-product-select').value;
+                const percent = parseInt(document.getElementById('fs-percent').value, 10);
+                const minutes = parseInt(document.getElementById('fs-minutes').value, 10);
+                if (!productId) { msgEl.textContent = '대상 상품을 먼저 선택해주세요 (상품 고정 목록에서 고를 수 있습니다)'; msgEl.className = 'msg error'; return; }
+                if (!percent || percent < 1 || percent > 90) { msgEl.textContent = '할인율은 1~90 사이로 입력해주세요'; msgEl.className = 'msg error'; return; }
+                fsStartBtn.disabled = true;
+                const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${s.id}/flash-sales`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ product_id: productId, discount_percent: percent, duration_minutes: minutes || 10 })
+                });
+                fsStartBtn.disabled = false;
+                if (!ok) { msgEl.textContent = json.message || '타임세일 시작 실패'; msgEl.className = 'msg error'; return; }
+                msgEl.textContent = '타임세일이 시작되었습니다!'; msgEl.className = 'msg success';
+                await loadFlashSales(s.id);
+                renderFlashSaleArea();
+            });
+            const quizStartBtn = document.getElementById('quiz-start-btn');
+            if (quizStartBtn) quizStartBtn.addEventListener('click', async () => {
+                const msgEl = document.getElementById('quiz-start-msg');
+                const question = document.getElementById('quiz-question').value.trim();
+                const answer = document.getElementById('quiz-answer').value.trim();
+                const limit = parseInt(document.getElementById('quiz-limit').value, 10) || 3;
+                const percent = parseInt(document.getElementById('quiz-percent').value, 10) || 10;
+                if (!question || !answer) { msgEl.textContent = '문제와 정답을 모두 입력해주세요'; msgEl.className = 'msg error'; return; }
+                quizStartBtn.disabled = true;
+                const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${s.id}/quizzes`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question, correct_answer: answer, winner_limit: limit, reward_discount_type: 'percent', reward_discount_value: percent })
+                });
+                quizStartBtn.disabled = false;
+                if (!ok) { msgEl.textContent = json.message || '퀴즈 시작 실패'; msgEl.className = 'msg error'; return; }
+                msgEl.textContent = '퀴즈가 시작되었습니다! 채팅으로 문제를 안내해주세요.'; msgEl.className = 'msg success';
+                document.getElementById('quiz-question').value = '';
+                document.getElementById('quiz-answer').value = '';
+                await loadQuizzes(s.id);
+                renderQuizArea();
+            });
+            const auctionStartBtn = document.getElementById('auction-start-btn');
+            if (auctionStartBtn) auctionStartBtn.addEventListener('click', async () => {
+                const msgEl = document.getElementById('auction-start-msg');
+                const title = document.getElementById('auction-title').value.trim();
+                const productId = document.getElementById('auction-product-select').value;
+                const startingPrice = Number(document.getElementById('auction-starting-price').value);
+                const bidIncrement = Number(document.getElementById('auction-bid-increment').value);
+                const duration = Number(document.getElementById('auction-duration').value);
+                const softClose = Number(document.getElementById('auction-soft-close').value);
+                if (!title) { msgEl.textContent = '경매 상품명을 입력해주세요'; msgEl.className = 'msg error'; return; }
+                if (!Number.isFinite(startingPrice) || startingPrice < 0) { msgEl.textContent = '시작가를 확인해주세요'; msgEl.className = 'msg error'; return; }
+                auctionStartBtn.disabled = true;
+                const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${s.id}/auctions`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title, product_id: productId || null, starting_price: startingPrice, bid_increment: bidIncrement, duration_seconds: duration, soft_close_seconds: softClose })
+                });
+                auctionStartBtn.disabled = false;
+                if (!ok) { msgEl.textContent = json.message || '경매 시작 실패'; msgEl.className = 'msg error'; return; }
+                msgEl.textContent = '경매가 시작되었습니다!'; msgEl.className = 'msg success';
+                document.getElementById('auction-title').value = '';
+                await loadAuctions(s.id);
+                renderAuctionArea();
+            });
+            const cdStartBtn = document.getElementById('cd-start-btn');
+            if (cdStartBtn) cdStartBtn.addEventListener('click', async () => {
+                const msgEl = document.getElementById('cd-start-msg');
+                const label = document.getElementById('cd-label').value.trim();
+                const discountType = document.getElementById('cd-discount-type').value;
+                const discountValue = Number(document.getElementById('cd-discount-value').value);
+                const claimLimit = Number(document.getElementById('cd-claim-limit').value);
+                const minOrder = Number(document.getElementById('cd-min-order').value);
+                const validMinutesRaw = document.getElementById('cd-valid-minutes').value;
+                if (!label) { msgEl.textContent = '쿠폰명을 입력해주세요'; msgEl.className = 'msg error'; return; }
+                if (!Number.isFinite(discountValue) || discountValue <= 0) { msgEl.textContent = '할인값을 확인해주세요'; msgEl.className = 'msg error'; return; }
+                if (!Number.isFinite(claimLimit) || claimLimit <= 0) { msgEl.textContent = '발급 수량을 확인해주세요'; msgEl.className = 'msg error'; return; }
+                cdStartBtn.disabled = true;
+                const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${s.id}/coupon-drops`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ label, discount_type: discountType, discount_value: discountValue, claim_limit: claimLimit, min_order_amount: minOrder || 0, valid_minutes: validMinutesRaw ? Number(validMinutesRaw) : null })
+                });
+                cdStartBtn.disabled = false;
+                if (!ok) { msgEl.textContent = json.message || '쿠폰 발급 실패'; msgEl.className = 'msg error'; return; }
+                msgEl.textContent = '선착순 쿠폰이 발급되었습니다!'; msgEl.className = 'msg success';
+                document.getElementById('cd-label').value = '';
+                await loadCouponDrops(s.id);
+                renderCouponDropArea();
+            });
+            const guestInviteBtn = document.getElementById('guest-invite-btn');
+            if (guestInviteBtn) guestInviteBtn.addEventListener('click', async () => {
+                const msgEl = document.getElementById('guest-invite-msg');
+                const guestName = document.getElementById('guest-name').value.trim();
+                const pinnedProductId = document.getElementById('guest-pin-select').value;
+                if (!guestName) { msgEl.textContent = '게스트 이름을 입력해주세요'; msgEl.className = 'msg error'; return; }
+                guestInviteBtn.disabled = true;
+                const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${s.id}/guests`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ guest_name: guestName, pinned_product_id: pinnedProductId || null })
+                });
+                guestInviteBtn.disabled = false;
+                if (!ok) { msgEl.textContent = json.message || '초대코드 발급 실패'; msgEl.className = 'msg error'; return; }
+                msgEl.textContent = `초대코드 발급 완료: ${json.data.invite_code} (게스트에게 이 코드를 전달해주세요)`; msgEl.className = 'msg success';
+                document.getElementById('guest-name').value = '';
+                await loadGuests(s.id);
+                renderGuestArea();
+            });
+            const pinSelect = document.getElementById('host-pin-select');
+            if (pinSelect) pinSelect.addEventListener('change', async () => {
+                const pinMsg = document.getElementById('host-pin-msg');
+                pinSelect.disabled = true;
+                const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${s.id}`, {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinned_product_id: pinSelect.value || null })
+                });
+                pinSelect.disabled = false;
+                if (!ok) { pinMsg.textContent = json.message || '변경 실패'; pinMsg.className = 'msg error'; return; }
+                pinMsg.textContent = '고정 상품이 변경되었습니다'; pinMsg.className = 'msg success';
+                s.pinned_product_id = pinSelect.value || null;
+                setTimeout(() => { if (pinMsg) pinMsg.textContent = ''; }, 2500);
+            });
+            area.querySelectorAll('.host-switch-focus').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    focusSession = sessions.find(x => x.id === btn.dataset.id) || focusSession;
+                    chatRows = []; chatHasMore = false;
+                    render();
+                    await loadFocusDetails();
+                });
+            });
+
+            renderChatLog();
+            renderFlashSaleArea();
+            renderQuizArea();
+            renderAuctionArea();
+            renderCouponDropArea();
+            renderGiftSummary();
+            renderGuestArea();
+            renderFacebookPagePicker(); // render()가 innerHTML을 통째로 다시 그리므로 매번 재부착 필요
+            attachWebrtcHandlers();
+            reattachWebrtcPreview(); // 이미 발행 중이던 로컬 트랙이 있으면 새로 그려진 <video>에 다시 붙인다
+            renderAlimtalkArea(); // forceRefresh 없이 호출 - 이미 그려진 입력폼이 있으면 그대로 두고, 처음이면 새로 그린다
+            renderCashbackArea();
+            renderShareCouponArea();
+            renderReminderArea();
+        }
+
+        function attachWebrtcHandlers() {
+            const startBtn = document.getElementById('webrtc-start-btn');
+            const stopBtn = document.getElementById('webrtc-stop-btn');
+            if (startBtn) startBtn.addEventListener('click', async () => {
+                const msgEl = document.getElementById('webrtc-msg');
+                startBtn.disabled = true;
+                if (msgEl) { msgEl.textContent = '카메라/마이크 권한을 요청하는 중입니다...'; msgEl.className = 'msg'; }
+                try {
+                    const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${focusSession.id}/webrtc/start`, { method: 'POST' });
+                    if (!ok) throw new Error(json.message || '방송 시작에 실패했습니다');
+                    const room = new LivekitClient.Room();
+                    await room.connect(json.data.livekit_url, json.data.token);
+                    const tracks = await LivekitClient.createLocalTracks({ audio: true, video: true });
+                    for (const track of tracks) {
+                        await room.localParticipant.publishTrack(track);
+                        if (track.kind === 'video') webrtcLocalTrack = track;
+                    }
+                    webrtcRoom = room;
+                    webrtcBroadcasting = true;
+                    reattachWebrtcPreview();
+                    if (stopBtn) stopBtn.disabled = false;
+                    if (msgEl) { msgEl.textContent = '✅ 방송 송출 중입니다 - 시청자 화면에 실시간으로 보입니다'; msgEl.className = 'msg success'; }
+                    const box = document.getElementById('webrtc-preview-box');
+                    if (box && !box.querySelector('.webrtc-live-flag')) box.insertAdjacentHTML('beforeend', '<span class="webrtc-live-flag">🔴 방송 중</span>');
+                } catch (err) {
+                    webrtcBroadcasting = false;
+                    startBtn.disabled = false;
+                    if (msgEl) { msgEl.textContent = '방송 시작 중 오류가 발생했습니다: ' + err.message; msgEl.className = 'msg error'; }
+                }
+            });
+            if (stopBtn) stopBtn.addEventListener('click', async () => {
+                stopBtn.disabled = true;
+                await stopWebrtcBroadcast();
+            });
+        }
+
+        async function stopWebrtcBroadcast() {
+            try { if (webrtcRoom) await webrtcRoom.disconnect(); } catch (e) { /* 이미 끊어졌어도 무시 */ }
+            webrtcRoom = null;
+            webrtcLocalTrack = null;
+            webrtcBroadcasting = false;
+            try {
+                if (focusSession) await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${focusSession.id}/webrtc/stop`, { method: 'POST' });
+            } catch (e) { /* 세션이 이미 종료되었을 수도 있음 - 무시 */ }
+            const startBtn = document.getElementById('webrtc-start-btn');
+            const stopBtn = document.getElementById('webrtc-stop-btn');
+            const msgEl = document.getElementById('webrtc-msg');
+            if (startBtn) startBtn.disabled = false;
+            if (stopBtn) stopBtn.disabled = true;
+            if (msgEl) { msgEl.textContent = '방송을 중지했습니다'; msgEl.className = 'msg'; }
+            const flag = document.querySelector('#webrtc-preview-box .webrtc-live-flag');
+            if (flag) flag.remove();
+            const videoEl = document.getElementById('webrtc-local-preview');
+            if (videoEl) videoEl.srcObject = null;
+        }
+
+        // render()가 8초 폴링마다 <video id="webrtc-local-preview">를 새로 만들기 때문에, 실제 연결(webrtcRoom)과
+        // 로컬 트랙(webrtcLocalTrack)은 그대로 유지한 채 화면에 다시 붙이기(attach)만 해준다 - 재연결이 아니므로
+        // 방송이 끊기지 않는다.
+        function reattachWebrtcPreview() {
+            if (!webrtcBroadcasting || !webrtcLocalTrack) return;
+            const videoEl = document.getElementById('webrtc-local-preview');
+            if (videoEl) webrtcLocalTrack.attach(videoEl);
+        }
+
+        function renderGuestArea() {
+            const listArea = document.getElementById('guest-list-area');
+            if (!listArea || !focusSession) return;
+            if (guests.length === 0) {
+                listArea.innerHTML = '<p style="font-size:0.82em; color:var(--text-gray);">아직 발급한 게스트 초대코드가 없습니다.</p>';
+                return;
+            }
+            const statusLabel = { pending: '🕓 대기중(미사용)', active: '🟢 연결됨', ended: '⏹ 종료됨' };
+            listArea.innerHTML = guests.map(g => `
+                <div class="sched-row" data-id="${g.id}">
+                    <span>${statusLabel[g.status] || g.status} <strong>${WithPlus.escapeHtml(g.guest_name)}</strong>
+                        ${g.status === 'pending' ? ` · 초대코드 <code>${WithPlus.escapeHtml(g.invite_code)}</code>` : ''}
+                        ${g.pinned_product_name ? ` · 추천상품: ${WithPlus.escapeHtml(g.pinned_product_name)}` : ''}
+                    </span>
+                    ${g.status !== 'ended' ? `<button type="button" class="btn btn-danger btn-sm guest-end-btn" data-id="${g.id}">퇴장 처리</button>` : ''}
+                </div>`).join('');
+            listArea.querySelectorAll('.guest-end-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    btn.disabled = true;
+                    await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${focusSession.id}/guests/${btn.dataset.id}/end`, { method: 'PATCH' });
+                    await loadGuests(focusSession.id);
+                    renderGuestArea();
+                });
+            });
+        }
+
+        function renderQuizArea() {
+            const listArea = document.getElementById('quiz-list-area');
+            if (!listArea || !focusSession) return;
+            if (quizzes.length === 0) {
+                listArea.innerHTML = '<p style="font-size:0.82em; color:var(--text-gray);">아직 진행한 퀴즈가 없습니다.</p>';
+                return;
+            }
+            listArea.innerHTML = quizzes.map(q => `
+                <div class="sched-row" data-id="${q.id}">
+                    <span>${q.status === 'open' ? '🟢' : '⏹'} ${WithPlus.escapeHtml(q.question)} <span style="color:var(--text-gray);">(정답: ${WithPlus.escapeHtml(q.correct_answer)} · 당첨 ${q.winner_count}/${q.winner_limit}명 · ${q.status === 'open' ? '진행중' : '종료'})</span></span>
+                    ${q.status === 'open' ? `<button type="button" class="btn btn-danger btn-sm quiz-close-btn" data-id="${q.id}">종료</button>` : ''}
+                </div>`).join('');
+            listArea.querySelectorAll('.quiz-close-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    btn.disabled = true;
+                    await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${focusSession.id}/quizzes/${btn.dataset.id}/close`, { method: 'PATCH' });
+                    await loadQuizzes(focusSession.id);
+                    renderQuizArea();
+                });
+            });
+        }
+
+        function auctionStatusLabel(a) {
+            if (a.status === 'open' || a.status === 'finalizing') return '🟢 진행중';
+            if (a.status === 'cancelled') return '⏹ 취소됨';
+            return a.winner_id ? '🏆 낙찰완료' : '유찰(입찰자 없음)';
+        }
+
+        function renderAuctionArea() {
+            const listArea = document.getElementById('auction-list-area');
+            if (!listArea || !focusSession) return;
+            if (auctions.length === 0) {
+                listArea.innerHTML = '<p style="font-size:0.82em; color:var(--text-gray);">아직 진행한 경매가 없습니다.</p>';
+                return;
+            }
+            listArea.innerHTML = auctions.map(a => `
+                <div class="sched-row" data-id="${a.id}">
+                    <span>${auctionStatusLabel(a)} ${WithPlus.escapeHtml(a.title)} <span style="color:var(--text-gray);">(현재가 ${Number(a.current_price).toLocaleString('ko-KR')}원 · 입찰 ${a.bid_count}건${(a.status === 'open' || a.status === 'finalizing') ? ' · 마감 ' + fmtTime(a.ends_at) : ''})</span></span>
+                    ${(a.status === 'open' || a.status === 'finalizing') ? `<button type="button" class="btn btn-danger btn-sm auction-cancel-btn" data-id="${a.id}">취소</button>` : ''}
+                </div>`).join('');
+            listArea.querySelectorAll('.auction-cancel-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    if (!confirm('진행 중인 경매를 취소할까요? 지금까지의 입찰은 모두 무효가 됩니다.')) return;
+                    btn.disabled = true;
+                    await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${focusSession.id}/auctions/${btn.dataset.id}/cancel`, { method: 'PATCH' });
+                    await loadAuctions(focusSession.id);
+                    renderAuctionArea();
+                });
+            });
+        }
+
+        function renderFlashSaleArea() {
+            const listArea = document.getElementById('fs-list-area');
+            if (!listArea || !focusSession) return;
+            const now = Date.now();
+            const active = flashSales.filter(f => !f.cancelled_at && new Date(f.ends_at).getTime() > now);
+            const past = flashSales.filter(f => f.cancelled_at || new Date(f.ends_at).getTime() <= now);
+            function row(f, isActive) {
+                const name = f.products_with ? f.products_with.name : f.product_id;
+                const remainMs = new Date(f.ends_at).getTime() - now;
+                const remainTxt = isActive ? `종료까지 ${Math.max(0, Math.floor(remainMs / 60000))}분 ${Math.max(0, Math.floor((remainMs % 60000) / 1000))}초` : (f.cancelled_at ? '취소됨' : '종료됨');
+                return `
+                    <div class="sched-row" data-id="${f.id}">
+                        <span>${isActive ? '⚡' : '⏹'} ${WithPlus.escapeHtml(name)} — <strong>${Number(f.discount_price).toLocaleString()}원</strong>${f.original_price ? ` <span style="text-decoration:line-through; color:var(--text-gray);">${Number(f.original_price).toLocaleString()}원</span>` : ''} <span style="color:var(--text-gray);">(${remainTxt})</span></span>
+                        ${isActive ? `<button type="button" class="btn btn-danger btn-sm fs-cancel-btn" data-id="${f.id}">중단</button>` : ''}
+                    </div>`;
+            }
+            listArea.innerHTML = (active.length === 0 && past.length === 0)
+                ? '<p style="font-size:0.82em; color:var(--text-gray);">아직 진행한 타임세일이 없습니다.</p>'
+                : active.map(f => row(f, true)).join('') + past.slice(0, 5).map(f => row(f, false)).join('');
+            listArea.querySelectorAll('.fs-cancel-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    if (!confirm('진행 중인 타임세일을 중단할까요? 즉시 원래 가격으로 돌아갑니다.')) return;
+                    btn.disabled = true;
+                    await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${focusSession.id}/flash-sales/${btn.dataset.id}/cancel`, { method: 'PATCH' });
+                    await loadFlashSales(focusSession.id);
+                    renderFlashSaleArea();
+                });
+            });
+        }
+
+        function renderFacebookPagePicker() {
+            const pickerArea = document.getElementById('host-fb-picker-area');
+            if (!pickerArea) return; // 진행 중인 세션이 없는 화면에는 OmniCast 카드 자체가 없다
+            if (!pendingFacebookSelectionId || !pendingFacebookPages) { pickerArea.innerHTML = ''; return; }
+            pickerArea.innerHTML = `
+                <div style="background:#E3F2FD; border:1px solid #90CAF9; border-radius:8px; padding:10px; margin-bottom:10px; font-size:0.85em;">
+                    <strong>이 계정으로 관리 중인 페이스북 페이지가 여러 개입니다. 라이브에 쓸 페이지를 골라주세요.</strong>
+                    <div style="margin-top:8px; display:flex; flex-direction:column; gap:6px;">
+                        ${pendingFacebookPages.map(p => `<div style="display:flex; justify-content:space-between; align-items:center;"><span>${WithPlus.escapeHtml(p.name)}</span><button type="button" class="btn btn-primary btn-sm host-fb-choose-page-btn" data-id="${p.id}">이 페이지로 연결</button></div>`).join('')}
+                    </div>
+                    <div class="msg" id="host-fb-picker-msg"></div>
+                </div>`;
+            pickerArea.querySelectorAll('.host-fb-choose-page-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    btn.disabled = true;
+                    const { ok, json } = await authedFetch(`/api/admin/live/omnicast/facebook/pending/${pendingFacebookSelectionId}/choose`, {
+                        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ page_id: btn.dataset.id })
+                    });
+                    if (!ok) {
+                        const msgEl = document.getElementById('host-fb-picker-msg');
+                        if (msgEl) { msgEl.textContent = json.message || '연결 실패'; msgEl.className = 'msg error'; }
+                        btn.disabled = false;
+                        return;
+                    }
+                    pendingFacebookSelectionId = null; pendingFacebookPages = null;
+                    renderFacebookPagePicker();
+                    await loadOmnicastDestinations();
+                    renderOmnicastArea();
+                });
+            });
+        }
+
+        async function checkPendingFacebookSelection() {
+            const params = new URLSearchParams(location.search);
+            const selectionId = params.get('omnicast_facebook_select');
+            if (!selectionId) return;
+            history.replaceState(null, '', location.pathname);
+            const { ok, json } = await authedFetch(`/api/admin/live/omnicast/facebook/pending/${selectionId}`);
+            if (!ok) { alert(json.message || '페이지 선택 정보를 불러오지 못했습니다.'); return; }
+            pendingFacebookSelectionId = selectionId;
+            pendingFacebookPages = json.data.pages;
+            renderFacebookPagePicker();
+        }
+
+        async function renderInventory() {
+            const invArea = document.getElementById('host-inventory-area');
+            if (!invArea || !focusSession) return;
+            const inv = await loadInventory(focusSession.id);
+            if (inv.length === 0) {
+                invArea.innerHTML = `<p style="font-size:0.85em; color:var(--text-gray);">이 세션에 배정된 재고가 없습니다. '세션/재고 관리'에서 먼저 재고를 배정해주세요.</p>`;
+                return;
+            }
+            invArea.innerHTML = `
+                <table class="inv-table">
+                    <thead><tr><th>상품</th><th>배정</th><th>안전재고</th><th>판매</th><th>예약중</th><th>가용</th></tr></thead>
+                    <tbody>
+                        ${inv.map(i => `
+                        <tr>
+                            <td>${WithPlus.escapeHtml(i.products_with ? i.products_with.name : i.product_id)}</td>
+                            <td>${i.allocated_qty}</td>
+                            <td>${i.safety_stock}</td>
+                            <td>${i.sold_qty}</td>
+                            <td>${i.reserved_qty}</td>
+                            <td class="${i.available_qty <= i.safety_stock ? 'qty-low' : ''}">${i.available_qty}</td>
+                        </tr>`).join('')}
+                    </tbody>
+                </table>`;
+        }
+
+        async function loadFocusDetails() {
+            if (!focusSession) return;
+            await loadCuratedProducts();
+            await Promise.all([
+                renderInventory(),
+                (async () => { await loadChat(focusSession.id, false); renderChatLog(); })(),
+                (async () => { await loadOmnicastDestinations(); await loadOmnicastTargets(focusSession.id); renderOmnicastArea(); })(),
+                (async () => { await loadFlashSales(focusSession.id); renderFlashSaleArea(); })(),
+                (async () => { await loadQuizzes(focusSession.id); renderQuizArea(); })(),
+                (async () => { await loadAuctions(focusSession.id); renderAuctionArea(); })(),
+                (async () => { await loadCouponDrops(focusSession.id); renderCouponDropArea(); })(),
+                (async () => { await loadGiftSummary(focusSession.id); renderGiftSummary(); })(),
+                (async () => { await loadGuests(focusSession.id); renderGuestArea(); })()
+            ]);
+        }
+
+        function renderOmnicastArea(forceConfigRefresh) {
+            const area = document.getElementById('host-omnicast-area');
+            if (!area || !focusSession) return;
+            area.dataset.rendered = '1'; // render()가 8초 폴링 중 이 영역을 통째로 날리지 않고 보존하게 하는 표시
+
+            // 8초마다 이 화면 전체를 새로고침하는데, 그때마다 "유튜브/페이스북 연동 설정" 영역을 통째로 다시 그리면
+            // 관리자가 막 입력하던 클라이언트ID/시크릿과 펼쳐놓은 상태가 사라져버리는 문제가 있었다.
+            // 저장 직후처럼 최신 상태를 꼭 반영해야 할 때만 forceConfigRefresh를 true로 넘겨 새로 그리고,
+            // 그 외(폴링 등)에는 기존 DOM 노드를 그대로 재사용해 입력값/펼침 상태를 보존한다.
+            const prevSettingsEl = area.querySelector('.omnicast-settings');
+            const wasSettingsOpen = prevSettingsEl ? prevSettingsEl.open : false;
+            const preservedSettingsEl = (!forceConfigRefresh && prevSettingsEl) ? prevSettingsEl : null;
+
+            // 위 커스텀 RTMP/Cloudflare Stream 입력 칸들도 같은 이유로 8초마다 비워지는 문제가 있었다.
+            // 다시 그리기 전에 값과 포커스/커서 위치를 저장해뒀다가, 새로 그린 뒤 그대로 복원한다.
+            const rtmpFieldIds = ['omnicast-rtmp-label', 'omnicast-rtmp-url', 'omnicast-rtmp-key', 'omnicast-cf-label', 'omnicast-cf-account-id', 'omnicast-cf-api-token'];
+            const preservedFieldValues = {};
+            let focusedFieldId = null, focusedSelStart = null, focusedSelEnd = null;
+            rtmpFieldIds.forEach(id => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                if (el.value) preservedFieldValues[id] = el.value;
+                if (document.activeElement === el) {
+                    focusedFieldId = id;
+                    focusedSelStart = el.selectionStart;
+                    focusedSelEnd = el.selectionEnd;
+                }
+            });
+
+            const connectedIds = new Set(omnicastTargets.map(t => t.destination_id));
+            const availableDests = omnicastDestinations.filter(d => d.status === 'connected' && !connectedIds.has(d.id));
+
+            const destListHtml = omnicastDestinations.length === 0
+                ? '<p style="font-size:0.82em; color:var(--text-gray);">아직 연결된 송출 목적지가 없습니다. 아래에서 커스텀 RTMP를 추가하거나 유튜브/페이스북을 연결해주세요.</p>'
+                : omnicastDestinations.map(d => `
+                    <div class="dest-row" data-id="${d.id}">
+                        <span><span class="plat-tag ${d.platform}">${OMNICAST_PLATFORM_LABELS[d.platform] || d.platform}</span>${WithPlus.escapeHtml(d.label)}${d.status !== 'connected' ? ' <span style="color:#C62828;">(연결 끊김)</span>' : ''}</span>
+                        <span>
+                            ${d.platform === 'custom_rtmp' ? `<button type="button" class="btn btn-secondary btn-sm omnicast-reveal-btn" data-id="${d.id}">접속정보 보기</button>` : ''}
+                            <button type="button" class="btn btn-danger btn-sm omnicast-delete-dest-btn" data-id="${d.id}">삭제</button>
+                        </span>
+                    </div>
+                    <div class="ingest-box" id="omnicast-reveal-${d.id}" hidden></div>`).join('');
+
+            const connectButtonsHtml = ['youtube', 'facebook'].map(p => {
+                const cfg = omnicastPlatforms.find(x => x.provider_key === p);
+                const ready = cfg && cfg.enabled && cfg.client_key && cfg.has_secret_key && cfg.redirect_uri;
+                return `<button type="button" class="btn btn-secondary btn-sm omnicast-connect-btn" data-platform="${p}" ${ready ? '' : 'disabled title="관리자 설정에서 먼저 연동을 설정해주세요"'}>${OMNICAST_PLATFORM_LABELS[p]} 연결${ready ? '' : ' (설정 필요)'}</button>`;
+            }).join(' ');
+
+            const targetListHtml = omnicastTargets.length === 0
+                ? '<p style="font-size:0.82em; color:var(--text-gray);">이 방송에 추가된 송출 대상이 없습니다.</p>'
+                : omnicastTargets.map(t => {
+                    const destLabel = t.live_channel_broadcast_destinations_live ? t.live_channel_broadcast_destinations_live.label : t.platform;
+                    return `
+                    <div class="target-row" data-id="${t.id}">
+                        <span><span class="plat-tag ${t.platform}">${OMNICAST_PLATFORM_LABELS[t.platform] || t.platform}</span>${WithPlus.escapeHtml(destLabel)} <span class="plat-status ${t.status}">${OMNICAST_STATUS_LABELS[t.status] || t.status}</span></span>
+                        <span>
+                            ${t.status !== 'ended' ? `<button type="button" class="btn btn-danger btn-sm omnicast-end-target-btn" data-id="${t.id}">종료</button>` : `<button type="button" class="btn btn-secondary btn-sm omnicast-remove-target-btn" data-id="${t.id}">제거</button>`}
+                        </span>
+                        ${t.status === 'error' ? `<div class="ingest-box" style="color:#C62828;">${WithPlus.escapeHtml(t.error_message || '알 수 없는 오류')}</div>` : ''}
+                        ${t.status !== 'error' && t.ingest_rtmp_url ? `<div class="ingest-box">서버: ${WithPlus.escapeHtml(t.ingest_rtmp_url)}${t.ingest_stream_key ? '<br>키: ' + WithPlus.escapeHtml(t.ingest_stream_key) : ' (키가 주소에 포함되어 있습니다 - OBS 서버란에 그대로 붙여넣으세요)'}</div>` : ''}
+                        ${t.platform === 'cloudflare_stream' && t.playback_url ? `<div class="ingest-box">✅ OBS로 위 정보에 송출을 시작하면 잠시 후 우리 사이트 방송 화면에 자동으로 나옵니다.</div>` : ''}
+                    </div>`;
+                }).join('');
+
+            const addTargetHtml = focusSession.status !== 'ended' ? `
+                <div class="omnicast-add-row">
+                    <select id="omnicast-add-target-select">
+                        <option value="">${availableDests.length === 0 ? '추가할 수 있는 목적지가 없습니다' : '이 방송에 추가할 목적지 선택'}</option>
+                        ${availableDests.map(d => `<option value="${d.id}">${OMNICAST_PLATFORM_LABELS[d.platform] || d.platform} · ${WithPlus.escapeHtml(d.label)}</option>`).join('')}
+                    </select>
+                    <button type="button" class="btn btn-primary btn-sm" id="omnicast-add-target-btn" ${availableDests.length === 0 ? 'disabled' : ''}>+ 이 방송에 송출 추가</button>
+                </div>
+                <div class="msg" id="omnicast-add-target-msg"></div>` : '';
+
+            const unsupportedHtml = ['tiktok', 'instagram', 'x'].map(p => `<span class="unsupported-note">${OMNICAST_PLATFORM_LABELS[p]}: 공식 API 접근 권한 확보 전까지는 지원하지 않습니다.</span>`).join(' · ');
+
+            const multiOutputTargets = omnicastTargets.filter(t => t.status !== 'ended' && t.status !== 'error' && t.ingest_rtmp_url);
+            const multiOutputSummary = multiOutputTargets.map(t => {
+                const destLabel = t.live_channel_broadcast_destinations_live ? t.live_channel_broadcast_destinations_live.label : (OMNICAST_PLATFORM_LABELS[t.platform] || t.platform);
+                return `[${destLabel}]\n서버: ${t.ingest_rtmp_url}${t.ingest_stream_key ? '\n키: ' + t.ingest_stream_key : ' (키는 주소에 포함됨)'}`;
+            }).join('\n\n');
+            const multiOutputHtml = multiOutputTargets.length >= 2 ? `
+                <h3 style="font-size:0.88em; margin: 14px 0 6px;">🔀 OBS로 여러 곳에 한 번에 송출하기</h3>
+                <p style="font-size:0.78em; color:var(--text-gray); margin-bottom:6px;">
+                    지금 이 방송에 연결된 ${multiOutputTargets.length}개 목적지의 서버/키를 한 번에 모아뒀습니다. OBS에 무료 플러그인
+                    <strong>"Multiple RTMP Outputs" (OBS Multi-RTMP)</strong>를 설치하면 OBS 하나로 아래 목적지 전부에 동시 송출할 수 있습니다.
+                    (또는 Restream 계정을 만들어 커스텀 RTMP 칸에 연결하면, OBS는 Restream 한 곳에만 보내고 Restream이 나머지로 대신 뿌려줍니다 - 위 "Restream으로 빠른 연결" 참고)
+                </p>
+                <div class="ingest-box" id="omnicast-multi-output-box" style="white-space:pre-line;">${WithPlus.escapeHtml(multiOutputSummary)}</div>
+                <div class="omnicast-add-row">
+                    <button type="button" class="btn btn-secondary btn-sm" id="omnicast-copy-multi-output-btn">📋 전체 복사</button>
+                    <span class="msg" id="omnicast-multi-output-msg"></span>
+                </div>` : '';
+
+            area.innerHTML = `
+                <h3 style="font-size:0.88em; margin-bottom:6px;">연결된 목적지</h3>
+                ${destListHtml}
+                <div class="omnicast-add-row">
+                    <input type="text" id="omnicast-rtmp-label" placeholder="목적지 이름 (예: 트위치)" style="flex:1; min-width:120px; padding:7px 10px; border:1px solid var(--border-color); border-radius:6px; font-size:0.85em;">
+                    <input type="text" id="omnicast-rtmp-url" placeholder="RTMP 서버 주소" style="flex:1; min-width:160px; padding:7px 10px; border:1px solid var(--border-color); border-radius:6px; font-size:0.85em;">
+                    <input type="text" id="omnicast-rtmp-key" placeholder="스트림 키" style="flex:1; min-width:120px; padding:7px 10px; border:1px solid var(--border-color); border-radius:6px; font-size:0.85em;">
+                    <button type="button" class="btn btn-secondary btn-sm" id="omnicast-add-rtmp-btn">+ 커스텀 RTMP 추가</button>
+                    <button type="button" class="btn btn-secondary btn-sm" id="omnicast-restream-quickfill-btn" title="Restream 계정에서 받은 RTMP 주소/키를 위 칸에 붙여넣기만 하면 됩니다">📡 Restream으로 빠른 연결</button>
+                </div>
+                <p style="font-size:0.76em; color:var(--text-gray); margin:-4px 0 6px;">"Restream으로 빠른 연결"을 누르면 이름 칸이 자동으로 채워집니다 - restream.io에서 발급받은 서버 주소/스트림 키를 위 두 칸에 붙여넣고 추가하면, 틱톡·인스타그램·X 등 여러 SNS로 동시에 나갑니다.</p>
+                <div class="omnicast-add-row">${connectButtonsHtml}</div>
+                <div class="msg" id="omnicast-dest-msg"></div>
+                <p class="unsupported-note">${unsupportedHtml}</p>
+
+                <h3 style="font-size:0.88em; margin: 14px 0 6px;">🔥 자체 사이트에서 재생 (Cloudflare Stream)</h3>
+                <p style="font-size:0.78em; color:var(--text-gray); margin-bottom:6px;">OBS로 아래 정보를 입력해 송출하면, 유튜브/페이스북 없이도 우리 사이트(WITH+ 라이브) 화면에서 바로 재생됩니다. Cloudflare 계정의 Account ID와 Stream 권한이 있는 API 토큰이 필요합니다.</p>
+                <div class="cf-connect-row">
+                    <input type="text" id="omnicast-cf-label" placeholder="목적지 이름 (예: 자체 사이트)">
+                    <input type="text" id="omnicast-cf-account-id" placeholder="Cloudflare Account ID">
+                    <input type="text" id="omnicast-cf-api-token" placeholder="Cloudflare API 토큰">
+                    <button type="button" class="btn btn-secondary btn-sm" id="omnicast-add-cf-btn">+ Cloudflare Stream 연결</button>
+                </div>
+                <div class="msg" id="omnicast-cf-msg"></div>
+
+                <h3 style="font-size:0.88em; margin: 14px 0 6px;">이 방송의 송출 현황</h3>
+                ${targetListHtml}
+                ${addTargetHtml}
+                ${multiOutputHtml}
+
+                <details class="omnicast-settings">
+                    <summary>⚙️ 유튜브/페이스북 연동 설정 (관리자 전용, 최초 1회)</summary>
+                    <div id="omnicast-platform-cfg-area" style="margin-top:8px;"></div>
+                </details>
+            `;
+
+            if (preservedSettingsEl) {
+                // 기존 입력값/이벤트리스너가 그대로 살아있는 이전 DOM 노드를 새로 그린 자리에 다시 끼워넣는다
+                area.querySelector('.omnicast-settings').replaceWith(preservedSettingsEl);
+            } else if (wasSettingsOpen) {
+                area.querySelector('.omnicast-settings').open = true;
+            }
+
+            rtmpFieldIds.forEach(id => {
+                if (!(id in preservedFieldValues)) return;
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.value = preservedFieldValues[id];
+                if (id === focusedFieldId) {
+                    el.focus();
+                    if (focusedSelStart !== null) el.setSelectionRange(focusedSelStart, focusedSelEnd);
+                }
+            });
+
+            area.querySelectorAll('.omnicast-reveal-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const box = document.getElementById('omnicast-reveal-' + btn.dataset.id);
+                    if (!box.hidden) { box.hidden = true; return; }
+                    const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/omnicast/destinations/${btn.dataset.id}/reveal`);
+                    box.textContent = ok ? `서버: ${json.data.rtmp_url}  /  키: ${json.data.stream_key}` : (json.message || '조회 실패');
+                    box.hidden = false;
+                });
+            });
+            area.querySelectorAll('.omnicast-delete-dest-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    if (!confirm('이 목적지를 삭제할까요?')) return;
+                    await authedFetch(`/api/admin/live/channels/${channelId}/omnicast/destinations/${btn.dataset.id}`, { method: 'DELETE' });
+                    await loadOmnicastDestinations(); renderOmnicastArea();
+                });
+            });
+            area.querySelectorAll('.omnicast-connect-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/omnicast/${btn.dataset.platform}/connect`);
+                    if (!ok) { alert(json.message || '연결을 시작하지 못했습니다'); return; }
+                    window.open(json.data.authorize_url, '_blank');
+                });
+            });
+            const restreamQuickfillBtn = document.getElementById('omnicast-restream-quickfill-btn');
+            if (restreamQuickfillBtn) restreamQuickfillBtn.addEventListener('click', () => {
+                const labelEl = document.getElementById('omnicast-rtmp-label');
+                const urlEl = document.getElementById('omnicast-rtmp-url');
+                if (labelEl && !labelEl.value.trim()) labelEl.value = 'Restream (멀티스트리밍)';
+                if (urlEl) urlEl.focus();
+            });
+            const addRtmpBtn = document.getElementById('omnicast-add-rtmp-btn');
+            if (addRtmpBtn) addRtmpBtn.addEventListener('click', async () => {
+                const label = document.getElementById('omnicast-rtmp-label').value.trim();
+                const rtmp_url = document.getElementById('omnicast-rtmp-url').value.trim();
+                const stream_key = document.getElementById('omnicast-rtmp-key').value.trim();
+                const msgEl = document.getElementById('omnicast-dest-msg');
+                if (!label || !rtmp_url || !stream_key) { msgEl.textContent = '이름/주소/키를 모두 입력해주세요'; msgEl.className = 'msg error'; return; }
+                const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/omnicast/destinations`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ label, rtmp_url, stream_key })
+                });
+                if (!ok) { msgEl.textContent = json.message || '추가 실패'; msgEl.className = 'msg error'; return; }
+                await loadOmnicastDestinations(); renderOmnicastArea();
+            });
+            const addCfBtn = document.getElementById('omnicast-add-cf-btn');
+            if (addCfBtn) addCfBtn.addEventListener('click', async () => {
+                const label = document.getElementById('omnicast-cf-label').value.trim();
+                const account_id = document.getElementById('omnicast-cf-account-id').value.trim();
+                const api_token = document.getElementById('omnicast-cf-api-token').value.trim();
+                const msgEl = document.getElementById('omnicast-cf-msg');
+                if (!label || !account_id || !api_token) { msgEl.textContent = '이름/Account ID/API 토큰을 모두 입력해주세요'; msgEl.className = 'msg error'; return; }
+                addCfBtn.disabled = true;
+                const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/omnicast/destinations`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ platform: 'cloudflare_stream', label, account_id, api_token })
+                });
+                addCfBtn.disabled = false;
+                if (!ok) { msgEl.textContent = json.message || '연결 실패'; msgEl.className = 'msg error'; return; }
+                msgEl.textContent = '연결되었습니다! 아래 "이 방송에 송출 추가"에서 선택해주세요.'; msgEl.className = 'msg success';
+                await loadOmnicastDestinations(); renderOmnicastArea();
+            });
+            const addTargetBtn = document.getElementById('omnicast-add-target-btn');
+            if (addTargetBtn) addTargetBtn.addEventListener('click', async () => {
+                const destId = document.getElementById('omnicast-add-target-select').value;
+                const msgEl = document.getElementById('omnicast-add-target-msg');
+                if (!destId) { msgEl.textContent = '목적지를 선택해주세요'; msgEl.className = 'msg error'; return; }
+                addTargetBtn.disabled = true;
+                const { ok, json } = await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${focusSession.id}/omnicast/targets`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destination_id: destId })
+                });
+                addTargetBtn.disabled = false;
+                if (!ok && json.data?.status !== 'error') { msgEl.textContent = json.message || '추가 실패'; msgEl.className = 'msg error'; return; }
+                await loadOmnicastTargets(focusSession.id); renderOmnicastArea();
+            });
+            area.querySelectorAll('.omnicast-end-target-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    btn.disabled = true;
+                    await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${focusSession.id}/omnicast/targets/${btn.dataset.id}`, {
+                        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ status: 'ended' })
+                    });
+                    await loadOmnicastTargets(focusSession.id); renderOmnicastArea();
+                });
+            });
+            area.querySelectorAll('.omnicast-remove-target-btn').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    await authedFetch(`/api/admin/live/channels/${channelId}/sessions/${focusSession.id}/omnicast/targets/${btn.dataset.id}`, { method: 'DELETE' });
+                    await loadOmnicastTargets(focusSession.id); renderOmnicastArea();
+                });
+            });
+            const copyMultiOutputBtn = document.getElementById('omnicast-copy-multi-output-btn');
+            if (copyMultiOutputBtn) copyMultiOutputBtn.addEventListener('click', async () => {
+                const msgEl = document.getElementById('omnicast-multi-output-msg');
+                try {
+                    await navigator.clipboard.writeText(multiOutputSummary);
+                    if (msgEl) { msgEl.textContent = '복사되었습니다!'; msgEl.className = 'msg success'; }
+                } catch (err) {
+                    if (msgEl) { msgEl.textContent = '복사 실패 - 위 박스에서 직접 선택해 복사해주세요'; msgEl.className = 'msg error'; }
+                }
+            });
+
+            if (!preservedSettingsEl) renderOmnicastPlatformConfig();
+        }
+
+        function renderOmnicastPlatformConfig() {
+            const cfgArea = document.getElementById('omnicast-platform-cfg-area');
+            if (!cfgArea) return;
+            // 구글(유튜브)/메타(페이스북) 개발자 콘솔에는 WITH+ 서버 주소의 콜백을 등록해야 한다(다른 서비스 주소 금지).
+            // 지금 접속한 주소(location.origin) 기준으로 안내하고, 운영 서버 주소도 함께 보여준다.
+            const WITHPLUS_PROD_ORIGIN = 'https://withplus-api.onrender.com';
+            const redirectHelpHtml = `
+                <p class="unsupported-note" style="margin-bottom:6px;">WITH+ 전용 OAuth 앱 키를 입력하세요. 구글/메타 개발자 콘솔의 승인된 리디렉션 URI에는 아래 주소를 등록합니다.<br>
+                ${['youtube', 'facebook'].map(p => `${OMNICAST_PLATFORM_LABELS[p]}: <code class="lhc-code">${WithPlus.escapeHtml(location.origin)}/api/admin/live/omnicast/${p}/callback</code>`).join('<br>')}
+                ${location.origin !== WITHPLUS_PROD_ORIGIN ? `<br>(운영 서버: <code class="lhc-code">${WITHPLUS_PROD_ORIGIN}/api/admin/live/omnicast/&lt;youtube|facebook&gt;/callback</code>)` : ''}</p>`;
+            cfgArea.innerHTML = redirectHelpHtml + ['youtube', 'facebook'].map(p => {
+                const cfg = omnicastPlatforms.find(x => x.provider_key === p) || {};
+                const suggestedRedirect = `${location.origin}/api/admin/live/omnicast/${p}/callback`;
+                return `
+                <div class="platform-cfg-row" data-provider="${p}">
+                    <strong style="width:70px;">${OMNICAST_PLATFORM_LABELS[p]}</strong>
+                    <input type="text" class="omnicast-cfg-client" placeholder="클라이언트 ID" value="${WithPlus.escapeHtml(cfg.client_key || '')}">
+                    <input type="text" class="omnicast-cfg-secret" placeholder="${cfg.has_secret_key ? '(등록됨 - 변경 시에만 입력)' : '클라이언트 시크릿'}">
+                    <input type="text" class="omnicast-cfg-redirect" placeholder="리디렉션 URI" value="${WithPlus.escapeHtml(cfg.redirect_uri || suggestedRedirect)}">
+                    <label style="display:flex; align-items:center; gap:4px; font-size:0.82em;"><input type="checkbox" class="omnicast-cfg-enabled" ${cfg.enabled ? 'checked' : ''}>사용</label>
+                    <button type="button" class="btn btn-secondary btn-sm omnicast-cfg-save">저장</button>
+                    <span class="msg" style="margin:0;"></span>
+                </div>`;
+            }).join('');
+            cfgArea.querySelectorAll('.omnicast-cfg-save').forEach(btn => {
+                btn.addEventListener('click', async () => {
+                    const row = btn.closest('.platform-cfg-row');
+                    const provider = row.dataset.provider;
+                    const body = {
+                        client_key: row.querySelector('.omnicast-cfg-client').value,
+                        redirect_uri: row.querySelector('.omnicast-cfg-redirect').value,
+                        enabled: row.querySelector('.omnicast-cfg-enabled').checked
+                    };
+                    const secretVal = row.querySelector('.omnicast-cfg-secret').value;
+                    if (secretVal) body.secret_key = secretVal;
+                    const msgEl = row.querySelector('.msg');
+                    const { ok, json } = await authedFetch(`/api/admin/live/omnicast/platforms/${provider}`, {
+                        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+                    });
+                    msgEl.textContent = ok ? '저장되었습니다' : (json.message || '저장 실패');
+                    msgEl.className = ok ? 'msg success' : 'msg error';
+                    if (ok) {
+                        // 저장 성공 시에만 최신 상태(연결 버튼 활성화 여부 등)를 즉시 반영하도록 강제로 다시 그린다.
+                        // 실패했을 때는 사용자가 고치고 있던 다른 입력값을 건드리지 않도록 그대로 둔다.
+                        await loadOmnicastPlatforms();
+                        renderOmnicastArea(true);
+                    }
+                });
+            });
+        }
+
+        async function refreshAll() {
+            await loadChannel();
+            await loadSessions();
+            await loadOmnicastPlatforms();
+            if (webrtcConfigured === null) await loadWebrtcStatus(); // 연동 여부는 자주 바뀌지 않으므로 최초 1회만 조회
+            if (alimtalkConfig === null) await loadAlimtalkConfig();
+            if (liveCashbackRate === null) await loadCashbackRate();
+            if (liveShareCouponSettings === null) await loadShareCouponSettings();
+            if (liveReminderSettings === null) await loadReminderSettings();
+            render();
+            await loadFocusDetails();
+        }
+
+        function startPolling() {
+            if (pollTimer) clearInterval(pollTimer);
+            if (chatPollTimer) clearInterval(chatPollTimer);
+            // 세션 상태(다른 창에서 시작/종료했을 수도 있음)는 8초마다, 채팅은 3초마다 새로고침.
+            // 채팅은 조회 시마다 전체를 다시 불러오는 대신 첫 페이지만 갱신해 스크롤/모더레이션 상태를 크게
+            // 어지럽히지 않는다 (완전한 실시간 append는 시청자 화면 쪽에서 이미 별도로 구현되어 있음).
+            pollTimer = setInterval(async () => {
+                try {
+                    await loadSessions();
+                    const stillSame = focusSession && sessions.find(x => x.id === focusSession.id);
+                    focusSession = stillSame || sessions.find(s => s.status === 'live') || sessions[0] || null;
+                    render();
+                    await renderInventory();
+                    // 유튜브/페이스북 연결을 새 탭에서 막 끝냈을 수도 있으니 목적지 목록도 함께 새로고침
+                    // (연결 팝업 탭은 별도 탭이라 이 탭 상태를 직접 갱신해줄 수 없다 - 다음 폴에서 자연스럽게 반영)
+                    if (focusSession) { await loadOmnicastDestinations(); await loadOmnicastTargets(focusSession.id); renderOmnicastArea(); await loadFlashSales(focusSession.id); renderFlashSaleArea(); await loadQuizzes(focusSession.id); renderQuizArea(); await loadAuctions(focusSession.id); renderAuctionArea(); await loadCouponDrops(focusSession.id); renderCouponDropArea(); await loadGiftSummary(focusSession.id); renderGiftSummary(); await loadGuests(focusSession.id); renderGuestArea(); }
+                } catch (e) { /* 다음 폴에서 재시도 */ }
+            }, 8000);
+            chatPollTimer = setInterval(async () => {
+                if (!focusSession || focusSession.status === 'scheduled') return;
+                try { await loadChat(focusSession.id, false); renderChatLog(); } catch (e) { /* 다음 폴에서 재시도 */ }
+            }, 3000);
+            // 타임세일 카운트다운은 서버를 다시 조회할 필요 없이 1초마다 남은시간 표시만 갱신한다
+            if (window.__fsCountdownTimer) clearInterval(window.__fsCountdownTimer);
+            window.__fsCountdownTimer = setInterval(() => { if (focusSession) renderFlashSaleArea(); }, 1000);
+        }
+
+        try {
+            await refreshAll();
+            startPolling();
+            // 유튜브/페이스북 OAuth 연결을 마치고 새 탭에서 이 화면으로 돌아온 직후라면 결과를 짧게 안내한다
+            const params = new URLSearchParams(location.search);
+            if (params.get('omnicast_connected')) {
+                alert(`${OMNICAST_PLATFORM_LABELS[params.get('omnicast_connected')] || params.get('omnicast_connected')} 연결이 완료되었습니다.`);
+                history.replaceState(null, '', location.pathname);
+            } else if (params.get('omnicast_error')) {
+                alert('연동 실패: ' + params.get('omnicast_error'));
+                history.replaceState(null, '', location.pathname);
+            } else if (params.get('omnicast_facebook_select')) {
+                await checkPendingFacebookSelection();
+            }
+        } catch (e) {
+            area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>불러오는 중 오류가 발생했습니다</h3><p>${WithPlus.escapeHtml(e.message)}</p></div>`;
+        }
+    })();
+    </script>
+</body>
+</html>

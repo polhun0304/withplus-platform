@@ -564,6 +564,41 @@
             .srp-table .c-cat { width: 56px; min-width: 56px; max-width: 56px; }
             .srp-table .c-name { left: 86px; }
         }
+        /* 📺 라이브 커머스(WITH+ 라이브) 관리 탭 */
+        .lv-subtabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+        .lv-subtab-btn { padding: 7px 14px; border-radius: 16px; border: 1px solid var(--border-color); background: white; font-size: 0.84em; font-weight: 600; color: var(--text-gray); cursor: pointer; }
+        .lv-subtab-btn:hover { border-color: var(--primary-color); color: var(--primary-color); }
+        .lv-subtab-btn.active { background: var(--primary-color); border-color: var(--primary-color); color: #fff; }
+        .lv-subpanel { display: none; min-width: 0; }
+        .lv-subpanel.active { display: block; }
+        .lv-note { color: var(--text-gray); font-size: 0.84em; line-height: 1.5; margin-bottom: 12px; }
+        .lv-scroll { width: 100%; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+        .lv-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+        .lv-actions .btn-xs { white-space: nowrap; }
+        .lv-chip { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 0.74em; font-weight: 700; background: #FFF0F4; color: var(--primary-dark); white-space: nowrap; }
+        .lv-chip.fan { background: #FCE4EC; color: #AD1457; }
+        .lv-chip.creator { background: #F3E5F5; color: #6A1B9A; }
+        .lv-chip.brand { background: #FFF3E0; color: #E65100; }
+        .lv-card { background: white; border: 1px solid var(--border-color); border-radius: 12px; padding: 16px; margin-bottom: 14px; min-width: 0; }
+        .lv-card h4 { margin: 0 0 8px; font-size: 0.95em; }
+        .lv-inline-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+        .lv-inline-form .field { margin-bottom: 0; flex: 1 1 140px; min-width: 0; }
+        .lv-mini-table { width: 100%; border-collapse: collapse; font-size: 0.8em; box-shadow: none; }
+        .lv-mini-table th, .lv-mini-table td { padding: 6px 8px; border-bottom: 1px solid #EEE; text-align: left; }
+        .lv-slug-state { font-size: 0.78em; margin-top: 4px; }
+        .lv-slug-state.ok { color: #2E7D32; }
+        .lv-slug-state.bad { color: #C62828; }
+        .lv-row-sub { width: 100%; border-top: 1px dashed var(--border-color); padding-top: 8px; margin-top: 4px; min-width: 0; }
+        .admin-row-info .vname { font-weight: 600; word-break: break-word; }
+        .admin-row-info .vmeta { color: var(--text-gray); font-size: 0.9em; word-break: break-word; }
+        .lv-gift-row { display: grid; grid-template-columns: 90px 70px 1fr 110px auto; gap: 6px; align-items: center; margin-bottom: 6px; }
+        .lv-gift-row input { width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 8px; font-size: 0.9em; }
+        @media (max-width: 600px) {
+            .lv-gift-row { grid-template-columns: 1fr 1fr; }
+            .lv-inline-form .field { flex-basis: 100%; }
+            #tab-live-commerce .modal-box, .lv-modal .modal-box { padding: 18px 14px; }
+        }
+        #tab-live-commerce [hidden], .lv-modal [hidden] { display: none !important; }
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
@@ -1356,6 +1391,197 @@
         </div>
     </div>
 
+    <!-- 📺 라이브 채널 추가/수정 모달 -->
+    <div class="modal-overlay lv-modal" id="lv-channel-modal">
+        <div class="modal-box wide">
+            <h3 id="lv-channel-modal-title">새 라이브 채널 추가</h3>
+            <form id="lv-channel-form">
+                <div class="field"><label for="lvc-name">채널명 *</label><input type="text" id="lvc-name" required maxlength="80" placeholder="예: 홍길동 팬채널"></div>
+                <div class="field">
+                    <label for="lvc-slug">슬러그(채널 주소) *</label>
+                    <input type="text" id="lvc-slug" required maxlength="60" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="예: hong-gildong">
+                    <div class="lv-slug-state" id="lvc-slug-state"></div>
+                    <div class="hint">채널명을 입력하면 자동으로 만들어집니다. 영문 소문자·숫자·하이픈(-)만 쓸 수 있고, 만든 뒤에는 바꿀 수 없습니다. 시청 주소: <code>/live/슬러그</code></div>
+                </div>
+                <div class="field">
+                    <label for="lvc-type">채널 유형 *</label>
+                    <select id="lvc-type" required>
+                        <optgroup label="FAN+ (팬덤 채널)">
+                            <option value="star">스타(가수·배우 등)</option>
+                            <option value="athlete">운동선수</option>
+                        </optgroup>
+                        <optgroup label="CREATOR+ (크리에이터 채널)">
+                            <option value="creator">크리에이터</option>
+                        </optgroup>
+                        <optgroup label="BRAND+ (브랜드·공급자 채널)">
+                            <option value="brand">브랜드</option>
+                            <option value="supplier">공급자</option>
+                        </optgroup>
+                    </select>
+                    <div class="hint" id="lvc-type-hint">채널 유형은 만든 뒤에 바꿀 수 없습니다.</div>
+                </div>
+                <div class="field" id="lvc-owner-field"><label for="lvc-owner">채널 소유자 회원 ID(선택)</label><input type="text" id="lvc-owner" autocomplete="off" placeholder="선물(마일리지)을 받을 회원의 ID(UUID)"><div class="hint">비워두면 선물 적립 대상 없이 운영됩니다.</div></div>
+                <div class="field"><label for="lvc-tagline">한 줄 소개</label><input type="text" id="lvc-tagline" maxlength="120" placeholder="예: 첫 팬미팅 굿즈 라이브"></div>
+                <div class="field"><label for="lvc-desc">채널 설명</label><textarea id="lvc-desc" rows="3" placeholder="시청 페이지에 보이는 채널 소개(선택)"></textarea></div>
+                <div class="field"><label for="lvc-logo">로고 이미지 주소</label><input type="url" id="lvc-logo" placeholder="https://..."></div>
+                <div class="field"><label for="lvc-cover">커버 이미지 주소</label><input type="url" id="lvc-cover" placeholder="https://..."></div>
+                <div class="field"><label for="lvc-color">대표 색상</label><input type="text" id="lvc-color" maxlength="7" placeholder="#D32F5B (선택)"></div>
+                <div id="lvc-edit-only" hidden>
+                    <div class="subsection-title">공개·공식 상태</div>
+                    <div class="field">
+                        <label for="lvc-status">공개 상태</label>
+                        <select id="lvc-status">
+                            <option value="draft">비공개(준비중)</option>
+                            <option value="active">공개(운영중)</option>
+                            <option value="inactive">중지</option>
+                        </select>
+                    </div>
+                    <div class="field"><label for="lvc-contract">권리계약 참조번호</label><input type="text" id="lvc-contract" maxlength="120" placeholder="예: CT-2026-0012 (사내 계약서 번호)"><div class="hint">공식 채널·검증 완료로 바꾸려면 반드시 필요합니다.</div></div>
+                    <div class="field">
+                        <label for="lvc-verify">검증 상태</label>
+                        <select id="lvc-verify">
+                            <option value="unverified">미검증</option>
+                            <option value="verified">검증 완료</option>
+                        </select>
+                    </div>
+                    <label style="display:flex; align-items:center; gap:8px; font-size:0.9em; margin-bottom:12px;"><input type="checkbox" id="lvc-official" style="width:auto;"> 공식 채널로 표시(✅ 공식 배지)</label>
+                </div>
+                <div class="hint" id="lvc-create-hint">새 채널은 항상 비공개·비공식·미검증 상태로 만들어집니다. 목록에서 공개로 바꾸고, 권리계약이 확인되면 수정 화면에서 공식 전환하세요.</div>
+                <div class="msg" id="lvc-msg"></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="lvc-cancel">취소</button>
+                    <button type="submit" class="btn btn-primary" id="lvc-submit">저장</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- 📺 라이브 채널 멤버십 등급 모달 -->
+    <div class="modal-overlay lv-modal" id="lv-tiers-modal">
+        <div class="modal-box wide">
+            <h3 id="lv-tiers-title">🎖 멤버십 등급</h3>
+            <p class="lv-note">팬(시청자)이 채널에 가입할 때 고를 수 있는 등급입니다. 유료 등급의 실제 결제·정기청구는 아직 연결되지 않았으니 가격은 안내용으로만 입력하세요.</p>
+            <div id="lv-tiers-list"></div>
+            <form id="lv-tier-form" style="margin-top:14px; border-top:1px solid var(--border-color); padding-top:14px;">
+                <div class="lv-inline-form">
+                    <div class="field"><label for="lvt-key">등급 키 *</label><input type="text" id="lvt-key" required maxlength="40" placeholder="예: vip" autocomplete="off"></div>
+                    <div class="field"><label for="lvt-name">등급 이름 *</label><input type="text" id="lvt-name" required maxlength="40" placeholder="예: VIP 팬"></div>
+                    <div class="field"><label for="lvt-order">순서</label><input type="number" id="lvt-order" min="0" value="0"></div>
+                </div>
+                <div class="lv-inline-form" style="margin-top:10px;">
+                    <label style="display:flex; align-items:center; gap:6px; font-size:0.88em; flex:0 0 auto;"><input type="checkbox" id="lvt-paid" style="width:auto;"> 유료 등급</label>
+                    <div class="field"><label for="lvt-price">월 가격(원)</label><input type="number" id="lvt-price" min="0" step="100" placeholder="유료일 때만"></div>
+                </div>
+                <div class="field" style="margin-top:10px;"><label for="lvt-benefits">혜택 설명</label><textarea id="lvt-benefits" rows="2" placeholder="예: 라이브 전용 쿠폰, 팬미팅 우선 응모"></textarea></div>
+                <div class="msg" id="lvt-msg"></div>
+                <div class="modal-actions"><button type="submit" class="btn btn-primary">등급 추가</button></div>
+            </form>
+            <div class="modal-actions"><button type="button" class="btn btn-secondary" id="lv-tiers-close">닫기</button></div>
+        </div>
+    </div>
+
+    <!-- 📺 라이브 채널 자격/등록정보(업종별 라이선스) 모달 -->
+    <div class="modal-overlay lv-modal" id="lv-licenses-modal">
+        <div class="modal-box wide">
+            <h3 id="lv-licenses-title">🪪 자격/등록정보 관리</h3>
+            <p class="lv-note">보험모집·상조(선불식 할부거래)·봉안시설·부동산중개·노인복지시설처럼 업종 자격이 필요한 채널의 확인된 등록정보를 기록합니다. 실제 법적 검토·등록은 별도로 진행해야 하며, 이 화면이 판매를 자동으로 허용/차단하지는 않습니다.</p>
+            <div id="lv-licenses-list"></div>
+            <form id="lv-license-form" style="margin-top:16px; border-top:1px solid var(--border-color); padding-top:14px;">
+                <div class="field">
+                    <label for="lvl-type">자격 유형 *</label>
+                    <select id="lvl-type" required>
+                        <option value="insurance_broker">보험모집 자격(보험업법)</option>
+                        <option value="prepaid_funeral_registration">선불식 할부거래업 등록(상조/할부거래법)</option>
+                        <option value="burial_facility_permit">봉안시설 설치·운영 허가(장사법)</option>
+                        <option value="real_estate_broker">공인중개사·중개사무소 등록(공인중개사법)</option>
+                        <option value="elder_care_facility_permit">노인복지시설 설치신고(노인복지법)</option>
+                        <option value="other">기타</option>
+                    </select>
+                </div>
+                <div class="field"><label for="lvl-number">등록/자격번호</label><input type="text" id="lvl-number" placeholder="예: 제2026-서울강남-0001호"></div>
+                <div class="field"><label for="lvl-holder">등록 명의(자격자 개인명)</label><input type="text" id="lvl-holder" placeholder="예: 홍길동"></div>
+                <div class="field"><label for="lvl-org">소속 회사·법인</label><input type="text" id="lvl-org" placeholder="예: (주)OOO상조"></div>
+                <div class="field"><label for="lvl-authority">발급/등록 기관</label><input type="text" id="lvl-authority" placeholder="예: 서울특별시 강남구청"></div>
+                <div class="lv-inline-form" style="margin-bottom:14px;">
+                    <div class="field"><label for="lvl-issued">등록일</label><input type="date" id="lvl-issued"></div>
+                    <div class="field"><label for="lvl-expires">만료일</label><input type="date" id="lvl-expires"></div>
+                </div>
+                <div class="field"><label for="lvl-region">영업 가능 지역</label><input type="text" id="lvl-region" placeholder="예: 서울·경기 전역 (선택)"></div>
+                <div class="field"><label for="lvl-scope">취급 가능 상품범위</label><input type="text" id="lvl-scope" placeholder="예: 실손·정기보험 (선택)"></div>
+                <div class="field"><label for="lvl-engagement">계약 또는 위임 참조번호</label><input type="text" id="lvl-engagement" placeholder="본사-대리점 계약/위임 참조번호 (선택)"></div>
+                <div class="field"><label for="lvl-docref">증빙 참조번호</label><input type="text" id="lvl-docref" placeholder="사내 증빙 문서 보관 위치/번호 (원본 파일은 올리지 않음)"></div>
+                <div class="field"><label for="lvl-notes">메모</label><textarea id="lvl-notes" rows="2" placeholder="확인 경위 등 (선택)"></textarea></div>
+                <div class="hint">새로 추가한 자격정보는 항상 "입력됨" 상태로 시작합니다. 증빙과 함께 "검증완료"로 바꿔야 검증된 것으로 표시됩니다.</div>
+                <div class="msg" id="lvl-msg"></div>
+                <div class="modal-actions"><button type="submit" class="btn btn-primary">자격정보 추가</button></div>
+            </form>
+            <div class="modal-actions"><button type="button" class="btn btn-secondary" id="lv-licenses-close">닫기</button></div>
+        </div>
+    </div>
+
+    <!-- 📺 라이브 세션/상품/재고 모달 -->
+    <div class="modal-overlay lv-modal" id="lv-sessions-modal">
+        <div class="modal-box" style="max-width:780px;">
+            <h3 id="lv-sessions-title">🎥 방송·상품·재고</h3>
+            <div class="lv-actions" style="margin-bottom:14px;">
+                <a class="btn-xs" id="lv-sessions-host-link" href="#" target="_blank" rel="noopener" style="text-decoration:none; color:#C62828; border-color:#E57373;">🔴 방송 진행 화면</a>
+                <a class="btn-xs" id="lv-sessions-viewer-link" href="#" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;">👀 시청 페이지</a>
+            </div>
+            <div class="lv-card">
+                <h4>📦 채널 상품 큐레이션</h4>
+                <p class="lv-note" style="margin-bottom:8px;">이 채널에서 팔 상품을 고릅니다(상품 정보는 복제하지 않고 쇼핑몰 상품을 그대로 씁니다). ⭐추천 상품은 시청 페이지 맨 앞에 보입니다.</p>
+                <div id="lv-curate-picker"></div>
+                <div id="lv-curated-list" style="margin-top:8px;"></div>
+            </div>
+            <div class="lv-card">
+                <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                    <h4 style="margin:0;">🎬 방송 세션 &amp; 세션별 재고</h4>
+                </div>
+                <form id="lv-session-form" class="lv-inline-form" style="margin-bottom:10px;">
+                    <div class="field" style="flex:2 1 200px;"><label for="lvs-title">새 방송 제목 *</label><input type="text" id="lvs-title" required maxlength="120" placeholder="예: 가을 신상 첫 공개 라이브"></div>
+                    <div class="field"><label for="lvs-when">예정 시각(선택)</label><input type="datetime-local" id="lvs-when"></div>
+                    <button type="submit" class="btn btn-primary btn-sm" style="flex:0 0 auto;">+ 방송 만들기</button>
+                </form>
+                <div class="msg" id="lvs-msg"></div>
+                <div id="lv-sessions-list"></div>
+            </div>
+            <div class="modal-actions"><button type="button" class="btn btn-secondary" id="lv-sessions-close">닫기</button></div>
+        </div>
+    </div>
+
+    <!-- 📺 크리에이터 제휴 등록/수정 모달 (대표자 전용) -->
+    <div class="modal-overlay lv-modal" id="lv-creator-modal">
+        <div class="modal-box">
+            <h3 id="lv-creator-title">새 제휴 크리에이터</h3>
+            <form id="lv-creator-form">
+                <div class="field"><label for="lvcr-name">활동명 *</label><input type="text" id="lvcr-name" required maxlength="80" placeholder="예: 뷰티 크리에이터 OOO"></div>
+                <div class="field"><label for="lvcr-rate">커미션율(%)</label><input type="number" id="lvcr-rate" min="0" max="100" step="0.1" placeholder="10"></div>
+                <div class="field" id="lvcr-user-field"><label for="lvcr-user">연결할 회원 ID(선택)</label><input type="text" id="lvcr-user" autocomplete="off" placeholder="플랫폼 회원이 아니면 비워두세요"></div>
+                <div class="field" id="lvcr-status-field" hidden>
+                    <label for="lvcr-status">상태</label>
+                    <select id="lvcr-status"><option value="active">활성</option><option value="inactive">중지</option></select>
+                </div>
+                <div class="field" id="lvcr-tax-field" hidden>
+                    <label for="lvcr-tax">정산 세무처리</label>
+                    <select id="lvcr-tax">
+                        <option value="withholding">원천징수 3.3%</option>
+                        <option value="tax_invoice">세금계산서 발행</option>
+                        <option value="none">해당없음</option>
+                    </select>
+                </div>
+                <div class="field"><label for="lvcr-bank">은행</label><input type="text" id="lvcr-bank" maxlength="40" placeholder="예: 국민은행"></div>
+                <div class="field"><label for="lvcr-account">계좌번호</label><input type="text" id="lvcr-account" maxlength="40" inputmode="numeric" autocomplete="off" placeholder="숫자와 하이픈"></div>
+                <div class="field"><label for="lvcr-holder">예금주</label><input type="text" id="lvcr-holder" maxlength="40"></div>
+                <div class="hint">실제 제휴 계약이 확정된 크리에이터만 등록하세요. 수정(커미션율·계좌 등)은 대표자 2단계 인증이 필요합니다.</div>
+                <div class="msg" id="lvcr-msg"></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="lvcr-cancel">취소</button>
+                    <button type="submit" class="btn btn-primary" id="lvcr-submit">저장</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <footer style="text-align:center; padding:24px; color:var(--text-gray); font-size:0.85em;">
         WITH+ 관리자 페이지 · 공급자는 본인 등록 상품만, 관리자는 전체 상품/주문 관리가 가능합니다.
     </footer>
@@ -2005,6 +2231,7 @@
                     ${isAdmin ? '<button class="tab-btn" data-tab="best-settings">⭐ 베스트 상품 설정</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="home-banners">🖼 배너 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="subscriptions">🔄 정기배송 관리</button>' : ''}
+                    ${isAdmin ? '<button class="tab-btn" data-tab="live-commerce">📺 라이브 커머스</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="categories">🏷️ 카테고리 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="suppliers">🏭 공급자 관리</button>' : ''}
                     ${isAdmin ? '<button class="tab-btn" data-tab="seller-applications">🆕 판매자 입점신청</button>' : ''}
@@ -2224,6 +2451,40 @@
                 </div>
                 <div class="tab-panel" id="tab-flash-deals">
                     <div id="flash-deals-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                </div>
+                <div class="tab-panel" id="tab-live-commerce">
+                    <div class="lv-subtabs" role="tablist">
+                        <button type="button" class="lv-subtab-btn active" data-lvsub="channels">🎬 채널·방송</button>
+                        <button type="button" class="lv-subtab-btn" data-lvsub="rankings">🏆 등급·랭킹</button>
+                        <button type="button" class="lv-subtab-btn" data-lvsub="gifts">🎁 선물 카탈로그</button>
+                        <button type="button" class="lv-subtab-btn" data-lvsub="creators">🤝 크리에이터 제휴</button>
+                        <button type="button" class="lv-subtab-btn" data-lvsub="creator-settlements">💸 크리에이터 정산</button>
+                    </div>
+                    <div class="lv-subpanel active" id="lv-sub-channels">
+                        <div class="panel-toolbar">
+                            <span style="color:var(--text-gray); font-size:0.9em;">FAN+(스타·운동선수) · CREATOR+(크리에이터) · BRAND+(브랜드·공급자)가 함께 쓰는 WITH+ 라이브 채널입니다. 새 채널은 권리계약 확인 전까지 항상 비공개·비공식으로 시작합니다.</span>
+                            <button type="button" class="btn btn-primary" id="btn-new-live-channel">+ 새 채널 추가</button>
+                        </div>
+                        <div id="lv-channels-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                    </div>
+                    <div class="lv-subpanel" id="lv-sub-rankings">
+                        <div class="lv-card">
+                            <h4>🏆 채널 등급 기준</h4>
+                            <p class="lv-note">채널의 전체 기간 누적 매출로 등급을 매깁니다(기준 미달은 🥉 브론즈). 최근 30일 매출 TOP 3 채널에는 "이달의 TOP 판매자" 배지가 추가로 붙습니다.</p>
+                            <div id="lv-tier-settings" class="lv-inline-form"><span class="lv-note">불러오는 중...</span></div>
+                            <div class="msg" id="lv-tier-msg"></div>
+                        </div>
+                        <div id="lv-rankings-area"></div>
+                    </div>
+                    <div class="lv-subpanel" id="lv-sub-gifts">
+                        <div id="lv-gifts-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
+                    </div>
+                    <div class="lv-subpanel" id="lv-sub-creators">
+                        <div id="lv-creators-area"></div>
+                    </div>
+                    <div class="lv-subpanel" id="lv-sub-creator-settlements">
+                        <div id="lv-csettle-area"></div>
+                    </div>
                 </div>
                 <div class="tab-panel" id="tab-best-settings">
                     <div id="best-settings-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
@@ -13175,6 +13436,1142 @@
                         document.getElementById('import-area').dataset.loaded = '1';
                         loadImportTab();
                     }
+                });
+
+                // ===== 📺 라이브 커머스(WITH+ 라이브) 관리 — 채널·방송·상품 큐레이션·세션 재고·자격정보·등급/랭킹·선물·크리에이터 제휴 =====
+                // LIVE+ 관리자 화면(f230f04)의 "채널 관리" 탭을 WITH+ 탭 구조/스타일로 옮기고, LIVE+에는 화면이 없던
+                // 크리에이터 제휴(어필리에이트)·크리에이터 정산·선물 카탈로그 편집을 하위 탭으로 추가했다.
+                const lvEsc = (v) => WithPlus.escapeHtml(v === null || v === undefined ? '' : String(v));
+                const lvWon = (n) => Number(n || 0).toLocaleString('ko-KR') + '원';
+                const lvDateTime = (iso) => iso ? new Date(iso).toLocaleString('ko-KR', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-';
+                // authedFetch가 JSON이 아닌 응답(서버 미배포 404 HTML 등)에서 예외를 던지면 메시지를 사람이 읽을 수 있게 바꾼다
+                async function lvFetch(path, options) {
+                    try {
+                        return await authedFetch(path, options);
+                    } catch (err) {
+                        return { ok: false, status: 0, json: { success: false, message: '서버 응답을 해석하지 못했습니다(' + (err.message || '네트워크 오류') + ')' } };
+                    }
+                }
+                // 채널 유형 → [이름, 칩 스타일, 상위 브랜드(FAN+/CREATOR+/BRAND+)]
+                const LV_CHANNEL_TYPES = {
+                    star: ['스타', 'fan', 'FAN+'],
+                    athlete: ['운동선수', 'fan', 'FAN+'],
+                    creator: ['크리에이터', 'creator', 'CREATOR+'],
+                    brand: ['브랜드', 'brand', 'BRAND+'],
+                    supplier: ['공급자', 'brand', 'BRAND+']
+                };
+                const LV_CHANNEL_STATUS = { draft: ['비공개', 'inactive'], active: ['공개', 'active'], inactive: ['중지', 'out-of-stock'] };
+                const LV_SESSION_STATUS = { scheduled: ['예정', 'inactive'], live: ['🔴 방송중', 'out-of-stock'], ended: ['종료', 'inactive'] };
+                const LV_LICENSE_TYPES = {
+                    insurance_broker: '보험모집(보험업법)',
+                    prepaid_funeral_registration: '상조 선불식할부(할부거래법)',
+                    burial_facility_permit: '봉안시설(장사법)',
+                    real_estate_broker: '공인중개사(공인중개사법)',
+                    elder_care_facility_permit: '노인복지시설(노인복지법)',
+                    other: '기타'
+                };
+                // "입력됨"과 "검증완료"는 절대 같은 상태가 아니다 - 저장값(status)을 그대로 라벨로 보여준다
+                const LV_LICENSE_STATUS = { submitted: '입력됨', pending_review: '검토대기', verified: '검증완료', needs_more_info: '보완요청', suspended: '정지', revoked: '취소·말소' };
+                // 만료예정/만료는 저장값이 아니라 서버가 expires_at 기준으로 계산해 내려주는 표시 전용 값(expiry_state)
+                const LV_LICENSE_EXPIRY = { expiring_soon: '⏰ 만료예정', expired: '⛔ 만료' };
+                const LV_TAX_LABEL = { withholding: '원천징수 3.3%', tax_invoice: '세금계산서 발행', none: '해당없음' };
+                const LV_SETTLE_STATUS = { pending: ['지급대기', 'out-of-stock'], paid: ['지급완료', 'active'], cancelled: ['취소', 'inactive'] };
+                const LV_SLUG_RE = /^[a-z0-9-]+$/;
+
+                let lvChannels = [];
+                let lvRankByChannel = {};
+                const lvLoaded = {};
+
+                // --- 하위 탭 전환 (처음 열 때만 불러온다) ---
+                function lvOpenSub(key) {
+                    document.querySelectorAll('#tab-live-commerce .lv-subtab-btn').forEach(b => b.classList.toggle('active', b.dataset.lvsub === key));
+                    document.querySelectorAll('#tab-live-commerce .lv-subpanel').forEach(p => p.classList.toggle('active', p.id === 'lv-sub-' + key));
+                    if (lvLoaded[key]) return;
+                    lvLoaded[key] = true;
+                    if (key === 'channels') loadLvChannels();
+                    else if (key === 'rankings') loadLvRankings();
+                    else if (key === 'gifts') loadLvGiftCatalog();
+                    else if (key === 'creators') loadLvCreators();
+                    else if (key === 'creator-settlements') loadLvCreatorSettlements();
+                }
+                document.querySelectorAll('#tab-live-commerce .lv-subtab-btn').forEach(btn => {
+                    btn.addEventListener('click', () => lvOpenSub(btn.dataset.lvsub));
+                });
+                document.querySelector('[data-tab="live-commerce"]')?.addEventListener('click', () => {
+                    const active = document.querySelector('#tab-live-commerce .lv-subtab-btn.active');
+                    lvOpenSub(active ? active.dataset.lvsub : 'channels');
+                });
+
+                // =========================================================
+                // 🎬 채널 목록
+                // =========================================================
+                async function loadLvChannels() {
+                    const area = document.getElementById('lv-channels-area');
+                    area.innerHTML = '<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>';
+                    const [chRes, rankRes] = await Promise.all([
+                        lvFetch('/api/admin/live/channels'),
+                        lvFetch('/api/admin/live/channel-rankings')
+                    ]);
+                    if (!chRes.ok || !chRes.json.success) {
+                        area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>라이브 채널 목록을 불러오지 못했습니다</h3><p>${lvEsc(chRes.json.message || '')}</p></div>`;
+                        return;
+                    }
+                    lvChannels = chRes.json.data || [];
+                    // 등급/랭킹은 집계 오류가 나도 등급 칸만 "-"로 비우고 채널 목록은 정상 표시한다
+                    lvRankByChannel = {};
+                    if (rankRes.ok && rankRes.json.success) {
+                        (rankRes.json.data.rankings || []).forEach(r => { lvRankByChannel[r.channel_id] = r; });
+                    }
+                    if (lvChannels.length === 0) {
+                        area.innerHTML = '<div class="state-box"><div class="emoji">🎬</div><h3>등록된 라이브 채널이 없습니다</h3><p>"+ 새 채널 추가"로 첫 채널을 만들어보세요</p></div>';
+                        return;
+                    }
+                    area.innerHTML = `
+                        <div class="lv-scroll">
+                        <table>
+                            <thead><tr><th>채널</th><th>유형</th><th>상태</th><th>공식·검증</th><th>등급/랭킹</th><th>관리</th></tr></thead>
+                            <tbody>
+                                ${lvChannels.map(c => {
+                                    const t = LV_CHANNEL_TYPES[c.channel_type] || [c.channel_type, '', ''];
+                                    const st = LV_CHANNEL_STATUS[c.status] || [c.status, 'inactive'];
+                                    const r = lvRankByChannel[c.id];
+                                    const rankHtml = r
+                                        ? `${lvEsc(r.tier_emoji)} ${lvEsc(r.tier_label)}<br><span style="color:var(--text-gray); font-size:0.85em;">누적 ${lvWon(r.all_time_revenue)}</span>${r.top3_rank ? `<br><span style="color:var(--primary-color); font-weight:700;">🔥 이달의 TOP ${r.top3_rank}</span>` : ''}`
+                                        : '<span style="color:var(--text-gray);">-</span>';
+                                    return `
+                                <tr data-id="${lvEsc(c.id)}">
+                                    <td data-label="채널" class="cell-name">${lvEsc(c.name)}<div style="font-weight:400; font-size:0.8em; color:var(--text-gray);">/live/${lvEsc(c.slug)}${c.tagline ? ' · ' + lvEsc(c.tagline) : ''}</div></td>
+                                    <td data-label="유형"><span class="lv-chip ${t[1]}">${lvEsc(t[2])}</span> ${lvEsc(t[0])}</td>
+                                    <td data-label="상태"><span class="badge ${st[1]}">${lvEsc(st[0])}</span></td>
+                                    <td data-label="공식·검증" style="font-size:0.85em;">${c.is_official ? '✅ 공식' : '비공식'} · ${c.verification_status === 'verified' ? '검증 완료' : '미검증'}${c.rights_contract_ref ? `<div style="color:var(--text-gray);">계약 ${lvEsc(c.rights_contract_ref)}</div>` : ''}</td>
+                                    <td data-label="등급/랭킹" style="font-size:0.85em;">${rankHtml}</td>
+                                    <td data-label="관리">
+                                        <div class="lv-actions">
+                                            <button type="button" class="btn-xs" data-lv-act="edit">수정</button>
+                                            <button type="button" class="btn-xs" data-lv-act="sessions">🎥 방송·상품·재고</button>
+                                            <a class="btn-xs" href="/admin/live-host/${encodeURIComponent(c.id)}" target="_blank" rel="noopener" style="text-decoration:none; color:#C62828; border-color:#E57373;">🔴 방송 진행</a>
+                                            <a class="btn-xs" href="/live/${encodeURIComponent(c.slug)}" target="_blank" rel="noopener" style="text-decoration:none; color:inherit;" title="${c.status === 'active' ? '' : '공개 전에는 시청자에게 보이지 않습니다'}">👀 시청</a>
+                                            <button type="button" class="btn-xs" data-lv-act="tiers">🎖 멤버십</button>
+                                            <button type="button" class="btn-xs" data-lv-act="licenses">🪪 자격정보</button>
+                                            <button type="button" class="btn-xs ${c.status === 'active' ? 'danger' : ''}" data-lv-act="toggle">${c.status === 'active' ? '중지' : '공개'}</button>
+                                        </div>
+                                    </td>
+                                </tr>`;
+                                }).join('')}
+                            </tbody>
+                        </table>
+                        </div>`;
+                }
+                document.getElementById('lv-channels-area').addEventListener('click', async (e) => {
+                    const btn = e.target.closest('button[data-lv-act]');
+                    if (!btn) return;
+                    const c = lvChannels.find(x => x.id === btn.closest('tr').dataset.id);
+                    if (!c) return;
+                    const act = btn.dataset.lvAct;
+                    if (act === 'edit') openLvChannelModal(c);
+                    else if (act === 'sessions') openLvSessionsModal(c);
+                    else if (act === 'tiers') openLvTiersModal(c);
+                    else if (act === 'licenses') openLvLicensesModal(c);
+                    else if (act === 'toggle') {
+                        const next = c.status === 'active' ? 'inactive' : 'active';
+                        if (!confirm(next === 'active' ? `'${c.name}' 채널을 공개하시겠습니까? 시청 페이지가 바로 열립니다.` : `'${c.name}' 채널을 중지하시겠습니까? 시청 페이지가 닫힙니다.`)) return;
+                        btn.disabled = true;
+                        const { ok, json } = await lvFetch('/api/admin/live/channels/' + encodeURIComponent(c.id), { method: 'PATCH', body: JSON.stringify({ status: next }) });
+                        if (!ok) { btn.disabled = false; alert(json.message || '상태 변경에 실패했습니다'); return; }
+                        loadLvChannels();
+                    }
+                });
+
+                // =========================================================
+                // ➕ 채널 추가/수정 모달 (슬러그 자동 생성·검증)
+                // =========================================================
+                const lvChannelModal = document.getElementById('lv-channel-modal');
+                const lvcForm = document.getElementById('lv-channel-form');
+                const lvcMsg = document.getElementById('lvc-msg');
+                const lvcName = document.getElementById('lvc-name');
+                const lvcSlug = document.getElementById('lvc-slug');
+                const lvcSlugState = document.getElementById('lvc-slug-state');
+                let lvcEditing = null;
+                let lvcSlugTouched = false;
+
+                // 신규 등록일 때만 채널명 → 슬러그 자동 채움(카테고리 모달의 cfSlugTouched와 같은 "직접 고치면 멈춤" 패턴)
+                function lvValidateSlug() {
+                    if (lvcEditing) { lvcSlugState.textContent = ''; lvcSlugState.className = 'lv-slug-state'; return true; }
+                    const v = lvcSlug.value.trim();
+                    let err = '';
+                    if (!v) err = '슬러그를 입력해주세요';
+                    else if (!LV_SLUG_RE.test(v)) err = '영문 소문자·숫자·하이픈(-)만 쓸 수 있습니다';
+                    else if (/^-|-$/.test(v)) err = '하이픈(-)으로 시작하거나 끝날 수 없습니다';
+                    else if (lvChannels.some(c => c.slug === v)) err = '이미 사용 중인 슬러그입니다';
+                    lvcSlugState.textContent = err ? '⚠ ' + err : (v ? '✓ 사용 가능: /live/' + v : '');
+                    lvcSlugState.className = 'lv-slug-state ' + (err ? 'bad' : 'ok');
+                    return !err;
+                }
+                lvcName.addEventListener('input', () => {
+                    if (lvcEditing || lvcSlugTouched) return;
+                    lvcSlug.value = slugifyLabel(lvcName.value);
+                    lvValidateSlug();
+                });
+                lvcSlug.addEventListener('input', () => {
+                    lvcSlugTouched = true;
+                    // 대문자/공백은 바로 고쳐준다(입력 중 커서가 튀지 않게 값이 바뀔 때만 대입)
+                    const fixed = lvcSlug.value.toLowerCase().replace(/\s+/g, '-');
+                    if (fixed !== lvcSlug.value) lvcSlug.value = fixed;
+                    lvValidateSlug();
+                });
+
+                function openLvChannelModal(channel) {
+                    lvcForm.reset();
+                    lvcMsg.className = 'msg';
+                    lvcEditing = channel || null;
+                    lvcSlugTouched = false;
+                    const editing = !!channel;
+                    document.getElementById('lv-channel-modal-title').textContent = editing ? `라이브 채널 수정 — ${channel.name}` : '새 라이브 채널 추가';
+                    lvcSlug.disabled = editing;
+                    document.getElementById('lvc-type').disabled = editing;
+                    document.getElementById('lvc-owner-field').hidden = editing;
+                    document.getElementById('lvc-edit-only').hidden = !editing;
+                    document.getElementById('lvc-create-hint').hidden = editing;
+                    if (editing) {
+                        lvcName.value = channel.name || '';
+                        lvcSlug.value = channel.slug || '';
+                        document.getElementById('lvc-type').value = channel.channel_type;
+                        document.getElementById('lvc-tagline').value = channel.tagline || '';
+                        document.getElementById('lvc-desc').value = channel.description || '';
+                        document.getElementById('lvc-logo').value = channel.logo_url || '';
+                        document.getElementById('lvc-cover').value = channel.cover_image_url || '';
+                        document.getElementById('lvc-color').value = channel.primary_color || '';
+                        document.getElementById('lvc-status').value = channel.status || 'draft';
+                        document.getElementById('lvc-contract').value = channel.rights_contract_ref || '';
+                        document.getElementById('lvc-verify').value = channel.verification_status === 'verified' ? 'verified' : 'unverified';
+                        document.getElementById('lvc-official').checked = !!channel.is_official;
+                    }
+                    lvValidateSlug();
+                    if (!editing) { lvcSlugState.textContent = ''; lvcSlugState.className = 'lv-slug-state'; }
+                    lvChannelModal.classList.add('open');
+                    setTimeout(() => lvcName.focus(), 50);
+                }
+                document.getElementById('btn-new-live-channel').addEventListener('click', () => openLvChannelModal(null));
+                document.getElementById('lvc-cancel').addEventListener('click', () => lvChannelModal.classList.remove('open'));
+
+                lvcForm.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    lvcMsg.className = 'msg';
+                    const showErr = (m) => { lvcMsg.textContent = m; lvcMsg.className = 'msg error'; };
+                    const name = lvcName.value.trim();
+                    if (!name) return showErr('채널명을 입력해주세요');
+                    const color = document.getElementById('lvc-color').value.trim();
+                    if (color && !/^#[0-9a-fA-F]{6}$/.test(color)) return showErr('대표 색상은 #RRGGBB 형식으로 입력해주세요 (예: #D32F5B)');
+                    const common = {
+                        name,
+                        tagline: document.getElementById('lvc-tagline').value.trim() || null,
+                        description: document.getElementById('lvc-desc').value.trim() || null,
+                        logo_url: document.getElementById('lvc-logo').value.trim() || null,
+                        cover_image_url: document.getElementById('lvc-cover').value.trim() || null,
+                        primary_color: color || null
+                    };
+                    let path, method, body;
+                    if (lvcEditing) {
+                        const contract = document.getElementById('lvc-contract').value.trim();
+                        const verify = document.getElementById('lvc-verify').value;
+                        const official = document.getElementById('lvc-official').checked;
+                        // 서버도 막지만, 근거 없는 "공식/검증" 표시는 저장 전에 한 번 더 막는다
+                        if ((official || verify === 'verified') && !contract) return showErr('공식 채널·검증 완료로 바꾸려면 권리계약 참조번호가 필요합니다');
+                        body = Object.assign(common, {
+                            status: document.getElementById('lvc-status').value,
+                            rights_contract_ref: contract || null,
+                            verification_status: verify,
+                            is_official: official
+                        });
+                        path = '/api/admin/live/channels/' + encodeURIComponent(lvcEditing.id);
+                        method = 'PATCH';
+                    } else {
+                        if (!lvValidateSlug()) return showErr('슬러그를 확인해주세요');
+                        const owner = document.getElementById('lvc-owner').value.trim();
+                        if (owner && !/^[0-9a-fA-F-]{36}$/.test(owner)) return showErr('채널 소유자 회원 ID는 UUID 형식이어야 합니다');
+                        body = Object.assign(common, {
+                            slug: lvcSlug.value.trim(),
+                            channel_type: document.getElementById('lvc-type').value,
+                            owner_user_id: owner || null
+                        });
+                        path = '/api/admin/live/channels';
+                        method = 'POST';
+                    }
+                    const submitBtn = document.getElementById('lvc-submit');
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = '저장 중...';
+                    const { ok, json } = await lvFetch(path, { method, body: JSON.stringify(body) });
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = '저장';
+                    if (!ok) {
+                        const m = json.message || '저장에 실패했습니다';
+                        return showErr(/duplicate|unique/i.test(m) ? '이미 사용 중인 슬러그입니다' : m);
+                    }
+                    lvcMsg.textContent = lvcEditing ? '수정되었습니다' : '채널이 추가되었습니다 (비공개·비공식 상태)';
+                    lvcMsg.className = 'msg success';
+                    setTimeout(() => { lvChannelModal.classList.remove('open'); loadLvChannels(); }, 700);
+                });
+
+                // =========================================================
+                // 🎖 멤버십 등급 모달 — 관리자 등급 목록 API가 없어 공개 채널 상세(공개 채널만)에서 읽는다
+                // =========================================================
+                const lvTiersModal = document.getElementById('lv-tiers-modal');
+                let lvTiersChannel = null;
+                function openLvTiersModal(channel) {
+                    lvTiersChannel = channel;
+                    document.getElementById('lv-tiers-title').textContent = `🎖 멤버십 등급 — ${channel.name}`;
+                    document.getElementById('lv-tier-form').reset();
+                    document.getElementById('lvt-msg').className = 'msg';
+                    lvTiersModal.classList.add('open');
+                    loadLvTiers();
+                }
+                async function loadLvTiers() {
+                    const area = document.getElementById('lv-tiers-list');
+                    area.innerHTML = '<p class="lv-note">불러오는 중...</p>';
+                    // 관리자 전용 등급 API - 비공개(준비중·중지) 채널의 등급도 함께 보인다
+                    const { ok, json } = await lvFetch('/api/admin/live/channels/' + encodeURIComponent(lvTiersChannel.id) + '/tiers');
+                    if (!ok || !json.success) { area.innerHTML = `<p style="color:#C62828; font-size:0.85em;">${lvEsc(json.message || '등급을 불러오지 못했습니다')}</p>`; return; }
+                    const tiers = (json.data && json.data.tiers) || [];
+                    area.innerHTML = `<p class="lv-note" style="margin-bottom:6px;">가입 회원 ${Number(json.data.member_count || 0).toLocaleString('ko-KR')}명</p>` + (tiers.length ? tiers.map(t => `
+                        <div class="admin-row">
+                            <div class="admin-row-info">
+                                <div class="vname">${lvEsc(t.tier_name)} <span class="lv-chip">${lvEsc(t.tier_key)}</span> ${t.is_paid ? `<span class="badge out-of-stock">유료 ${t.price_monthly ? lvWon(t.price_monthly) + '/월' : ''}</span>` : '<span class="badge active">무료</span>'}</div>
+                                ${t.benefits_description ? `<div class="vmeta">${lvEsc(t.benefits_description)}</div>` : ''}
+                            </div>
+                            <span class="lv-note" style="margin:0;">순서 ${Number(t.tier_order || 0)}</span>
+                        </div>`).join('') : '<p class="lv-note">아직 등급이 없습니다. 등급이 없으면 기본 무료 가입만 가능합니다.</p>');
+                }
+                document.getElementById('lv-tier-form').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const msg = document.getElementById('lvt-msg');
+                    msg.className = 'msg';
+                    const key = document.getElementById('lvt-key').value.trim().toLowerCase();
+                    if (!/^[a-z0-9_-]+$/.test(key)) { msg.textContent = '등급 키는 영문 소문자·숫자·_·- 만 쓸 수 있습니다'; msg.className = 'msg error'; return; }
+                    const isPaid = document.getElementById('lvt-paid').checked;
+                    const priceRaw = document.getElementById('lvt-price').value;
+                    const payload = {
+                        tier_key: key,
+                        tier_name: document.getElementById('lvt-name').value.trim(),
+                        tier_order: Number(document.getElementById('lvt-order').value || 0),
+                        is_paid: isPaid,
+                        price_monthly: isPaid && priceRaw !== '' ? Number(priceRaw) : null,
+                        benefits_description: document.getElementById('lvt-benefits').value.trim() || null
+                    };
+                    const btn = e.target.querySelector('button[type="submit"]');
+                    btn.disabled = true;
+                    const { ok, json } = await lvFetch('/api/admin/live/channels/' + encodeURIComponent(lvTiersChannel.id) + '/tiers', { method: 'POST', body: JSON.stringify(payload) });
+                    btn.disabled = false;
+                    if (!ok) { msg.textContent = json.message || '등급 추가에 실패했습니다'; msg.className = 'msg error'; return; }
+                    e.target.reset();
+                    msg.textContent = '등급이 추가되었습니다';
+                    msg.className = 'msg success';
+                    loadLvTiers();
+                });
+                document.getElementById('lv-tiers-close').addEventListener('click', () => lvTiersModal.classList.remove('open'));
+
+                // =========================================================
+                // 🪪 자격/등록정보(업종별 라이선스) 모달 — 법적 판단 없이 확인된 정보를 기록만 한다
+                // =========================================================
+                const lvLicensesModal = document.getElementById('lv-licenses-modal');
+                const lvlForm = document.getElementById('lv-license-form');
+                const lvlMsg = document.getElementById('lvl-msg');
+                let lvLicensesChannel = null;
+                let lvLicensesCache = [];
+                const lvLicBase = () => '/api/admin/live/channels/' + encodeURIComponent(lvLicensesChannel.id) + '/licenses';
+
+                function openLvLicensesModal(channel) {
+                    lvLicensesChannel = channel;
+                    document.getElementById('lv-licenses-title').textContent = `🪪 자격/등록정보 — ${channel.name}`;
+                    lvlForm.reset();
+                    lvlMsg.className = 'msg';
+                    lvLicensesModal.classList.add('open');
+                    loadLvLicenses();
+                }
+                async function loadLvLicenses() {
+                    const area = document.getElementById('lv-licenses-list');
+                    area.innerHTML = '<p class="lv-note">불러오는 중...</p>';
+                    const { ok, json } = await lvFetch(lvLicBase());
+                    if (!ok || !json.success) { area.innerHTML = `<p style="color:#C62828; font-size:0.85em;">${lvEsc(json.message || '자격정보를 불러오지 못했습니다')}</p>`; return; }
+                    lvLicensesCache = json.data || [];
+                    if (!lvLicensesCache.length) { area.innerHTML = '<p class="lv-note">등록된 자격/등록정보가 없습니다.</p>'; return; }
+                    area.innerHTML = lvLicensesCache.map(l => `
+                        <div class="admin-row" data-license-id="${lvEsc(l.id)}" style="align-items:flex-start;">
+                            <div class="admin-row-info">
+                                <div class="vname">${lvEsc(LV_LICENSE_TYPES[l.license_type] || l.license_type)}
+                                    <span class="badge ${l.status === 'verified' ? 'active' : 'inactive'}">${lvEsc(LV_LICENSE_STATUS[l.status] || l.status)}</span>
+                                    ${LV_LICENSE_EXPIRY[l.expiry_state] ? `<span class="badge out-of-stock">${LV_LICENSE_EXPIRY[l.expiry_state]}</span>` : ''}
+                                </div>
+                                <div class="vmeta">${lvEsc(l.license_holder_name || '-')}${l.license_holder_org ? ' (' + lvEsc(l.license_holder_org) + ')' : ''} · ${lvEsc(l.license_number || '번호 미기재')}${l.issuing_authority ? ' · ' + lvEsc(l.issuing_authority) : ''}</div>
+                                <div class="vmeta">${l.issued_at ? '등록일 ' + lvEsc(l.issued_at) : ''}${l.expires_at ? ' · 만료일 ' + lvEsc(l.expires_at) : ''}${l.status === 'verified' && l.verified_at ? ' · 검증일 ' + lvEsc(String(l.verified_at).slice(0, 10)) : ''}</div>
+                                ${(l.region_scope || l.product_scope || l.engagement_ref || l.document_ref) ? `<div class="vmeta">${[l.region_scope ? '영업지역: ' + lvEsc(l.region_scope) : '', l.product_scope ? '취급범위: ' + lvEsc(l.product_scope) : '', l.engagement_ref ? '계약참조: ' + lvEsc(l.engagement_ref) : '', l.document_ref ? '증빙: ' + lvEsc(l.document_ref) : ''].filter(Boolean).join(' · ')}</div>` : ''}
+                            </div>
+                            <div class="lv-actions" style="align-items:center;">
+                                <select class="small-input lvl-status" aria-label="자격 상태 변경">
+                                    ${Object.entries(LV_LICENSE_STATUS).map(([v, label]) => `<option value="${v}" ${l.status === v ? 'selected' : ''}>${label}</option>`).join('')}
+                                </select>
+                                <button type="button" class="btn-xs lvl-history">이력</button>
+                                <button type="button" class="btn-xs danger lvl-remove">삭제</button>
+                            </div>
+                            <div class="lv-row-sub lvl-history-area" hidden style="font-size:0.8em;"></div>
+                        </div>`).join('');
+                }
+                const lvLicList = document.getElementById('lv-licenses-list');
+                lvLicList.addEventListener('change', async (e) => {
+                    const sel = e.target.closest('.lvl-status');
+                    if (!sel) return;
+                    const row = sel.closest('.admin-row');
+                    const lic = lvLicensesCache.find(x => x.id === row.dataset.licenseId);
+                    if (!lic) return;
+                    const payload = { status: sel.value };
+                    if (sel.value === 'verified' && !lic.document_ref) {
+                        const docRef = (prompt('검증완료로 바꾸려면 증빙 참조번호가 필요합니다. 증빙 참조번호를 입력하세요:') || '').trim();
+                        if (!docRef) { sel.value = lic.status; return; }
+                        payload.document_ref = docRef;
+                    }
+                    payload.status_note = prompt('상태 변경 사유(선택, 이력에 기록됩니다):') || '';
+                    const { ok, json } = await lvFetch(lvLicBase() + '/' + encodeURIComponent(lic.id), { method: 'PATCH', body: JSON.stringify(payload) });
+                    if (!ok) { alert(json.message || '상태 변경에 실패했습니다'); sel.value = lic.status; return; }
+                    loadLvLicenses();
+                });
+                lvLicList.addEventListener('click', async (e) => {
+                    const btn = e.target.closest('button');
+                    if (!btn) return;
+                    const row = btn.closest('.admin-row');
+                    const licId = row && row.dataset.licenseId;
+                    if (!licId) return;
+                    if (btn.classList.contains('lvl-history')) {
+                        const h = row.querySelector('.lvl-history-area');
+                        if (!h.hidden) { h.hidden = true; return; }
+                        h.hidden = false;
+                        h.textContent = '이력 불러오는 중...';
+                        const { ok, json } = await lvFetch(lvLicBase() + '/' + encodeURIComponent(licId) + '/history');
+                        if (!ok || !(json.data || []).length) { h.innerHTML = '<span style="color:var(--text-gray);">이력이 없습니다.</span>'; return; }
+                        h.innerHTML = json.data.map(x => `<div style="padding:2px 0;">${lvEsc(lvDateTime(x.changed_at))} — ${lvEsc(LV_LICENSE_STATUS[x.from_status] || x.from_status || '(신규)')} → <b>${lvEsc(LV_LICENSE_STATUS[x.to_status] || x.to_status)}</b> (${lvEsc((x.profiles && (x.profiles.full_name || x.profiles.email)) || '알 수 없음')})${x.note ? ' · ' + lvEsc(x.note) : ''}</div>`).join('');
+                    } else if (btn.classList.contains('lvl-remove')) {
+                        if (!confirm('이 자격/등록정보를 삭제하시겠습니까?')) return;
+                        const { ok, json } = await lvFetch(lvLicBase() + '/' + encodeURIComponent(licId), { method: 'DELETE' });
+                        if (!ok) { alert(json.message || '삭제에 실패했습니다'); return; }
+                        loadLvLicenses();
+                    }
+                });
+                lvlForm.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    lvlMsg.className = 'msg';
+                    const v = (id) => document.getElementById(id).value.trim();
+                    const payload = {
+                        license_type: v('lvl-type'), license_number: v('lvl-number'), license_holder_name: v('lvl-holder'),
+                        license_holder_org: v('lvl-org'), issuing_authority: v('lvl-authority'),
+                        issued_at: v('lvl-issued') || null, expires_at: v('lvl-expires') || null,
+                        region_scope: v('lvl-region'), product_scope: v('lvl-scope'), engagement_ref: v('lvl-engagement'),
+                        document_ref: v('lvl-docref'), notes: v('lvl-notes')
+                    };
+                    if (payload.issued_at && payload.expires_at && payload.expires_at < payload.issued_at) { lvlMsg.textContent = '만료일이 등록일보다 빠릅니다'; lvlMsg.className = 'msg error'; return; }
+                    const btn = lvlForm.querySelector('button[type="submit"]');
+                    btn.disabled = true;
+                    const { ok, json } = await lvFetch(lvLicBase(), { method: 'POST', body: JSON.stringify(payload) });
+                    btn.disabled = false;
+                    if (!ok) { lvlMsg.textContent = json.message || '자격정보 추가에 실패했습니다'; lvlMsg.className = 'msg error'; return; }
+                    lvlForm.reset();
+                    lvlMsg.textContent = '자격/등록정보가 추가되었습니다';
+                    lvlMsg.className = 'msg success';
+                    loadLvLicenses();
+                });
+                document.getElementById('lv-licenses-close').addEventListener('click', () => lvLicensesModal.classList.remove('open'));
+
+                // =========================================================
+                // 🎥 방송·상품·재고 모달 (상품 큐레이션 + 세션 + 세션별 재고 배정 + 채팅 모더레이션)
+                // =========================================================
+                const lvSessionsModal = document.getElementById('lv-sessions-modal');
+                let lvSessChannel = null;
+                let lvCurated = [];
+                let lvSessions = [];
+                const lvInvOpen = new Set();
+                const lvChatOpen = new Set();
+                const lvChBase = () => '/api/admin/live/channels/' + encodeURIComponent(lvSessChannel.id);
+
+                async function openLvSessionsModal(channel) {
+                    lvSessChannel = channel;
+                    document.getElementById('lv-sessions-title').textContent = `🎥 방송·상품·재고 — ${channel.name}`;
+                    document.getElementById('lv-sessions-host-link').href = '/admin/live-host/' + encodeURIComponent(channel.id);
+                    document.getElementById('lv-sessions-viewer-link').href = '/live/' + encodeURIComponent(channel.slug);
+                    document.getElementById('lv-session-form').reset();
+                    document.getElementById('lvs-msg').className = 'msg';
+                    lvInvOpen.clear();
+                    lvChatOpen.clear();
+                    lvSessionsModal.classList.add('open');
+                    const picker = document.getElementById('lv-curate-picker');
+                    picker.innerHTML = '<p class="lv-note">상품 목록 불러오는 중...</p>';
+                    fdLoadProducts().then(products => {
+                        fdProductPicker(picker, products, async (p) => {
+                            if (lvCurated.some(l => l.product_id === p.id)) { alert('이미 큐레이션된 상품입니다'); return; }
+                            const { ok, json } = await lvFetch(lvChBase() + '/products', { method: 'POST', body: JSON.stringify({ product_id: p.id }) });
+                            if (!ok) { alert(json.message || '추가에 실패했습니다'); return; }
+                            await loadLvCurated();
+                            loadLvSessions();
+                        }, '추가할 상품명 검색');
+                    }).catch(err => { picker.innerHTML = `<p style="color:#C62828; font-size:0.85em;">${lvEsc(err.message)}</p>`; });
+                    await loadLvCurated();
+                    loadLvSessions();
+                }
+
+                async function loadLvCurated() {
+                    const area = document.getElementById('lv-curated-list');
+                    area.innerHTML = '<p class="lv-note">불러오는 중...</p>';
+                    const { ok, json } = await lvFetch(lvChBase() + '/products');
+                    if (!ok || !json.success) { area.innerHTML = `<p style="color:#C62828; font-size:0.85em;">${lvEsc(json.message || '큐레이션 상품을 불러오지 못했습니다')}</p>`; return; }
+                    lvCurated = json.data || [];
+                    if (!lvCurated.length) { area.innerHTML = '<p class="lv-note">아직 큐레이션된 상품이 없습니다. 위 검색창에서 추가해주세요.</p>'; return; }
+                    area.innerHTML = lvCurated.map(l => {
+                        const p = l.products_with || {};
+                        return `
+                        <div class="admin-row" data-product-id="${lvEsc(l.product_id)}">
+                            <div class="admin-row-info">
+                                <div class="vname">${l.is_featured ? '⭐ ' : ''}${lvEsc(p.name || '(삭제된 상품)')}</div>
+                                <div class="vmeta">${typeof p.live_price === 'number' ? '라이브가 ' + WithPlus.formatPrice(p.live_price) : ''}${p.stock !== undefined && p.stock !== null ? ' · 재고 ' + Number(p.stock).toLocaleString('ko-KR') : ''}${p.status && p.status !== 'active' ? ' · <span style="color:#C62828;">판매중 아님</span>' : ''}</div>
+                            </div>
+                            <div class="lv-actions">
+                                <button type="button" class="btn-xs lvp-feature">${l.is_featured ? '추천 해제' : '⭐ 추천'}</button>
+                                <button type="button" class="btn-xs danger lvp-remove">제외</button>
+                            </div>
+                        </div>`;
+                    }).join('');
+                }
+                document.getElementById('lv-curated-list').addEventListener('click', async (e) => {
+                    const btn = e.target.closest('button');
+                    if (!btn) return;
+                    const pid = btn.closest('.admin-row').dataset.productId;
+                    const link = lvCurated.find(l => l.product_id === pid);
+                    if (!link) return;
+                    if (btn.classList.contains('lvp-feature')) {
+                        btn.disabled = true;
+                        // 추가 API가 (channel_id, product_id) 업서트라 추천 여부만 바꿔 다시 보낸다
+                        const { ok, json } = await lvFetch(lvChBase() + '/products', { method: 'POST', body: JSON.stringify({ product_id: pid, is_featured: !link.is_featured }) });
+                        if (!ok) { btn.disabled = false; alert(json.message || '변경에 실패했습니다'); return; }
+                        loadLvCurated();
+                    } else if (btn.classList.contains('lvp-remove')) {
+                        if (lvSessions.some(s => s.status !== 'ended' && s.pinned_product_id === pid)) { alert('진행 중이거나 예정된 방송의 고정 상품입니다. 먼저 방송의 상품핀을 해제해주세요.'); return; }
+                        if (!confirm('이 상품을 채널 큐레이션에서 제외하시겠습니까?')) return;
+                        const { ok, json } = await lvFetch(lvChBase() + '/products/' + encodeURIComponent(pid), { method: 'DELETE' });
+                        if (!ok) { alert(json.message || '제외에 실패했습니다'); return; }
+                        await loadLvCurated();
+                        loadLvSessions();
+                    }
+                });
+
+                async function loadLvSessions() {
+                    const area = document.getElementById('lv-sessions-list');
+                    area.innerHTML = '<p class="lv-note">불러오는 중...</p>';
+                    const { ok, json } = await lvFetch(lvChBase() + '/sessions');
+                    if (!ok || !json.success) { area.innerHTML = `<p style="color:#C62828; font-size:0.85em;">${lvEsc(json.message || '방송 목록을 불러오지 못했습니다')}</p>`; return; }
+                    lvSessions = json.data || [];
+                    if (!lvSessions.length) { area.innerHTML = '<p class="lv-note">아직 만든 방송이 없습니다. 위에서 첫 방송을 만들어보세요.</p>'; return; }
+                    area.innerHTML = lvSessions.map(s => {
+                        const st = LV_SESSION_STATUS[s.status] || [s.status, 'inactive'];
+                        const when = s.status === 'live' ? '시작 ' + lvDateTime(s.started_at) : (s.status === 'ended' ? '종료 ' + lvDateTime(s.ended_at) : (s.scheduled_at ? '예정 ' + lvDateTime(s.scheduled_at) : '시각 미정'));
+                        return `
+                        <div class="admin-row" data-session-id="${lvEsc(s.id)}" style="align-items:flex-start;">
+                            <div class="admin-row-info">
+                                <div class="vname">${lvEsc(s.title)} <span class="badge ${st[1]}">${lvEsc(st[0])}</span></div>
+                                <div class="vmeta">${lvEsc(when)} · 고정상품: ${s.products_with && s.products_with.name ? lvEsc(s.products_with.name) : '(없음)'}</div>
+                                ${s.status !== 'ended' ? `
+                                <label style="display:flex; align-items:center; gap:6px; margin-top:6px; font-size:0.85em; color:var(--text-gray); flex-wrap:wrap;">📌 상품핀
+                                    <select class="small-input lvs-pin" style="max-width:100%; min-width:0;">
+                                        <option value="">(없음)</option>
+                                        ${lvCurated.map(l => `<option value="${lvEsc(l.product_id)}" ${s.pinned_product_id === l.product_id ? 'selected' : ''}>${lvEsc((l.products_with && l.products_with.name) || l.product_id)}</option>`).join('')}
+                                    </select>
+                                </label>` : ''}
+                            </div>
+                            <div class="lv-actions">
+                                ${s.status === 'scheduled' ? '<button type="button" class="btn-xs lvs-start">▶ 방송 시작</button>' : ''}
+                                ${s.status === 'live' ? '<button type="button" class="btn-xs danger lvs-end">■ 방송 종료</button>' : ''}
+                                <button type="button" class="btn-xs lvs-inv">📦 재고</button>
+                                <button type="button" class="btn-xs lvs-chat">💬 채팅</button>
+                            </div>
+                            <div class="lv-row-sub lvs-inv-area" ${lvInvOpen.has(s.id) ? '' : 'hidden'}></div>
+                            <div class="lv-row-sub lvs-chat-area" ${lvChatOpen.has(s.id) ? '' : 'hidden'}></div>
+                        </div>`;
+                    }).join('');
+                    // 열려 있던 재고/채팅 패널은 목록을 새로 그린 뒤에도 이어서 보여준다
+                    lvInvOpen.forEach(id => { const row = area.querySelector(`.admin-row[data-session-id="${CSS.escape(id)}"]`); if (row) loadLvInventory(id, row.querySelector('.lvs-inv-area')); });
+                    lvChatOpen.forEach(id => { const row = area.querySelector(`.admin-row[data-session-id="${CSS.escape(id)}"]`); if (row) loadLvChat(id, row.querySelector('.lvs-chat-area')); });
+                }
+                const lvSessList = document.getElementById('lv-sessions-list');
+                lvSessList.addEventListener('change', async (e) => {
+                    const sel = e.target.closest('.lvs-pin');
+                    if (!sel) return;
+                    const sid = sel.closest('.admin-row').dataset.sessionId;
+                    sel.disabled = true;
+                    const { ok, json } = await lvFetch(lvChBase() + '/sessions/' + encodeURIComponent(sid), { method: 'PATCH', body: JSON.stringify({ pinned_product_id: sel.value || null }) });
+                    if (!ok) alert(json.message || '상품핀 변경에 실패했습니다');
+                    loadLvSessions();
+                });
+                lvSessList.addEventListener('click', async (e) => {
+                    const btn = e.target.closest('button');
+                    if (!btn) return;
+                    const row = btn.closest('.admin-row[data-session-id]');
+                    if (!row) return;
+                    const sid = row.dataset.sessionId;
+                    if (btn.classList.contains('lvs-start') || btn.classList.contains('lvs-end')) {
+                        const toLive = btn.classList.contains('lvs-start');
+                        if (!confirm(toLive ? '이 방송을 "방송중"으로 바꾸시겠습니까? 채널 가입 회원에게 라이브 시작 알림이 나갑니다.' : '이 방송을 종료하시겠습니까?')) return;
+                        btn.disabled = true;
+                        const { ok, json } = await lvFetch(lvChBase() + '/sessions/' + encodeURIComponent(sid), { method: 'PATCH', body: JSON.stringify({ status: toLive ? 'live' : 'ended' }) });
+                        if (!ok) { btn.disabled = false; alert(json.message || '전환에 실패했습니다'); return; }
+                        loadLvSessions();
+                    } else if (btn.classList.contains('lvs-inv')) {
+                        const box = row.querySelector('.lvs-inv-area');
+                        if (lvInvOpen.has(sid)) { lvInvOpen.delete(sid); box.hidden = true; return; }
+                        lvInvOpen.add(sid); box.hidden = false;
+                        loadLvInventory(sid, box);
+                    } else if (btn.classList.contains('lvs-chat')) {
+                        const box = row.querySelector('.lvs-chat-area');
+                        if (lvChatOpen.has(sid)) { lvChatOpen.delete(sid); box.hidden = true; return; }
+                        lvChatOpen.add(sid); box.hidden = false;
+                        loadLvChat(sid, box);
+                    }
+                });
+                document.getElementById('lv-session-form').addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    const msg = document.getElementById('lvs-msg');
+                    msg.className = 'msg';
+                    const title = document.getElementById('lvs-title').value.trim();
+                    const when = document.getElementById('lvs-when').value;
+                    if (!title) return;
+                    const body = { title };
+                    if (when) {
+                        const d = new Date(when);
+                        if (isNaN(d.getTime())) { msg.textContent = '예정 시각을 확인해주세요'; msg.className = 'msg error'; return; }
+                        body.scheduled_at = d.toISOString();
+                    }
+                    const btn = e.target.querySelector('button[type="submit"]');
+                    btn.disabled = true;
+                    const { ok, json } = await lvFetch(lvChBase() + '/sessions', { method: 'POST', body: JSON.stringify(body) });
+                    btn.disabled = false;
+                    if (!ok) { msg.textContent = json.message || '방송 만들기에 실패했습니다'; msg.className = 'msg error'; return; }
+                    e.target.reset();
+                    msg.textContent = '방송이 예정 상태로 만들어졌습니다. "🔴 방송 진행 화면"에서 송출·진행할 수 있습니다.';
+                    msg.className = 'msg success';
+                    loadLvSessions();
+                });
+
+                async function loadLvInventory(sid, box) {
+                    box.innerHTML = '<p class="lv-note">재고 불러오는 중...</p>';
+                    const { ok, json } = await lvFetch(lvChBase() + '/sessions/' + encodeURIComponent(sid) + '/inventory');
+                    if (!ok || !json.success) { box.innerHTML = `<p style="color:#C62828; font-size:0.8em;">${lvEsc(json.message || '재고 정보를 불러오지 못했습니다')}</p>`; return; }
+                    const rows = json.data || [];
+                    box.innerHTML = (rows.length ? `
+                        <div class="lv-scroll"><table class="lv-mini-table">
+                            <thead><tr><th>상품</th><th>배정</th><th>안전재고</th><th>예약중</th><th>판매확정</th><th>가용</th></tr></thead>
+                            <tbody>${rows.map(r => `<tr>
+                                <td data-label="상품">${lvEsc((r.products_with && r.products_with.name) || r.product_id)}</td>
+                                <td data-label="배정">${Number(r.allocated_qty || 0)}</td>
+                                <td data-label="안전재고">${Number(r.safety_stock || 0)}</td>
+                                <td data-label="예약중">${Number(r.reserved_qty || 0)}</td>
+                                <td data-label="판매확정">${Number(r.sold_qty || 0)}</td>
+                                <td data-label="가용"><b>${Number(r.available_qty || 0)}</b></td>
+                            </tr>`).join('')}</tbody>
+                        </table></div>` : '<p class="lv-note">이 방송에 배정된 재고가 없습니다. 배정하지 않은 상품은 쇼핑몰 재고를 그대로 씁니다.</p>') + `
+                        <div class="lv-inline-form" style="margin-top:8px;">
+                            <div class="field"><label>상품</label><select class="lvi-product"><option value="">상품 선택</option>${lvCurated.map(l => `<option value="${lvEsc(l.product_id)}">${lvEsc((l.products_with && l.products_with.name) || l.product_id)}</option>`).join('')}</select></div>
+                            <div class="field" style="flex-basis:90px;"><label>배정수량</label><input type="number" class="lvi-qty" min="0" step="1"></div>
+                            <div class="field" style="flex-basis:90px;"><label>안전재고</label><input type="number" class="lvi-safety" min="0" step="1" placeholder="0"></div>
+                            <button type="button" class="btn btn-secondary btn-sm lvi-save" style="flex:0 0 auto;">배정/재배정</button>
+                        </div>
+                        <div class="msg lvi-msg"></div>`;
+                    box.querySelector('.lvi-save').addEventListener('click', async () => {
+                        const msg = box.querySelector('.lvi-msg');
+                        const pid = box.querySelector('.lvi-product').value;
+                        const qty = box.querySelector('.lvi-qty').value;
+                        const safety = box.querySelector('.lvi-safety').value || '0';
+                        if (!pid || qty === '' || Number(qty) < 0 || Number(safety) < 0) { msg.textContent = '상품과 0 이상의 배정수량을 입력해주세요'; msg.className = 'msg lvi-msg error'; return; }
+                        const { ok: ok2, json: j } = await lvFetch(lvChBase() + '/sessions/' + encodeURIComponent(sid) + '/inventory', {
+                            method: 'POST', body: JSON.stringify({ product_id: pid, allocated_qty: parseInt(qty, 10), safety_stock: parseInt(safety, 10) })
+                        });
+                        if (!ok2) { msg.textContent = j.message || '배정에 실패했습니다'; msg.className = 'msg lvi-msg error'; return; }
+                        loadLvInventory(sid, box);
+                    });
+                }
+
+                // 채팅 모더레이션 - 실명과 함께 보여주고(악용 대응), 하드 삭제 없이 숨기기/다시 보이기만 한다(분쟁 시 근거 보존).
+                // 대형 방송에서 수천 건이 쌓여도 한 번에 다 받지 않도록 "이전 채팅 더 보기"로 페이지를 이어붙인다.
+                async function loadLvChat(sid, box, loadMore) {
+                    if (!loadMore) { box.innerHTML = '<p class="lv-note">채팅 불러오는 중...</p>'; box._rows = []; box._hasMore = false; }
+                    const rows = box._rows || [];
+                    const qs = (loadMore && rows.length) ? '?before=' + encodeURIComponent(rows[rows.length - 1].created_at) : '';
+                    const { ok, json } = await lvFetch(lvChBase() + '/sessions/' + encodeURIComponent(sid) + '/chat' + qs);
+                    if (!ok || !json.success) { box.innerHTML = `<p style="color:#C62828; font-size:0.8em;">${lvEsc(json.message || '채팅을 불러오지 못했습니다')}</p>`; return; }
+                    box._rows = rows.concat(json.data || []);
+                    box._hasMore = !!json.has_more;
+                    const all = box._rows;
+                    box.innerHTML = all.length === 0 ? '<p class="lv-note">아직 채팅이 없습니다.</p>' : `
+                        <div style="max-height:260px; overflow-y:auto; display:flex; flex-direction:column; gap:4px;">
+                            ${box._hasMore ? '<button type="button" class="btn-xs lvc-more" style="width:100%;">이전 채팅 더 보기</button>' : ''}
+                            ${all.slice().reverse().map(m => `
+                            <div data-message-id="${lvEsc(m.id)}" style="display:flex; justify-content:space-between; align-items:flex-start; gap:6px; font-size:0.8em; padding:4px 6px; border-radius:6px; ${m.is_hidden ? 'opacity:0.55; background:#FAFAFA;' : ''}">
+                                <span style="min-width:0; word-break:break-word;"><b>${lvEsc(m.sender_name)}</b>: ${lvEsc(m.message)}${m.is_hidden ? ' <span style="color:#C62828;">(숨김)</span>' : ''}</span>
+                                <button type="button" class="btn-xs lvc-hide" data-hidden="${m.is_hidden ? '1' : '0'}" style="flex-shrink:0;">${m.is_hidden ? '다시 보이기' : '숨기기'}</button>
+                            </div>`).join('')}
+                        </div>`;
+                    const more = box.querySelector('.lvc-more');
+                    if (more) more.addEventListener('click', () => { more.disabled = true; more.textContent = '불러오는 중...'; loadLvChat(sid, box, true); });
+                    box.querySelectorAll('.lvc-hide').forEach(b => b.addEventListener('click', async () => {
+                        const mid = b.closest('[data-message-id]').dataset.messageId;
+                        const nextHidden = b.dataset.hidden !== '1';
+                        if (nextHidden && !confirm('이 메시지를 숨기시겠습니까? (삭제되지 않고 관리자 화면에는 계속 보입니다)')) return;
+                        const { ok: ok2, json: j } = await lvFetch(lvChBase() + '/sessions/' + encodeURIComponent(sid) + '/chat/' + encodeURIComponent(mid), { method: 'PATCH', body: JSON.stringify({ is_hidden: nextHidden }) });
+                        if (!ok2) { alert(j.message || '처리에 실패했습니다'); return; }
+                        loadLvChat(sid, box);
+                    }));
+                }
+                document.getElementById('lv-sessions-close').addEventListener('click', () => { lvSessionsModal.classList.remove('open'); });
+
+                // =========================================================
+                // 🏆 채널 등급 기준 + 랭킹
+                // =========================================================
+                async function loadLvRankings() {
+                    const area = document.getElementById('lv-rankings-area');
+                    const settings = document.getElementById('lv-tier-settings');
+                    area.innerHTML = '<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>';
+                    const { ok, json } = await lvFetch('/api/admin/live/channel-rankings');
+                    if (!ok || !json.success) {
+                        settings.innerHTML = '';
+                        area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>등급/랭킹을 불러오지 못했습니다</h3><p>${lvEsc(json.message || '')}</p></div>`;
+                        return;
+                    }
+                    const th = json.data.thresholds || {};
+                    settings.innerHTML = `
+                        <div class="field"><label for="lv-tier-silver">🥈 실버 기준(원)</label><input type="number" id="lv-tier-silver" min="0" step="100000" value="${Number(th.silver || 0)}"></div>
+                        <div class="field"><label for="lv-tier-gold">🥇 골드 기준(원)</label><input type="number" id="lv-tier-gold" min="0" step="100000" value="${Number(th.gold || 0)}"></div>
+                        <div class="field"><label for="lv-tier-platinum">💎 플래티넘 기준(원)</label><input type="number" id="lv-tier-platinum" min="0" step="100000" value="${Number(th.platinum || 0)}"></div>
+                        <button type="button" class="btn btn-primary btn-sm" id="lv-tier-save" style="flex:0 0 auto;">저장</button>`;
+                    document.getElementById('lv-tier-save').addEventListener('click', async () => {
+                        const msg = document.getElementById('lv-tier-msg');
+                        const s = Number(document.getElementById('lv-tier-silver').value);
+                        const g = Number(document.getElementById('lv-tier-gold').value);
+                        const p = Number(document.getElementById('lv-tier-platinum').value);
+                        if (!(s >= 0 && s < g && g < p)) { msg.textContent = '실버 < 골드 < 플래티넘 순서로 커져야 합니다'; msg.className = 'msg error'; return; }
+                        const { ok: ok2, json: j } = await lvFetch('/api/admin/settings/channel-tier-thresholds', { method: 'PATCH', body: JSON.stringify({ silver: s, gold: g, platinum: p }) });
+                        if (!ok2) { msg.textContent = j.message || '저장에 실패했습니다'; msg.className = 'msg error'; return; }
+                        msg.textContent = '저장되었습니다. 등급이 새 기준으로 다시 계산됩니다.';
+                        msg.className = 'msg success';
+                        loadLvRankings();
+                        lvLoaded.channels && loadLvChannels();
+                    });
+                    const rows = json.data.rankings || [];
+                    area.innerHTML = rows.length ? `
+                        <div class="lv-scroll"><table>
+                            <thead><tr><th>순위</th><th>채널</th><th>등급</th><th>누적 매출</th><th>최근 30일 매출</th></tr></thead>
+                            <tbody>${rows.map((r, i) => `<tr>
+                                <td data-label="순위">${i + 1}${r.top3_rank ? ` <span style="color:var(--primary-color); font-weight:700;">🔥 TOP ${r.top3_rank}</span>` : ''}</td>
+                                <td data-label="채널" class="cell-name">${lvEsc(r.name)}${r.slug ? `<div style="font-weight:400; font-size:0.8em; color:var(--text-gray);">/live/${lvEsc(r.slug)}</div>` : ''}</td>
+                                <td data-label="등급">${lvEsc(r.tier_emoji)} ${lvEsc(r.tier_label)}</td>
+                                <td data-label="누적 매출">${lvWon(r.all_time_revenue)}</td>
+                                <td data-label="최근 30일 매출">${lvWon(r.last_30d_revenue)}</td>
+                            </tr>`).join('')}</tbody>
+                        </table></div>
+                        <p class="lv-note" style="margin-top:8px;">집계 시각 ${lvEsc(lvDateTime(json.data.computed_at))} · 최대 5분 캐시</p>` : '<div class="state-box"><div class="emoji">🏆</div><h3>아직 라이브 채널 매출이 없습니다</h3></div>';
+                }
+
+                // =========================================================
+                // 🎁 라이브 선물 카탈로그 (시청자가 마일리지로 보내는 선물 종류·가격)
+                // =========================================================
+                async function loadLvGiftCatalog() {
+                    const area = document.getElementById('lv-gifts-area');
+                    area.innerHTML = '<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>';
+                    const { ok, json } = await lvFetch('/api/settings/live-gift-catalog');
+                    if (!ok || !json.success) { area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>선물 카탈로그를 불러오지 못했습니다</h3><p>${lvEsc(json.message || '')}</p></div>`; return; }
+                    let items = (json.data || []).map(g => ({ key: g.key, emoji: g.emoji, label: g.label, cost: g.cost }));
+                    area.innerHTML = `
+                        <div class="lv-card" style="max-width:720px;">
+                            <h4>🎁 라이브 선물 카탈로그</h4>
+                            <p class="lv-note">시청자가 방송 중 마일리지로 보내는 선물입니다. 보낸 마일리지는 즉시 채널 소유자에게 적립됩니다(새 결제 없이 기존 마일리지 재사용). 키는 영문 소문자·숫자·_·- 로 쓰고, 이미 쓰인 키는 바꾸지 않는 것이 좋습니다.</p>
+                            <div class="lv-gift-row" style="font-size:0.78em; color:var(--text-gray);"><span>키</span><span>이모지</span><span>이름</span><span>마일리지</span><span></span></div>
+                            <div id="lv-gift-rows"></div>
+                            <div class="lv-actions" style="margin-top:10px;">
+                                <button type="button" class="btn btn-secondary btn-sm" id="lv-gift-add">+ 선물 추가</button>
+                                <button type="button" class="btn btn-primary btn-sm" id="lv-gift-save">저장</button>
+                            </div>
+                            <div class="msg" id="lv-gift-msg"></div>
+                        </div>`;
+                    const rowsEl = document.getElementById('lv-gift-rows');
+                    function readRows() {
+                        items = [...rowsEl.querySelectorAll('.lv-gift-row')].map(r => ({
+                            key: r.querySelector('.g-key').value.trim().toLowerCase(),
+                            emoji: r.querySelector('.g-emoji').value.trim(),
+                            label: r.querySelector('.g-label').value.trim(),
+                            cost: r.querySelector('.g-cost').value
+                        }));
+                    }
+                    function render() {
+                        rowsEl.innerHTML = items.map((g, i) => `
+                            <div class="lv-gift-row" data-i="${i}">
+                                <input class="g-key" value="${lvEsc(g.key)}" maxlength="30" placeholder="heart" aria-label="선물 키">
+                                <input class="g-emoji" value="${lvEsc(g.emoji)}" maxlength="8" placeholder="❤️" aria-label="이모지">
+                                <input class="g-label" value="${lvEsc(g.label)}" maxlength="20" placeholder="하트" aria-label="선물 이름">
+                                <input class="g-cost" type="number" min="1" step="1" value="${lvEsc(g.cost)}" placeholder="100" aria-label="마일리지">
+                                <button type="button" class="btn-xs danger g-del">삭제</button>
+                            </div>`).join('') || '<p class="lv-note">선물이 없습니다. 저장하면 기본 카탈로그(하트·장미·커피·다이아·왕관)가 쓰입니다.</p>';
+                    }
+                    render();
+                    rowsEl.addEventListener('click', (e) => {
+                        const del = e.target.closest('.g-del');
+                        if (!del) return;
+                        readRows();
+                        items.splice(Number(del.closest('.lv-gift-row').dataset.i), 1);
+                        render();
+                    });
+                    document.getElementById('lv-gift-add').addEventListener('click', () => { readRows(); items.push({ key: '', emoji: '', label: '', cost: '' }); render(); });
+                    document.getElementById('lv-gift-save').addEventListener('click', async () => {
+                        const msg = document.getElementById('lv-gift-msg');
+                        readRows();
+                        const seen = new Set();
+                        for (const g of items) {
+                            const cost = Number(g.cost);
+                            if (!/^[a-z0-9_-]+$/.test(g.key) || !g.emoji || !g.label || !Number.isInteger(cost) || cost <= 0) { msg.textContent = '모든 줄의 키(영문 소문자·숫자)·이모지·이름·1 이상의 정수 마일리지를 채워주세요'; msg.className = 'msg error'; return; }
+                            if (seen.has(g.key)) { msg.textContent = `키 "${g.key}"가 중복되었습니다`; msg.className = 'msg error'; return; }
+                            seen.add(g.key);
+                            g.cost = cost;
+                        }
+                        const btn = document.getElementById('lv-gift-save');
+                        btn.disabled = true;
+                        const { ok: ok2, json: j } = await lvFetch('/api/admin/settings/live-gift-catalog', { method: 'PATCH', body: JSON.stringify({ catalog: items }) });
+                        btn.disabled = false;
+                        if (!ok2) { msg.textContent = j.message || '저장에 실패했습니다'; msg.className = 'msg error'; return; }
+                        items = (j.data || items).map(g => ({ key: g.key, emoji: g.emoji, label: g.label, cost: g.cost }));
+                        render();
+                        msg.textContent = '저장되었습니다. 시청 화면에는 1분 안에 반영됩니다.';
+                        msg.className = 'msg success';
+                    });
+                }
+
+                // =========================================================
+                // 🤝 크리에이터 제휴(어필리에이트) — 수수료율·계좌가 마진율급 민감정보라 대표자 전용
+                //   조회/등록/추천코드/정산: requireOwnerStepUpOrBootstrap (2FA 미등록 부트스트랩이면 토큰 없이 통과)
+                //   수정(PATCH): requireOwnerStepUp — 공급자 수수료율 저장과 같은 강한 정책이라 항상 스텝업을 받는다
+                // =========================================================
+                const lvOwnerOnlyHtml = '<div class="state-box"><div class="emoji">🔒</div><h3>대표자 전용 화면입니다</h3><p>크리에이터 커미션율·계좌·정산은 대표자 계정(2단계 인증)만 볼 수 있습니다.</p></div>';
+                // 부트스트랩 예외가 있는 API용: 저장된 토큰이 있으면 싣고, 서버가 스텝업을 요구하면 인증 모달을 띄운 뒤 한 번 재시도
+                async function lvOwnerFetch(path, options) {
+                    try {
+                        return await ownerFetchOptional(path, options);
+                    } catch (err) {
+                        if (!err.stepUpRequired || typeof window.__ensureOwnerStepUp !== 'function') throw err;
+                        await window.__ensureOwnerStepUp();
+                        return await ownerFetchOptional(path, options);
+                    }
+                }
+                async function lvOwnerGate(area) {
+                    if (!isOwner) { area.innerHTML = lvOwnerOnlyHtml; return false; }
+                    if (typeof window.__ensureOwnerStepUpOrBootstrap === 'function') {
+                        try { await window.__ensureOwnerStepUpOrBootstrap(); }
+                        catch (err) {
+                            area.innerHTML = err.message === 'CANCELLED'
+                                ? '<div class="state-box"><div class="emoji">🔒</div><h3>대표자 2단계 인증이 필요합니다</h3><button type="button" class="btn btn-secondary lv-retry-gate">🔓 인증하고 불러오기</button></div>'
+                                : `<div class="state-box"><div class="emoji">⚠️</div><h3>인증 확인 중 문제가 발생했습니다</h3><p>${lvEsc(err.message)}</p></div>`;
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+
+                let lvCreators = [];
+                const lvCodesOpen = new Set();
+                async function loadLvCreators() {
+                    const area = document.getElementById('lv-creators-area');
+                    area.innerHTML = '<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>';
+                    if (!(await lvOwnerGate(area))) return;
+                    let res;
+                    try { res = await lvOwnerFetch('/api/admin/creators'); }
+                    catch (err) {
+                        if (err.message === 'CANCELLED') { area.innerHTML = '<div class="state-box"><div class="emoji">🔒</div><h3>대표자 2단계 인증이 필요합니다</h3><button type="button" class="btn btn-secondary lv-retry-gate">🔓 인증하고 불러오기</button></div>'; return; }
+                        area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>크리에이터 목록을 불러오지 못했습니다</h3><p>${lvEsc(err.message)}</p></div>`;
+                        return;
+                    }
+                    if (!res.ok || !res.json.success) { area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>크리에이터 목록을 불러오지 못했습니다</h3><p>${lvEsc(res.json.message || '')}</p></div>`; return; }
+                    lvCreators = res.json.data || [];
+                    area.innerHTML = `
+                        <div class="panel-toolbar">
+                            <span style="color:var(--text-gray); font-size:0.9em;">추천코드가 붙은 시청 링크(<code>/live/채널슬러그?ref=코드</code>)로 들어온 주문이 크리에이터에게 귀속되고, 기간별 정산에서 커미션이 계산됩니다. 본인 코드로 산 주문은 집계되지 않습니다.</span>
+                            <button type="button" class="btn btn-primary" id="lv-creator-new">+ 크리에이터 등록</button>
+                        </div>
+                        ${lvCreators.length ? `
+                        <div class="lv-scroll"><table>
+                            <thead><tr><th>크리에이터</th><th>커미션율</th><th>상태</th><th>세무처리</th><th>정산 계좌</th><th>관리</th></tr></thead>
+                            <tbody>${lvCreators.map(c => `
+                                <tr data-id="${lvEsc(c.id)}">
+                                    <td data-label="크리에이터" class="cell-name">${lvEsc(c.display_name)}${c.user_id ? '<div style="font-weight:400; font-size:0.78em; color:var(--text-gray);">회원 연결됨</div>' : ''}</td>
+                                    <td data-label="커미션율">${Number(c.commission_rate || 0)}%</td>
+                                    <td data-label="상태"><span class="badge ${c.status === 'inactive' ? 'inactive' : 'active'}">${c.status === 'inactive' ? '중지' : '활성'}</span></td>
+                                    <td data-label="세무처리">${lvEsc(LV_TAX_LABEL[c.settlement_tax_method] || c.settlement_tax_method || '-')}</td>
+                                    <td data-label="정산 계좌" style="font-size:0.85em;">${c.bank_account ? `${lvEsc(c.bank_name || '')} ${lvEsc(c.bank_account)}<br><span style="color:var(--text-gray);">${lvEsc(c.account_holder || '')}</span>` : '<span style="color:#C62828;">미등록</span>'}</td>
+                                    <td data-label="관리"><div class="lv-actions">
+                                        <button type="button" class="btn-xs" data-cr-act="edit">수정</button>
+                                        <button type="button" class="btn-xs" data-cr-act="codes">🔗 추천코드</button>
+                                    </div></td>
+                                </tr>
+                                <tr class="lv-codes-row" data-for="${lvEsc(c.id)}" ${lvCodesOpen.has(c.id) ? '' : 'hidden'}><td colspan="6" data-label="추천코드"><div class="lv-codes-area"></div></td></tr>`).join('')}
+                            </tbody>
+                        </table></div>` : '<div class="state-box"><div class="emoji">🤝</div><h3>등록된 제휴 크리에이터가 없습니다</h3><p>계약이 확정된 크리에이터를 등록해주세요</p></div>'}`;
+                    lvCodesOpen.forEach(id => {
+                        const row = area.querySelector(`.lv-codes-row[data-for="${CSS.escape(id)}"]`);
+                        if (row) loadLvReferralCodes(id, row.querySelector('.lv-codes-area'));
+                    });
+                }
+                document.getElementById('lv-creators-area').addEventListener('click', (e) => {
+                    if (e.target.closest('.lv-retry-gate')) { loadLvCreators(); return; }
+                    if (e.target.closest('#lv-creator-new')) { openLvCreatorModal(null); return; }
+                    const btn = e.target.closest('button[data-cr-act]');
+                    if (!btn) return;
+                    const id = btn.closest('tr').dataset.id;
+                    const c = lvCreators.find(x => x.id === id);
+                    if (!c) return;
+                    if (btn.dataset.crAct === 'edit') openLvCreatorModal(c);
+                    else if (btn.dataset.crAct === 'codes') {
+                        const row = document.querySelector(`#lv-creators-area .lv-codes-row[data-for="${CSS.escape(id)}"]`);
+                        if (lvCodesOpen.has(id)) { lvCodesOpen.delete(id); row.hidden = true; return; }
+                        lvCodesOpen.add(id); row.hidden = false;
+                        loadLvReferralCodes(id, row.querySelector('.lv-codes-area'));
+                    }
+                });
+
+                async function loadLvReferralCodes(creatorId, box) {
+                    box.innerHTML = '<p class="lv-note">추천코드 불러오는 중...</p>';
+                    let res;
+                    try { res = await lvOwnerFetch('/api/admin/creators/' + encodeURIComponent(creatorId) + '/referral-codes'); }
+                    catch (err) { box.innerHTML = `<p style="color:#C62828; font-size:0.85em;">${lvEsc(err.message === 'CANCELLED' ? '인증이 취소되었습니다' : err.message)}</p>`; return; }
+                    if (!res.ok || !res.json.success) { box.innerHTML = `<p style="color:#C62828; font-size:0.85em;">${lvEsc(res.json.message || '추천코드를 불러오지 못했습니다')}</p>`; return; }
+                    const codes = res.json.data || [];
+                    box.innerHTML = `
+                        ${codes.length ? codes.map(cd => `
+                            <div class="admin-row" data-code-id="${lvEsc(cd.id)}">
+                                <div class="admin-row-info">
+                                    <div class="vname"><code>${lvEsc(cd.code)}</code> <span class="badge ${cd.status === 'active' ? 'active' : 'inactive'}">${cd.status === 'active' ? '사용중' : '중지'}</span></div>
+                                    <div class="vmeta">발급 ${lvEsc(lvDateTime(cd.created_at))} · 링크 예: /live/채널슬러그?ref=${lvEsc(cd.code)}</div>
+                                </div>
+                                <div class="lv-actions">
+                                    <button type="button" class="btn-xs lvr-copy" data-code="${lvEsc(cd.code)}">코드 복사</button>
+                                    <button type="button" class="btn-xs ${cd.status === 'active' ? 'danger' : ''} lvr-toggle" data-next="${cd.status === 'active' ? 'inactive' : 'active'}">${cd.status === 'active' ? '중지' : '다시 사용'}</button>
+                                </div>
+                            </div>`).join('') : '<p class="lv-note">발급된 추천코드가 없습니다.</p>'}
+                        <div class="lv-inline-form" style="margin-top:8px;">
+                            <div class="field"><label>직접 지정할 코드(선택)</label><input type="text" class="lvr-custom" maxlength="20" placeholder="비우면 자동 생성(CR로 시작)" autocomplete="off"></div>
+                            <button type="button" class="btn btn-secondary btn-sm lvr-issue" style="flex:0 0 auto;">+ 코드 발급</button>
+                        </div>
+                        <p class="lv-note" style="margin-top:6px;">추천코드는 삭제하지 않고 중지만 할 수 있습니다(이미 이 코드로 들어온 주문 기록 보존).</p>`;
+                    box.querySelector('.lvr-issue').addEventListener('click', async () => {
+                        const custom = box.querySelector('.lvr-custom').value.trim().toUpperCase();
+                        if (custom && !/^[A-Z0-9_-]{4,20}$/.test(custom)) { alert('코드는 영문·숫자·_·- 4~20자로 입력해주세요'); return; }
+                        try {
+                            const r = await lvOwnerFetch('/api/admin/creators/' + encodeURIComponent(creatorId) + '/referral-codes', { method: 'POST', body: JSON.stringify(custom ? { code: custom } : {}) });
+                            if (!r.ok) { alert(r.json.message || '발급에 실패했습니다'); return; }
+                        } catch (err) { if (err.message !== 'CANCELLED') alert(err.message); return; }
+                        loadLvReferralCodes(creatorId, box);
+                    });
+                    box.querySelectorAll('.lvr-toggle').forEach(b => b.addEventListener('click', async () => {
+                        const codeId = b.closest('[data-code-id]').dataset.codeId;
+                        if (b.dataset.next === 'inactive' && !confirm('이 추천코드를 중지하시겠습니까? 이후 이 코드로 들어온 주문은 크리에이터에게 귀속되지 않습니다.')) return;
+                        try {
+                            const r = await lvOwnerFetch('/api/admin/creators/referral-codes/' + encodeURIComponent(codeId), { method: 'PATCH', body: JSON.stringify({ status: b.dataset.next }) });
+                            if (!r.ok) { alert(r.json.message || '변경에 실패했습니다'); return; }
+                        } catch (err) { if (err.message !== 'CANCELLED') alert(err.message); return; }
+                        loadLvReferralCodes(creatorId, box);
+                    }));
+                    box.querySelectorAll('.lvr-copy').forEach(b => b.addEventListener('click', async () => {
+                        try { await navigator.clipboard.writeText(b.dataset.code); b.textContent = '복사됨 ✓'; setTimeout(() => { b.textContent = '코드 복사'; }, 1500); }
+                        catch (e) { prompt('아래 코드를 복사하세요', b.dataset.code); }
+                    }));
+                }
+
+                // 크리에이터 등록/수정 모달
+                const lvCreatorModal = document.getElementById('lv-creator-modal');
+                const lvcrForm = document.getElementById('lv-creator-form');
+                const lvcrMsg = document.getElementById('lvcr-msg');
+                let lvcrEditing = null;
+                function openLvCreatorModal(c) {
+                    lvcrForm.reset();
+                    lvcrMsg.className = 'msg';
+                    lvcrEditing = c || null;
+                    const editing = !!c;
+                    document.getElementById('lv-creator-title').textContent = editing ? `크리에이터 수정 — ${c.display_name}` : '새 제휴 크리에이터';
+                    document.getElementById('lvcr-user-field').hidden = editing;
+                    document.getElementById('lvcr-status-field').hidden = !editing;
+                    document.getElementById('lvcr-tax-field').hidden = !editing;
+                    if (editing) {
+                        document.getElementById('lvcr-name').value = c.display_name || '';
+                        document.getElementById('lvcr-rate').value = c.commission_rate != null ? c.commission_rate : '';
+                        document.getElementById('lvcr-status').value = c.status === 'inactive' ? 'inactive' : 'active';
+                        document.getElementById('lvcr-tax').value = c.settlement_tax_method || 'withholding';
+                        document.getElementById('lvcr-bank').value = c.bank_name || '';
+                        document.getElementById('lvcr-account').value = c.bank_account || '';
+                        document.getElementById('lvcr-holder').value = c.account_holder || '';
+                    }
+                    lvCreatorModal.classList.add('open');
+                }
+                document.getElementById('lvcr-cancel').addEventListener('click', () => lvCreatorModal.classList.remove('open'));
+                lvcrForm.addEventListener('submit', async (e) => {
+                    e.preventDefault();
+                    lvcrMsg.className = 'msg';
+                    const showErr = (m) => { lvcrMsg.textContent = m; lvcrMsg.className = 'msg error'; };
+                    const name = document.getElementById('lvcr-name').value.trim();
+                    const rateRaw = document.getElementById('lvcr-rate').value;
+                    if (!name) return showErr('활동명을 입력해주세요');
+                    if (rateRaw !== '' && !(Number(rateRaw) >= 0 && Number(rateRaw) <= 100)) return showErr('커미션율은 0~100 사이로 입력해주세요');
+                    const account = document.getElementById('lvcr-account').value.trim();
+                    if (account && !/^[0-9-]{6,30}$/.test(account)) return showErr('계좌번호는 숫자와 하이픈만 입력해주세요');
+                    const bankFields = {
+                        bank_name: document.getElementById('lvcr-bank').value.trim() || null,
+                        bank_account: account || null,
+                        account_holder: document.getElementById('lvcr-holder').value.trim() || null
+                    };
+                    const btn = document.getElementById('lvcr-submit');
+                    btn.disabled = true;
+                    try {
+                        let res;
+                        if (lvcrEditing) {
+                            // 수정은 requireOwnerStepUp(부트스트랩 예외 없음) - 공급자 수수료율 저장과 같은 패턴으로 스텝업을 확실히 받는다
+                            if (typeof window.__ensureOwnerStepUp !== 'function') return showErr('대표자 계정만 수정할 수 있습니다');
+                            await window.__ensureOwnerStepUp();
+                            const body = Object.assign({
+                                display_name: name,
+                                status: document.getElementById('lvcr-status').value,
+                                settlement_tax_method: document.getElementById('lvcr-tax').value
+                            }, bankFields);
+                            if (rateRaw !== '') body.commission_rate = Number(rateRaw);
+                            res = await ownerFetch('/api/admin/creators/' + encodeURIComponent(lvcrEditing.id), { method: 'PATCH', body: JSON.stringify(body) });
+                        } else {
+                            const user = document.getElementById('lvcr-user').value.trim();
+                            if (user && !/^[0-9a-fA-F-]{36}$/.test(user)) return showErr('회원 ID는 UUID 형식이어야 합니다');
+                            const body = Object.assign({ display_name: name, user_id: user || null }, bankFields);
+                            if (rateRaw !== '') body.commission_rate = Number(rateRaw);
+                            res = await lvOwnerFetch('/api/admin/creators', { method: 'POST', body: JSON.stringify(body) });
+                        }
+                        if (!res.ok || !res.json.success) return showErr(res.json.message || '저장에 실패했습니다');
+                        lvcrMsg.textContent = lvcrEditing ? '수정되었습니다' : '등록되었습니다. 이제 추천코드를 발급하세요.';
+                        lvcrMsg.className = 'msg success';
+                        setTimeout(() => { lvCreatorModal.classList.remove('open'); loadLvCreators(); }, 700);
+                    } catch (err) {
+                        if (err.message === 'CANCELLED') return;
+                        showErr(err.message);
+                    } finally {
+                        btn.disabled = false;
+                    }
+                });
+
+                // =========================================================
+                // 💸 크리에이터 정산 (기간별 생성/재계산 → 지급대기 → 지급완료)
+                // =========================================================
+                async function loadLvCreatorSettlements() {
+                    const area = document.getElementById('lv-csettle-area');
+                    area.innerHTML = '<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>';
+                    if (!(await lvOwnerGate(area))) return;
+                    const now = new Date();
+                    const firstPrev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                    const lastPrev = new Date(now.getFullYear(), now.getMonth(), 0);
+                    const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                    area.innerHTML = `
+                        <div class="lv-card">
+                            <h4>정산 생성 / 재계산</h4>
+                            <p class="lv-note">기간 안의 크리에이터 귀속 주문(취소·환불 제외) 매출 × 커미션율로 계산합니다. 같은 기간을 다시 생성하면 지급완료 건은 그대로 두고 나머지를 재계산합니다. 계좌가 없는 크리에이터는 지급완료 처리가 막힙니다.</p>
+                            <div class="lv-inline-form">
+                                <div class="field"><label for="lvcs-start">시작일</label><input type="date" id="lvcs-start" value="${ymd(firstPrev)}"></div>
+                                <div class="field"><label for="lvcs-end">종료일</label><input type="date" id="lvcs-end" value="${ymd(lastPrev)}"></div>
+                                <button type="button" class="btn btn-primary btn-sm" id="lvcs-generate" style="flex:0 0 auto;">정산 생성</button>
+                            </div>
+                            <div class="msg" id="lvcs-msg"></div>
+                        </div>
+                        <div class="panel-toolbar">
+                            <div class="status-filter" id="lvcs-filter">
+                                <button type="button" data-status="" class="active">전체</button>
+                                <button type="button" data-status="pending">지급대기</button>
+                                <button type="button" data-status="paid">지급완료</button>
+                                <button type="button" data-status="cancelled">취소</button>
+                            </div>
+                        </div>
+                        <div id="lvcs-list"></div>`;
+                    let filter = '';
+                    async function loadList() {
+                        const list = document.getElementById('lvcs-list');
+                        list.innerHTML = '<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>';
+                        let res;
+                        try { res = await lvOwnerFetch('/api/admin/creator-settlements' + (filter ? '?status=' + encodeURIComponent(filter) : '')); }
+                        catch (err) { list.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>정산 내역을 불러오지 못했습니다</h3><p>${lvEsc(err.message)}</p></div>`; return; }
+                        if (!res.ok || !res.json.success) { list.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>정산 내역을 불러오지 못했습니다</h3><p>${lvEsc(res.json.message || '')}</p></div>`; return; }
+                        const rows = res.json.data || [];
+                        if (!rows.length) { list.innerHTML = '<div class="state-box"><div class="emoji">💸</div><h3>정산 내역이 없습니다</h3><p>위에서 기간을 정해 정산을 생성하세요</p></div>'; return; }
+                        const totalPending = rows.filter(r => r.status === 'pending').reduce((s, r) => s + Number(r.commission_amount || 0), 0);
+                        list.innerHTML = `
+                            <p class="lv-note">지급대기 합계 <b style="color:var(--primary-color);">${lvWon(totalPending)}</b></p>
+                            <div class="lv-scroll"><table>
+                                <thead><tr><th>크리에이터</th><th>기간</th><th>주문/매출</th><th>커미션</th><th>실지급액</th><th>계좌</th><th>상태</th><th>처리</th></tr></thead>
+                                <tbody>${rows.map(r => {
+                                    const st = LV_SETTLE_STATUS[r.status] || [r.status, 'inactive'];
+                                    const net = (r.net_payment_amount !== null && r.net_payment_amount !== undefined) ? lvWon(r.net_payment_amount) : '-';
+                                    return `<tr data-id="${lvEsc(r.id)}">
+                                        <td data-label="크리에이터" class="cell-name">${lvEsc(r.creator_name || '(알 수 없음)')}</td>
+                                        <td data-label="기간" style="font-size:0.85em;">${lvEsc(r.period_start)} ~ ${lvEsc(r.period_end)}</td>
+                                        <td data-label="주문/매출">${Number(r.order_count || 0).toLocaleString('ko-KR')}건<br><span style="font-size:0.85em; color:var(--text-gray);">${lvWon(r.gross_revenue)}</span></td>
+                                        <td data-label="커미션"><b>${lvWon(r.commission_amount)}</b><br><span style="font-size:0.85em; color:var(--text-gray);">${Number(r.commission_rate || 0)}%</span></td>
+                                        <td data-label="실지급액">${net}</td>
+                                        <td data-label="계좌" style="font-size:0.85em;">${r.bank_account ? `${lvEsc(r.bank_name || '')} ${lvEsc(r.bank_account)}<br>${lvEsc(r.account_holder || '')}` : '<span style="color:#C62828;">없음</span>'}</td>
+                                        <td data-label="상태"><span class="badge ${st[1]}">${lvEsc(st[0])}</span>${r.paid_at ? `<div style="font-size:0.78em; color:var(--text-gray);">${lvEsc(lvDateTime(r.paid_at))}</div>` : ''}${r.payout_memo ? `<div style="font-size:0.78em; color:var(--text-gray);">${lvEsc(r.payout_memo)}</div>` : ''}</td>
+                                        <td data-label="처리"><div class="lv-actions">
+                                            ${r.status === 'pending' ? `<button type="button" class="btn-xs" data-cs="paid">지급완료</button><button type="button" class="btn-xs danger" data-cs="cancelled">취소</button>` : `<button type="button" class="btn-xs" data-cs="pending">지급대기로</button>`}
+                                        </div></td>
+                                    </tr>`;
+                                }).join('')}</tbody>
+                            </table></div>`;
+                    }
+                    document.getElementById('lvcs-filter').addEventListener('click', (e) => {
+                        const b = e.target.closest('button[data-status]');
+                        if (!b) return;
+                        filter = b.dataset.status;
+                        document.querySelectorAll('#lvcs-filter button').forEach(x => x.classList.toggle('active', x === b));
+                        loadList();
+                    });
+                    document.getElementById('lvcs-list').addEventListener('click', async (e) => {
+                        const b = e.target.closest('button[data-cs]');
+                        if (!b) return;
+                        const id = b.closest('tr').dataset.id;
+                        const next = b.dataset.cs;
+                        const body = { status: next };
+                        if (next === 'paid') {
+                            const memo = prompt('실제로 송금을 마쳤나요? 지급 메모(이체일·거래번호 등, 선택)를 입력하고 확인을 누르면 지급완료로 기록됩니다.');
+                            if (memo === null) return;
+                            body.payout_memo = memo.trim();
+                        } else if (!confirm(next === 'cancelled' ? '이 정산 건을 취소하시겠습니까?' : '지급대기 상태로 되돌리시겠습니까? 지급일·세무 계산값이 지워집니다.')) return;
+                        b.disabled = true;
+                        try {
+                            const r = await lvOwnerFetch('/api/admin/creator-settlements/' + encodeURIComponent(id) + '/status', { method: 'PATCH', body: JSON.stringify(body) });
+                            if (!r.ok) { alert(r.json.message || '처리에 실패했습니다'); b.disabled = false; return; }
+                        } catch (err) { b.disabled = false; if (err.message !== 'CANCELLED') alert(err.message); return; }
+                        loadList();
+                    });
+                    document.getElementById('lvcs-generate').addEventListener('click', async () => {
+                        const msg = document.getElementById('lvcs-msg');
+                        const startDate = document.getElementById('lvcs-start').value;
+                        const endDate = document.getElementById('lvcs-end').value;
+                        if (!startDate || !endDate || endDate < startDate) { msg.textContent = '기간을 올바르게 선택해주세요'; msg.className = 'msg error'; return; }
+                        const btn = document.getElementById('lvcs-generate');
+                        btn.disabled = true;
+                        msg.className = 'msg';
+                        try {
+                            const r = await lvOwnerFetch('/api/admin/creator-settlements/generate', { method: 'POST', body: JSON.stringify({ startDate, endDate }) });
+                            if (!r.ok || !r.json.success) throw new Error(r.json.message || '정산 생성에 실패했습니다');
+                            const d = r.json.data || {};
+                            const noBank = (d.skippedNoBankAccount || []).map(x => x.creator_name).join(', ');
+                            msg.textContent = `새로 생성 ${d.created || 0}건 · 재계산 ${d.updated || 0}건 · 지급완료라 건너뜀 ${d.skippedPaid || 0}건${noBank ? ' · 계좌 미등록: ' + noBank : ''}`;
+                            msg.className = 'msg success';
+                            loadList();
+                        } catch (err) {
+                            if (err.message !== 'CANCELLED') { msg.textContent = err.message; msg.className = 'msg error'; }
+                        } finally {
+                            btn.disabled = false;
+                        }
+                    });
+                    loadList();
+                }
+                document.getElementById('lv-csettle-area').addEventListener('click', (e) => {
+                    if (e.target.closest('.lv-retry-gate')) loadLvCreatorSettlements();
                 });
             }
             // ============================================
