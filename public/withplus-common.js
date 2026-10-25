@@ -240,6 +240,50 @@
       return new Date().getHours();
     }
   }
+  // ============================================
+  // 📮 주소 검색 (다음/카카오 우편번호) — 팝업(.open) 대신 화면 안 레이어(.embed)로 띄운다.
+  // 서버 보안 헤더(Cross-Origin-Opener-Policy: same-origin) 때문에 팝업 창에서 고른 주소가 이 페이지로
+  // 돌아오지 못해 "주소 검색을 눌러도 안 되던" 문제가 있었다. 스크립트가 안 불러와졌으면 다시 불러오고, 실패하면 알려준다.
+  // ============================================
+  let postcodeLoading = null;
+  function loadPostcodeScript() {
+    if (typeof daum !== 'undefined' && daum.Postcode) return Promise.resolve();
+    if (postcodeLoading) return postcodeLoading;
+    postcodeLoading = new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = 'https://t1.daumcdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js';
+      s.onload = () => ((typeof daum !== 'undefined' && daum.Postcode) ? resolve() : reject(new Error('postcode')));
+      s.onerror = () => { postcodeLoading = null; reject(new Error('postcode')); };
+      document.head.appendChild(s);
+    });
+    return postcodeLoading;
+  }
+  async function openAddressSearch(onComplete) {
+    try {
+      await loadPostcodeScript();
+    } catch (e) {
+      alert('주소 검색 서비스를 불러오지 못했습니다. 인터넷 연결을 확인하고 잠시 후 다시 시도해주세요.');
+      return;
+    }
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed; inset:0; z-index:100000; background:rgba(0,0,0,.45); display:flex; align-items:center; justify-content:center; padding:16px; box-sizing:border-box;';
+    overlay.innerHTML = '<div role="dialog" aria-modal="true" aria-label="주소 검색" style="background:#fff; border-radius:14px; width:100%; max-width:500px; height:min(600px, 85vh); display:flex; flex-direction:column; overflow:hidden; box-shadow:0 10px 40px rgba(0,0,0,.25);">'
+      + '<div style="display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border-bottom:1px solid #eee;"><b>주소 검색</b>'
+      + '<button type="button" class="wp-postcode-close" aria-label="닫기" style="border:none; background:none; font-size:24px; line-height:1; cursor:pointer; padding:0 4px;">×</button></div>'
+      + '<div class="wp-postcode-box" style="flex:1; min-height:0;"></div></div>';
+    const onKey = (e) => { if (e.key === 'Escape') close(); };
+    function close() { overlay.remove(); document.removeEventListener('keydown', onKey); }
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector('.wp-postcode-close').addEventListener('click', close);
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(overlay);
+    new daum.Postcode({
+      oncomplete: (data) => { close(); if (typeof onComplete === 'function') onComplete(data); },
+      width: '100%',
+      height: '100%'
+    }).embed(overlay.querySelector('.wp-postcode-box'));
+  }
+
   function getShippingBadgeLabel(stock) {
     const n = Number(stock);
     if (!Number.isFinite(n) || n <= 0) return '';
@@ -2220,6 +2264,7 @@
     getQuantityTierPrice,
     computeLineTotal,
     getShippingBadgeLabel,
+    openAddressSearch,
     fetchJSON,
     refreshMileageRates,
     getMileageRatesCached,

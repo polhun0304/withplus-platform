@@ -1161,14 +1161,12 @@
             addressOverlay.addEventListener('click', (e) => { if (e.target === addressOverlay) closeAddressModal(); });
 
             document.getElementById('addr-search-btn').addEventListener('click', () => {
-                if (typeof daum === 'undefined' || !daum.Postcode) return;
-                new daum.Postcode({
-                    oncomplete: function (data) {
-                        document.getElementById('addr-postal').value = data.zonecode;
-                        document.getElementById('addr-address').value = data.roadAddress || data.jibunAddress;
-                        document.getElementById('addr-address-detail').focus();
-                    }
-                }).open();
+                // 팝업 대신 화면 안 레이어로 연다(보안 헤더 때문에 팝업은 고른 주소를 돌려주지 못함)
+                WithPlus.openAddressSearch(function (data) {
+                    document.getElementById('addr-postal').value = data.zonecode;
+                    document.getElementById('addr-address').value = data.roadAddress || data.jibunAddress;
+                    document.getElementById('addr-address-detail').focus();
+                });
             });
 
             addressForm.addEventListener('submit', async (e) => {
