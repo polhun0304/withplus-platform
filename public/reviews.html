@@ -111,7 +111,7 @@
                         <div class="rv-body">
                             ${r.rating ? `<div class="rv-stars">${'★'.repeat(r.rating)}<span style="color:#E6E6E6">${'★'.repeat(5 - r.rating)}</span></div>` : ''}
                             <div class="rv-text">${esc(r.text || '')}</div>
-                            <div class="rv-meta"><span>${esc(r.author)}님</span><span>${r.at ? WithPlus.timeAgo(r.at) : ''}</span></div>
+                            <div class="rv-meta"><span>${r.best ? '<b style="color:#E8125C;">🏆 베스트</b> · ' : ''}${esc(r.author)}님${r.label ? ' · ' + esc(r.label) : ''}</span><span>${r.at ? WithPlus.timeAgo(r.at) : ''}</span></div>
                         </div>
                         ${r.product ? `<a class="rv-prod" href="/product/${encodeURIComponent(r.product.id)}">${r.product.image ? `<img src="${url(r.product.image)}" alt="">` : ''}<span>${esc(r.product.name)} ›</span></a>` : ''}
                     </div>`).join(''));

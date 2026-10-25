@@ -634,8 +634,8 @@
         <div class="wp-review-head">
           <span class="wp-review-avatar" aria-hidden="true"></span>
           <div>
-            <div class="wp-review-author">${escapeHtml(r.author_name || '구매자')}</div>
-            <div class="wp-review-sub">${renderStars(r.rating, 16)}<span>${dateText}</span>${r.verified_purchase ? '<span style="color:#D32F5B; font-weight:600;">✅ 구매인증</span>' : ''}</div>
+            <div class="wp-review-author">${escapeHtml(r.author_name || '구매자')}${r.is_best ? '<span style="display:inline-block; margin-left:6px; padding:1px 7px; border-radius:999px; background:#FFF1F5; color:#E8125C; font-size:0.78em; font-weight:700; vertical-align:middle;">🏆 베스트</span>' : ''}</div>
+            <div class="wp-review-sub">${renderStars(r.rating, 16)}<span>${dateText}</span>${r.verified_purchase ? '<span style="color:#D32F5B; font-weight:600;">✅ 구매인증</span>' : ''}${r.review_source === 'admin' ? '<span style="color:#777;">관리자 등록 후기</span>' : (r.review_source === 'granted' ? '<span style="color:#777;">체험 후기</span>' : '')}</div>
           </div>
         </div>
         <div class="review-comment">${escapeHtml(r.comment || '')}</div>

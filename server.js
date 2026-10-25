@@ -6668,7 +6668,7 @@ app.get('/api/products/:id', async (req, res) => {
     }
     const PRODUCT_DETAIL_SELECT = `
         ${PRODUCT_SAFE_COLUMNS},
-        reviews:product_reviews(id, rating, title, comment, user_id, created_at, verified_purchase, status)
+        reviews:product_reviews(id, rating, title, comment, user_id, created_at, verified_purchase, status, is_best, best_at, review_source, author_display)
       `;
     let { data, error } = await supabasePublic
       .from('products_with')
@@ -6717,8 +6717,10 @@ app.get('/api/products/:id', async (req, res) => {
       const { status, ...rest } = r;
       return rest;
     }));
-    // 최신 리뷰가 위로 오도록 정렬
-    visibleReviews.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    // 관리자가 고른 🏆 베스트 리뷰를 맨 위에(고른 순서 최신순), 나머지는 최신 리뷰가 위로 오도록 정렬
+    visibleReviews.sort((a, b) => (b.is_best ? 1 : 0) - (a.is_best ? 1 : 0)
+      || (a.is_best ? new Date(b.best_at || 0) - new Date(a.best_at || 0) : 0)
+      || new Date(b.created_at) - new Date(a.created_at));
 
     // 리뷰 신뢰도 강화 노출 (제안서 6절 "리뷰 신뢰도 강화 노출") - 실제 구매인증(verified_purchase) 리뷰만으로
     // "평점 4점 이상 비율"을 계산한다. 표본이 너무 적으면(3건 미만) 퍼센트가 왜곡되기 쉬우므로 정직하게
@@ -6727,7 +6729,7 @@ app.get('/api/products/:id', async (req, res) => {
     const verifiedReviews = visibleReviews.filter(r => r.verified_purchase);
     const reviewSatisfaction = {
       // "👍 N명 이상 만족했어요" — 공개된 전체 리뷰 중 평점 4점 이상을 남긴 사람 수
-      satisfied_count: visibleReviews.filter(r => Number(r.rating) >= 4).length,
+      satisfied_count: visibleReviews.filter(r => (r.review_source || 'member') === 'member' && Number(r.rating) >= 4).length, // 관리자 등록·체험 후기는 집계에서 뺀다
       verified_count: verifiedReviews.length,
       percent: verifiedReviews.length >= REVIEW_SATISFACTION_MIN_COUNT
         ? Math.round((verifiedReviews.filter(r => Number(r.rating) >= 4).length / verifiedReviews.length) * 100)
@@ -12458,8 +12460,10 @@ async function attachReviewerNames(reviews) {
     });
   }
   return list.map(r => {
-    const { user_id, ...rest } = r;
-    return { ...rest, author_name: nameById[user_id] || '구매자' };
+    const { user_id, author_display, ...rest } = r;
+    // 관리자가 등록한 후기에 작성자 표시 이름을 넣었으면 그 이름을 (가려서) 쓴다 - 원래 이름은 응답에 싣지 않는다
+    const shown = author_display ? maskReviewerName(author_display) : null;
+    return { ...rest, author_name: shown || nameById[user_id] || '구매자' };
   });
 }
 
@@ -12923,7 +12927,7 @@ app.get('/api/admin/band-posts', authenticate, requireRole(['admin', 'super_admi
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const size = Math.min(100, Math.max(10, parseInt(req.query.size, 10) || 30));
     let q = supabase.from('band_posts_with')
-      .select('post_no, author_masked, is_leader, kind, posted_label, posted_at, body, tags, photo_urls, stored_photo_urls, media_count, has_health_claim, product_id, match_score, match_candidates, status, approved_at, products_with(name)', { count: 'exact' })
+      .select('post_no, author_masked, is_leader, kind, posted_label, posted_at, body, tags, photo_urls, stored_photo_urls, media_count, has_health_claim, product_id, match_score, match_candidates, status, approved_at, is_best, products_with(name)', { count: 'exact' })
       .order('post_no', { ascending: false })
       .range((page - 1) * size, page * size - 1);
     if (['pending', 'approved', 'hidden'].includes(req.query.status)) q = q.eq('status', req.query.status);
@@ -12931,6 +12935,7 @@ app.get('/api/admin/band-posts', authenticate, requireRole(['admin', 'super_admi
     if (req.query.linked === 'yes') q = q.not('product_id', 'is', null);
     if (req.query.linked === 'no') q = q.is('product_id', null);
     if (req.query.health === 'yes') q = q.eq('has_health_claim', true);
+    if (req.query.best === 'yes') q = q.eq('is_best', true);
     const term = String(req.query.q || '').trim().slice(0, 50).replace(/[%,()]/g, ' ');
     if (term) q = q.ilike('body', `%${term}%`);
     const { data, error, count } = await q;
@@ -12989,8 +12994,9 @@ app.get('/api/products/:id/band-reviews', async (req, res) => {
     if (!/^[0-9a-f-]{36}$/i.test(id)) return res.json({ success: true, data: [], timestamp: new Date().toISOString() });
     const limit = Math.min(30, Math.max(1, parseInt(req.query.limit, 10) || 10));
     const { data, error, count } = await supabase.from('band_posts_with')
-      .select('post_no, author_masked, posted_label, posted_at, body, stored_photo_urls', { count: 'exact' })
+      .select('post_no, author_masked, posted_label, posted_at, body, stored_photo_urls, is_best', { count: 'exact' })
       .eq('product_id', id).eq('status', 'approved').eq('kind', 'review')
+      .order('is_best', { ascending: false })
       .order('posted_at', { ascending: false, nullsFirst: false })
       .limit(limit);
     if (error) throw error;
@@ -13012,8 +13018,9 @@ app.get('/api/reviews/recent', async (req, res) => {
     const limit = Math.min(parseInt(req.query.limit, 10) || 5, 20);
     const { data, error } = await supabasePublic
       .from('product_reviews')
-      .select('id, rating, comment, created_at, verified_purchase, user_id, products_with(name)')
+      .select('id, rating, comment, created_at, verified_purchase, user_id, is_best, review_source, author_display, products_with(name)')
       .eq('status', 'published')
+      .order('is_best', { ascending: false })
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -13026,6 +13033,8 @@ app.get('/api/reviews/recent', async (req, res) => {
       comment: r.comment,
       created_at: r.created_at,
       verified_purchase: r.verified_purchase,
+      is_best: !!r.is_best,
+      review_source: r.review_source || 'member',
       author_name: r.author_name,
       product_name: r.products_with ? r.products_with.name : '상품'
     }));
@@ -13042,6 +13051,44 @@ app.get('/api/reviews/recent', async (req, res) => {
 // 검증한다. order_id 없이도 리뷰 작성 자체는 가능하지만(카페24 등 일반 쇼핑몰 관행과 동일), 이 경우
 // verified_purchase는 항상 false로 남아 화면에 "구매인증" 배지가 붙지 않는다 - 절대 가짜로 인증배지를
 // 붙이지 않는다. 같은 상품에는 회원 1명당 리뷰 1개만 허용해 도배를 막는다.
+// 후기 작성 자격: 구매 여부(결제완료 이후 주문에 이 상품 포함) / 관리자 여부 / 관리자가 준 작성 권한
+const REVIEW_PURCHASE_STATUSES = ['paid', 'processing', 'shipped', 'delivered'];
+const REVIEW_GRANTS_KEY = 'review_write_grants_with';
+async function getReviewGrantUserIds() {
+  const { data } = await supabase.from('platform_settings').select('value').eq('key', REVIEW_GRANTS_KEY).maybeSingle();
+  const ids = data && data.value && Array.isArray(data.value.user_ids) ? data.value.user_ids : [];
+  return ids.filter(id => typeof id === 'string');
+}
+async function getReviewEligibility(userId, productId) {
+  const [{ data: profile }, { data: orders }, grantIds] = await Promise.all([
+    supabase.from('profiles').select('role').eq('id', userId).maybeSingle(),
+    supabase.from('orders_with').select('id, status, items').eq('user_id', userId).in('status', REVIEW_PURCHASE_STATUSES).order('created_at', { ascending: false }).limit(300),
+    getReviewGrantUserIds()
+  ]);
+  const withProduct = (orders || []).filter(o => Array.isArray(o.items) && o.items.some(i => i && i.product_id === productId));
+  const delivered = withProduct.find(o => o.status === 'delivered');
+  return {
+    isAdmin: !!profile && ['admin', 'super_admin'].includes(profile.role),
+    purchased: withProduct.length > 0,
+    deliveredOrderId: delivered ? delivered.id : null,
+    granted: grantIds.includes(userId)
+  };
+}
+
+// 상품 화면 후기 작성 칸: 지금 로그인한 회원이 이 상품에 후기를 쓸 수 있는지
+app.get('/api/reviews/eligibility', authenticate, async (req, res) => {
+  try {
+    const productId = String(req.query.product_id || '');
+    if (!/^[0-9a-f-]{36}$/i.test(productId)) return res.status(400).json({ error: 'Bad Request', message: '잘못된 상품입니다', timestamp: new Date().toISOString() });
+    const e = await getReviewEligibility(req.user.id, productId);
+    const mode = e.purchased ? 'member' : (e.isAdmin ? 'admin' : (e.granted ? 'granted' : null));
+    res.json({ success: true, data: { can_write: !!mode, mode, is_admin: e.isAdmin, delivered_order_id: e.deliveredOrderId }, timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error checking review eligibility:', err);
+    res.status(500).json({ error: 'Failed to check eligibility', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 app.post('/api/reviews', authenticate, async (req, res) => {
   try {
     const { product_id, order_id, rating, title, comment } = req.body;
@@ -13062,23 +13109,45 @@ app.post('/api/reviews', authenticate, async (req, res) => {
       });
     }
 
-    // 같은 회원이 같은 상품에 이미 리뷰를 남겼는지 확인 (도배 방지 - 상품당 회원 1리뷰)
-    const { data: existingReview } = await supabase
-      .from('product_reviews')
-      .select('id')
-      .eq('product_id', product_id)
-      .eq('user_id', req.user.id)
-      .maybeSingle();
-    if (existingReview) {
-      return res.status(400).json({
-        error: 'Bad Request',
-        message: '이미 이 상품에 리뷰를 작성하셨습니다. 기존 리뷰를 수정해주세요.',
+    // 후기 작성 자격 — 공식적으로는 이 상품을 실제로 구매(결제완료 이후)한 회원만 쓸 수 있다.
+    // 예외 ① 관리자: 직접 등록(전화·오프라인 주문 고객 후기 등) → 화면에 '관리자 등록'으로 표시
+    // 예외 ② 관리자가 '구매 없이 후기 작성' 권한을 준 회원(체험단 등) → 화면에 '체험 후기'로 표시
+    // 예외로 쓴 후기는 구매인증 배지·만족도 집계에 절대 들어가지 않는다(소비자가 구매 후기로 오인하지 않게).
+    const elig = await getReviewEligibility(req.user.id, product_id);
+    const asAdmin = !!req.body.as_admin && elig.isAdmin;
+    let reviewSource;
+    if (asAdmin) reviewSource = 'admin';
+    else if (elig.purchased) reviewSource = 'member';
+    else if (elig.isAdmin) reviewSource = 'admin';
+    else if (elig.granted) reviewSource = 'granted';
+    else {
+      return res.status(403).json({
+        error: 'Forbidden',
+        message: '이 상품을 구매하신 고객만 후기를 남길 수 있습니다.',
         timestamp: new Date().toISOString()
       });
     }
 
+    // 같은 회원이 같은 상품에 이미 리뷰를 남겼는지 확인 (도배 방지 - 상품당 회원 1리뷰, 관리자 등록 후기는 예외)
+    if (reviewSource !== 'admin') {
+      const { data: existingReview } = await supabase
+        .from('product_reviews')
+        .select('id')
+        .eq('product_id', product_id)
+        .eq('user_id', req.user.id)
+        .maybeSingle();
+      if (existingReview) {
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: '이미 이 상품에 리뷰를 작성하셨습니다. 기존 리뷰를 수정해주세요.',
+          timestamp: new Date().toISOString()
+        });
+      }
+    }
+
     let verifiedPurchase = false;
-    if (order_id) {
+    let linkedOrderId = null;
+    if (order_id && reviewSource === 'member') {
       const { data: order } = await supabase
         .from('orders_with')
         .select('id, user_id, status, items')
@@ -13108,19 +13177,23 @@ app.post('/api/reviews', authenticate, async (req, res) => {
         });
       }
       verifiedPurchase = true;
+      linkedOrderId = order_id;
     }
 
+    const authorDisplay = reviewSource === 'admin' && req.body.author_display ? String(req.body.author_display).trim().slice(0, 30) : null;
     const { data, error } = await supabase
       .from('product_reviews')
       .insert([{
         product_id,
-        order_id: order_id || null,
+        order_id: linkedOrderId,
         user_id: req.user.id,
-        rating: parseInt(rating),
+        rating: ratingNum,
         title: title || null,
         comment,
         status: 'published',
-        verified_purchase: verifiedPurchase
+        verified_purchase: verifiedPurchase,
+        review_source: reviewSource,
+        author_display: authorDisplay || null
       }])
       .select()
       .single();
@@ -13207,6 +13280,95 @@ app.patch('/api/admin/reviews/:id/status', authenticate, requireRole(['admin', '
   } catch (err) {
     console.error('Error moderating review:', err);
     res.status(500).json({ error: 'Failed to moderate review', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 🏆 베스트 리뷰 지정/해제 — 베스트는 상품 화면·실시간 리뷰·전체 후기에서 맨 위에 보인다
+app.patch('/api/admin/reviews/:id/best', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const isBest = !!(req.body && req.body.is_best);
+    const { data, error } = await supabase.from('product_reviews')
+      .update({ is_best: isBest, best_at: isBest ? new Date().toISOString() : null, moderated_by: req.user.id, moderated_at: new Date().toISOString() })
+      .eq('id', req.params.id).select('id, is_best, best_at').maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '리뷰를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, message: isBest ? '베스트 리뷰로 지정했습니다' : '베스트 리뷰를 해제했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error setting best review:', err);
+    res.status(500).json({ error: 'Failed to set best review', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 불필요한 리뷰 삭제 (숨김과 달리 되돌릴 수 없다)
+app.delete('/api/admin/reviews/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('product_reviews').delete().eq('id', req.params.id).select('id');
+    if (error) throw error;
+    if (!data || !data.length) return res.status(404).json({ error: 'Not Found', message: '리뷰를 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, message: '리뷰를 삭제했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error deleting review:', err);
+    res.status(500).json({ error: 'Failed to delete review', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 구매 없이 후기를 쓸 수 있는 회원(체험단 등) 목록 / 추가 / 삭제 — 이 회원들의 후기는 '체험 후기'로 표시된다
+async function saveReviewGrantUserIds(ids, actorId) {
+  const { error } = await supabase.from('platform_settings').upsert({
+    key: REVIEW_GRANTS_KEY, value: { user_ids: [...new Set(ids)] }, updated_at: new Date().toISOString(), updated_by: actorId
+  }, { onConflict: 'key' });
+  if (error) throw error;
+}
+app.get('/api/admin/review-grants', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const ids = await getReviewGrantUserIds();
+    const { data } = ids.length ? await supabase.from('profiles').select('id, email, full_name').in('id', ids) : { data: [] };
+    res.json({ success: true, data: data || [], timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error loading review grants:', err);
+    res.status(500).json({ error: 'Failed to load review grants', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+app.post('/api/admin/review-grants', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const email = String((req.body && req.body.email) || '').trim().toLowerCase();
+    if (!email) return res.status(400).json({ error: 'Bad Request', message: '회원 이메일을 입력해주세요', timestamp: new Date().toISOString() });
+    const { data: prof } = await supabase.from('profiles').select('id, email, full_name').ilike('email', escapeIlike(email)).maybeSingle();
+    if (!prof) return res.status(404).json({ error: 'Not Found', message: '해당 이메일의 회원을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    const ids = await getReviewGrantUserIds();
+    await saveReviewGrantUserIds([...ids, prof.id], req.user.id);
+    res.json({ success: true, data: prof, message: '후기 작성 권한을 주었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error adding review grant:', err);
+    res.status(500).json({ error: 'Failed to add review grant', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+app.delete('/api/admin/review-grants/:userId', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const ids = await getReviewGrantUserIds();
+    await saveReviewGrantUserIds(ids.filter(id => id !== req.params.userId), req.user.id);
+    res.json({ success: true, message: '후기 작성 권한을 거두었습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error removing review grant:', err);
+    res.status(500).json({ error: 'Failed to remove review grant', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
+// 관리자: 밴드 후기 🏆 베스트 지정/해제
+app.patch('/api/admin/band-posts/:no/best', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const postNo = parseInt(req.params.no, 10);
+    if (!Number.isInteger(postNo) || postNo <= 0) return res.status(400).json({ error: 'Bad Request', message: '잘못된 글 번호입니다', timestamp: new Date().toISOString() });
+    const isBest = !!(req.body && req.body.is_best);
+    const { data, error } = await supabase.from('band_posts_with')
+      .update({ is_best: isBest, best_at: isBest ? new Date().toISOString() : null, updated_at: new Date().toISOString() })
+      .eq('post_no', postNo).select('post_no, is_best, best_at').maybeSingle();
+    if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Not Found', message: '밴드 글을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    res.json({ success: true, data, message: isBest ? '베스트 리뷰로 지정했습니다' : '베스트 리뷰를 해제했습니다', timestamp: new Date().toISOString() });
+  } catch (err) {
+    console.error('Error setting best band post:', err);
+    res.status(500).json({ error: 'Failed to set best band post', message: err.message, timestamp: new Date().toISOString() });
   }
 });
 
@@ -15751,6 +15913,29 @@ const LIVE_ORDER_STATUSES = ['paid', 'processing', 'shipped', 'delivered'];
 function firstImage(p) { return p && Array.isArray(p.images_urls) && p.images_urls[0] ? p.images_urls[0] : null; }
 function shortText(s, n) { const t = Array.from(String(s || '').replace(/#[^\s#]+/g, ' ').replace(/\s+/g, ' ').trim()); return t.length > n ? t.slice(0, n).join('') + '…' : t.join(''); }
 
+// 홈 "실시간 리뷰"에 보여줄 🏆 베스트 리뷰 — 최근 목록(already)에 없는 것만 보충한다
+async function loadBestReviewCards(already) {
+  const out = [];
+  const { data: rb } = await supabase.from('product_reviews').select('id, rating, comment, created_at, user_id, is_best, review_source, author_display, products_with(id, name, images_urls)')
+    .eq('status', 'published').eq('is_best', true).order('best_at', { ascending: false }).limit(12);
+  (await attachReviewerNames(rb || [])).forEach(r => out.push({
+    source: 'with', author: r.author_name || '구매자', text: shortText(r.comment, 70), rating: r.rating, best: true, label: r.review_source === 'admin' ? '관리자 등록' : (r.review_source === 'granted' ? '체험 후기' : null),
+    photo: firstImage(r.products_with),
+    product: r.products_with ? { id: r.products_with.id, name: r.products_with.name, image: firstImage(r.products_with) } : null, at: r.created_at
+  }));
+  if (true) {
+    const { data: bb } = await supabase.from('band_posts_with').select('post_no, author_masked, body, stored_photo_urls, posted_at, products_with(id, name, images_urls)')
+      .eq('status', 'approved').eq('kind', 'review').eq('is_best', true).order('best_at', { ascending: false }).limit(12);
+    (bb || []).forEach(b => out.push({
+      source: 'band', best: true, author: b.author_masked || '밴드 회원', text: shortText(b.body, 70), rating: null,  
+      photo: (b.stored_photo_urls || [])[0] || firstImage(b.products_with),
+      product: b.products_with ? { id: b.products_with.id, name: b.products_with.name, image: firstImage(b.products_with) } : null, at: b.posted_at, _key: 'b' + b.post_no
+    }));
+  }
+  const seen = new Set(already.filter(r => r.best).map(r => [r.source, r.at, r.text].join('|')));
+  return out.filter(r => (r.text || r.photo) && !seen.has([r.source, r.at, r.text].join('|')));
+}
+
 app.get('/api/home/live', async (req, res) => {
   try {
     // "지금 이 순간" 피드: 기간 제한 없이 종류별 최신 활동을 모두 모아 시간순으로 보여준다.
@@ -15758,9 +15943,9 @@ app.get('/api/home/live', async (req, res) => {
     // 밴드 후기가 많아도 다른 활동이 밀려나지 않도록, 다른 활동을 먼저 넣고 밴드 후기는 남은 칸(최소 10칸)을 채운다.
     const FEED_TOTAL = 40, PER_TYPE = 20;
     const [bandRes, revRes, ordRes, cartRes, guestCartRes, wishRes, attRes, cpnRes, bandCnt, revCnt, ordCnt] = await Promise.all([
-      supabase.from('band_posts_with').select('post_no, author_masked, body, stored_photo_urls, posted_at, products_with(id, name, images_urls)')
+      supabase.from('band_posts_with').select('post_no, author_masked, body, stored_photo_urls, posted_at, is_best, products_with(id, name, images_urls)')
         .eq('status', 'approved').eq('kind', 'review').order('posted_at', { ascending: false, nullsFirst: false }).limit(20),
-      supabase.from('product_reviews').select('id, rating, comment, created_at, user_id, products_with(id, name, images_urls)')
+      supabase.from('product_reviews').select('id, rating, comment, created_at, user_id, is_best, review_source, author_display, products_with(id, name, images_urls)')
         .eq('status', 'published').order('created_at', { ascending: false }).limit(PER_TYPE),
       supabase.from('orders_with').select('created_at, payment_at, user_id, items').in('status', LIVE_ORDER_STATUSES)
         .order('created_at', { ascending: false }).limit(PER_TYPE),
@@ -15777,18 +15962,19 @@ app.get('/api/home/live', async (req, res) => {
       supabase.from('orders_with').select('*', { count: 'exact', head: true }).in('status', LIVE_ORDER_STATUSES)
     ]);
     const band = (bandRes.data || []).map(b => ({
-      source: 'band', author: b.author_masked || '밴드 회원', text: shortText(b.body, 70), rating: null,
+      source: 'band', author: b.author_masked || '밴드 회원', text: shortText(b.body, 70), rating: null, best: !!b.is_best,
       photo: (b.stored_photo_urls || [])[0] || firstImage(b.products_with),
       product: b.products_with ? { id: b.products_with.id, name: b.products_with.name, image: firstImage(b.products_with) } : null, at: b.posted_at
     }));
     const named = await attachReviewerNames(revRes.data || []);
     const withRev = named.map(r => ({
-      source: 'with', author: r.author_name || '구매자', text: shortText(r.comment, 70), rating: r.rating,
+      source: 'with', author: r.author_name || '구매자', text: shortText(r.comment, 70), rating: r.rating, best: !!r.is_best, label: r.review_source === 'admin' ? '관리자 등록' : (r.review_source === 'granted' ? '체험 후기' : null),
       photo: firstImage(r.products_with),
       product: r.products_with ? { id: r.products_with.id, name: r.products_with.name, image: firstImage(r.products_with) } : null, at: r.created_at
     }));
     const allReviews = [...band, ...withRev].filter(r => r.at).sort((a, b) => new Date(b.at) - new Date(a.at));
-    const reviews = allReviews.filter(r => r.text || r.photo).slice(0, 12);
+    // 🏆 베스트 리뷰를 맨 앞에(나머지는 최신순 그대로)
+    const reviews = [...allReviews, ...(await loadBestReviewCards(allReviews))].filter(r => r.text || r.photo).sort((a, b) => (b.best ? 1 : 0) - (a.best ? 1 : 0)).slice(0, 12);
 
     // 활동에 나온 상품 정보(이름·사진). 판매 중이 아닌 상품도 활동 자체는 보여주고 상품 링크만 걸지 않는다.
     const firstPid = o => (Array.isArray(o.items) && o.items[0] && o.items[0].product_id) || null;
@@ -15851,24 +16037,25 @@ app.get('/api/reviews/all', async (req, res) => {
     const need = rq ? 400 : page * size; // 검색어가 있으면 넉넉히 가져와 글·상품명에서 찾는다
     let band = [], withRev = [], total = 0;
     if (source !== 'with') {
-      let q = supabase.from('band_posts_with').select('post_no, author_masked, body, stored_photo_urls, posted_at, posted_label, products_with(id, name, images_urls)', { count: 'exact' })
-        .eq('status', 'approved').eq('kind', 'review').order('posted_at', { ascending: false, nullsFirst: false }).range(0, need - 1);
+      let q = supabase.from('band_posts_with').select('post_no, author_masked, body, stored_photo_urls, posted_at, posted_label, is_best, products_with(id, name, images_urls)', { count: 'exact' })
+        .eq('status', 'approved').eq('kind', 'review').order('is_best', { ascending: false }).order('posted_at', { ascending: false, nullsFirst: false }).range(0, need - 1);
       if (photoOnly) q = q.neq('stored_photo_urls', '{}');
       const { data, error, count } = await q;
       if (error) throw error;
       total += count || 0;
-      band = (data || []).map(b => ({ source: 'band', id: 'b' + b.post_no, author: b.author_masked || '밴드 회원', text: String(b.body || '').trim(), rating: null,
+      band = (data || []).map(b => ({ source: 'band', id: 'b' + b.post_no, author: b.author_masked || '밴드 회원', text: String(b.body || '').trim(), rating: null, best: !!b.is_best,
         photos: b.stored_photo_urls || [], product: b.products_with ? { id: b.products_with.id, name: b.products_with.name, image: firstImage(b.products_with) } : null, at: b.posted_at }));
     }
     if (source !== 'band' && !photoOnly) {
-      const { data, error, count } = await supabase.from('product_reviews').select('id, rating, comment, created_at, user_id, products_with(id, name, images_urls)', { count: 'exact' })
-        .eq('status', 'published').order('created_at', { ascending: false }).range(0, need - 1);
+      const { data, error, count } = await supabase.from('product_reviews').select('id, rating, comment, created_at, user_id, is_best, review_source, author_display, products_with(id, name, images_urls)', { count: 'exact' })
+        .eq('status', 'published').order('is_best', { ascending: false }).order('created_at', { ascending: false }).range(0, need - 1);
       if (error) throw error;
       total += count || 0;
-      withRev = (await attachReviewerNames(data || [])).map(r => ({ source: 'with', id: 'r' + r.id, author: r.author_name || '구매자', text: String(r.comment || '').trim(), rating: r.rating,
+      withRev = (await attachReviewerNames(data || [])).map(r => ({ source: 'with', id: 'r' + r.id, author: r.author_name || '구매자', text: String(r.comment || '').trim(), rating: r.rating, best: !!r.is_best, label: r.review_source === 'admin' ? '관리자 등록' : (r.review_source === 'granted' ? '체험 후기' : null),
         photos: [], product: r.products_with ? { id: r.products_with.id, name: r.products_with.name, image: firstImage(r.products_with) } : null, at: r.created_at }));
     }
-    let merged = [...band, ...withRev].sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0));
+    // 🏆 베스트 리뷰를 맨 위에, 나머지는 최신순
+    let merged = [...band, ...withRev].sort((a, b) => (b.best ? 1 : 0) - (a.best ? 1 : 0) || new Date(b.at || 0) - new Date(a.at || 0));
     if (rq) {
       // 후기 글 내용·상품명에서 검색 (띄어쓰기 달라도 찾도록 공백 제거 비교 병행)
       const toks = rq.split(/\s+/).filter(Boolean);

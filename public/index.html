@@ -2418,7 +2418,7 @@
                             <div class="lp-rv-img" style="${r.photo ? `background-image:url('${WithPlus.safeUrlAttr(r.photo)}')` : ''}"><span class="lp-src${r.source === 'band' ? '' : ' with'}">${r.source === 'band' ? '밴드' : 'WITH+'}</span></div>
                             <div class="lp-stars">${r.rating ? '★'.repeat(r.rating) + '<span style="color:#E6E6E6">' + '★'.repeat(5 - r.rating) + '</span>' : ''}</div>
                             <div class="lp-rv-text">${esc(r.text || (r.product ? r.product.name : ''))}</div>
-                            <div class="lp-rv-who">${esc(r.author)}님</div>
+                            <div class="lp-rv-who">${r.best ? '<b style="color:#E8125C;">🏆 베스트</b> · ' : ''}${esc(r.author)}님${r.label ? ' · ' + esc(r.label) : ''}</div>
                         </a>`).join('') : '<p class="lp-empty">아직 공개된 후기가 없습니다</p>';
                     }
                     const feedEl = document.getElementById('lp-feed');
