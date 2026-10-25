@@ -9,8 +9,10 @@
  *   { mode: 'default' }
  *   { mode: 'community', bp: 200, rounding_unit: 10, community: { id, name, slug }, label: '선훈교회 공동체가' }
  *       bp = 기본가 대비 가감률(0.01% 단위 정수, 200 = +2%) - 정수로 계산해 부동소수점 오차로 서버/화면이 1원이라도 어긋나지 않게 한다
- *   { mode: 'wholesale', rounding_unit: 10, wholesale_bp: 2000, category_bp: { food: 1500 }, overrides: { <product_id>: 8000 }, label: '도매가' }
- *       wholesale_bp = 공통 도매 할인율(2000 = 20%), category_bp = 카테고리별 할인율, overrides = 상품별 도매채널가(최우선)
+ *   { mode: 'wholesale', rounding_unit: 10, wholesale_bp: 2000, category_bp: { food: 1500 }, product_bp: { <product_id>: 2500 }, overrides: { <product_id>: 8000 }, label: '도매가' }
+ *       wholesale_bp = 공통 도매 할인율(2000 = 20%), category_bp = 카테고리별 할인율, product_bp = 상품별 도매 할인율,
+ *       overrides = 상품별 도매채널가(고정 금액, 최우선)
+ *       우선순위: overrides > product_bp > category_bp > wholesale_bp
  */
 (function (root, factory) {
   const api = factory();
@@ -52,6 +54,8 @@
   }
 
   function wholesaleBpFor(product, ctx) {
+    const pid = product && product.id;
+    if (ctx.product_bp && pid !== undefined && pid !== null && ctx.product_bp[pid] !== undefined && ctx.product_bp[pid] !== null) return num(ctx.product_bp[pid]);
     const cat = product && product.category;
     if (ctx.category_bp && cat !== undefined && cat !== null && ctx.category_bp[cat] !== undefined) return num(ctx.category_bp[cat]);
     return num(ctx.wholesale_bp);
@@ -118,5 +122,15 @@
     return product;
   }
 
-  return { DEFAULT_ROUNDING_UNIT, effectiveUnitPrice, applyBp, communityBp, unitPrice, tierTotal, adjustProduct, wholesaleBpFor };
+  // 도매가가 어디서 정해졌는지: product(상품별 도매채널가) / product_rate(상품별 할인율) / category / default
+  function wholesaleSource(product, ctx) {
+    if (hasOverride(product, ctx)) return 'product';
+    const pid = product && product.id;
+    if (ctx && ctx.product_bp && pid !== undefined && pid !== null && ctx.product_bp[pid] !== undefined && ctx.product_bp[pid] !== null) return 'product_rate';
+    const cat = product && product.category;
+    if (ctx && ctx.category_bp && cat !== undefined && cat !== null && ctx.category_bp[cat] !== undefined) return 'category';
+    return 'default';
+  }
+
+  return { DEFAULT_ROUNDING_UNIT, effectiveUnitPrice, applyBp, communityBp, unitPrice, tierTotal, adjustProduct, wholesaleBpFor, wholesaleSource };
 });

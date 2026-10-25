@@ -794,6 +794,8 @@
                 </div>
                 <div class="field"><label>정가 (원) *</label><input type="number" id="pf-price" min="0" required></div>
                 <div class="field"><label>할인가 (원, 선택)</label><input type="number" id="pf-discount-price" min="0"></div>
+                <div class="field" id="pf-ws-rate-field"><label>도매 할인율 (%, 상품별 · 선택)</label><input type="number" id="pf-ws-rate" min="0" max="90" step="0.1" placeholder="비우면 카테고리 / 기본 도매 할인율">
+                    <p style="font-size:0.78em; color:var(--text-gray); margin:4px 0 0;">도매 회원 가격 = 기본가 − 이 할인율. 비워두면 카테고리별 → 기본 도매 할인율(설정 › 채널별 자동 가격)을 씁니다. 💹 채널가에서 도매가를 금액으로 고정해 둔 상품은 그 금액이 먼저입니다.</p></div>
                 <div class="field" id="pf-channel-preview" style="display:none; background:#F7F9FC; border:1px solid #e3e6ea; border-radius:8px; padding:10px 12px; font-size:0.85em; line-height:1.7;"></div>
                 <div class="field qtp-field">
                     <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
@@ -5258,6 +5260,7 @@
                         product_id: document.getElementById('pf-id').value || null,
                         price,
                         discount_price: document.getElementById('pf-discount-price').value || null,
+                        ...(isAdmin ? { wholesale_discount_percent: document.getElementById('pf-ws-rate').value } : {}),
                         category: document.getElementById('pf-category').value || null
                     }) });
                     if (seq !== channelPreviewSeq) return;
@@ -5268,11 +5271,13 @@
                     box.innerHTML = `<div style="font-weight:700; margin-bottom:2px;">🏷️ 채널별 자동 가격 미리보기 <span style="font-weight:400; color:#777;">(1개 기준 · 설정 › 채널별 자동 가격)</span></div>` +
                         `<div>기본가: <b>${WithPlus.formatPrice(d.default_unit_price)}</b> <span style="color:#777;">(일반 회원 · 기본 총 적립율 ${d.base_total_rate_percent}%)</span></div>` +
                         (d.community_enabled ? ex(d.community_highest, '예시 분양몰가(최고 적립)') + ex(d.community_lowest, '예시 분양몰가(최저 적립)') : '<div style="color:#777;">분양몰 가격 자동조정: 꺼짐</div>') +
-                        `<div>도매가: <b>${WithPlus.formatPrice(d.wholesale_unit_price)}</b> <span style="color:#777;">(${d.wholesale_source === 'product' ? '상품별 도매채널가' : (d.wholesale_source === 'category' ? '카테고리 도매 할인율 -' + d.wholesale_discount_percent + '%' : '기본 도매 할인율 -' + d.wholesale_discount_percent + '%')})</span></div>`;
+                        `<div>도매가: <b>${WithPlus.formatPrice(d.wholesale_unit_price)}</b> <span style="color:#777;">(${d.wholesale_source === 'product' ? '상품별 도매채널가' : (d.wholesale_source === 'product_rate' ? '상품별 도매 할인율 -' + d.wholesale_discount_percent + '%' : d.wholesale_source === 'category' ? '카테고리 도매 할인율 -' + d.wholesale_discount_percent + '%' : '기본 도매 할인율 -' + d.wholesale_discount_percent + '%')})</span></div>`;
                     box.style.display = '';
                 } catch (e) { box.style.display = 'none'; }
             }
-            ['pf-price', 'pf-discount-price'].forEach(id => document.getElementById(id).addEventListener('input', scheduleChannelPreview));
+            ['pf-price', 'pf-discount-price', 'pf-ws-rate'].forEach(id => document.getElementById(id).addEventListener('input', scheduleChannelPreview));
+            // 상품별 도매 할인율은 관리자만 정한다 (공급자 화면에서는 칸을 숨김 — 서버도 관리자 값만 받는다)
+            if (!isAdmin) { const wsField = document.getElementById('pf-ws-rate-field'); if (wsField) wsField.style.display = 'none'; }
             document.getElementById('pf-category').addEventListener('change', scheduleChannelPreview);
 
             function openProductModal(product) {
@@ -5292,6 +5297,7 @@
                     document.getElementById('pf-description').value = product.description || '';
                     document.getElementById('pf-price').value = product.price;
                     document.getElementById('pf-discount-price').value = product.discount_price || '';
+                    document.getElementById('pf-ws-rate').value = (product.wholesale_discount_percent === null || product.wholesale_discount_percent === undefined) ? '' : product.wholesale_discount_percent;
                     qtpSetOptions(product.quantity_price_options);
                     qtvLoad(product.id);
                     document.getElementById('pf-stock').value = product.stock;
@@ -5311,6 +5317,7 @@
                 } else {
                     document.getElementById('product-modal-title').textContent = '새 상품 등록';
                     document.getElementById('pf-id').value = '';
+                    document.getElementById('pf-ws-rate').value = '';
                     qtpSetOptions(null);
                     qtvLoad(null);
                     document.getElementById('pf-status').value = 'active';
@@ -5420,6 +5427,7 @@
                     description: document.getElementById('pf-description').value.trim(),
                     price: document.getElementById('pf-price').value,
                     discount_price: document.getElementById('pf-discount-price').value || null,
+                    ...(isAdmin ? { wholesale_discount_percent: document.getElementById('pf-ws-rate').value } : {}),
                     stock: document.getElementById('pf-stock').value,
                     status: document.getElementById('pf-status').value,
                     images_urls: document.getElementById('pf-images').value
@@ -13038,7 +13046,7 @@
                                 </div>
                             </div>
                             <div class="subsection-title">🏭 도매 가격</div>
-                            <p class="desc" style="margin-top:0;">도매 회원에게는 도매가 = 기본가 − 도매 할인율 이 자동 적용됩니다. 상품별 도매채널가(상품 수정 › 채널별 가격)가 지정돼 있으면 그 값이 가장 우선이고, 다음은 카테고리별 할인율, 마지막이 공통 할인율입니다. 도매가에는 수량별 묶음가가 적용되지 않으며, 도매 회원은 공동체가 대신 도매가로 구매합니다.</p>
+                            <p class="desc" style="margin-top:0;">도매 회원에게는 도매가 = 기본가 − 도매 할인율 이 자동 적용됩니다. 상품별 도매채널가(💹 채널가에서 금액으로 고정)가 있으면 그 값이 가장 우선이고, 다음은 <b>상품별 도매 할인율(상품 수정 화면)</b>, 그다음 카테고리별 할인율, 마지막이 공통 할인율입니다. 도매가에는 수량별 묶음가가 적용되지 않으며, 도매 회원은 공동체가 대신 도매가로 구매합니다.</p>
                             <div class="field"><label>도매 기본 할인율 (%)</label>
                                 <div class="rate-input-row"><input type="number" id="cp-wholesale-rate" min="0" max="90" step="0.1" value="${settings.wholesale_discount_percent}" style="width:120px;"><span>%</span></div>
                             </div>
