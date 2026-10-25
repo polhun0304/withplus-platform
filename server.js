@@ -1640,6 +1640,25 @@ async function getWholesaleOverrideMap(productIds) {
   return map;
 }
 
+// 상품별 도매 할인율 맵 { product_id: bp(0.01% 단위) } - 값이 있는 상품만, productIds 를 주면 그 상품만 조회
+async function getWholesaleProductRateMap(productIds) {
+  if (Array.isArray(productIds) && productIds.length === 0) return {};
+  let q = supabase.from('products_with').select('id, wholesale_discount_percent').not('wholesale_discount_percent', 'is', null);
+  if (Array.isArray(productIds)) q = q.in('id', productIds);
+  const { data } = await q;
+  const map = {};
+  (data || []).forEach(r => { const v = Number(r.wholesale_discount_percent); if (Number.isFinite(v) && v >= 0) map[r.id] = Math.round(v * 100); });
+  return map;
+}
+// 상품별 도매 할인율 입력값 정리 - undefined(안 보냄) / null(비움 = 카테고리·공통 할인율 사용) / 0~90 숫자
+function parseWholesaleDiscountPercent(v) {
+  if (v === undefined) return { ok: true, value: undefined };
+  if (v === null || v === '') return { ok: true, value: null };
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0 || n > 90) return { ok: false, message: '도매 할인율은 0~90% 사이로 입력해주세요' };
+  return { ok: true, value: Math.round(n * 100) / 100 };
+}
+
 async function buildWholesalePriceContext(productIds) {
   const s = await getChannelPricingSettings();
   const category_bp = {};
@@ -1651,6 +1670,7 @@ async function buildWholesalePriceContext(productIds) {
     wholesale_bp: Math.round(Number(s.wholesale_discount_percent) * 100),
     wholesale_discount_percent: s.wholesale_discount_percent,
     category_bp,
+    product_bp: await getWholesaleProductRateMap(productIds),
     overrides: await getWholesaleOverrideMap(productIds)
   };
 }
@@ -1826,6 +1846,13 @@ app.post('/api/admin/channel-pricing/preview', authenticate, requireRole(['admin
       return { community_name: r.c.name, total_rate_percent: Math.round(r.total * 10000) / 100, adjust_percent: bp / 100, unit_price: ChannelPricing.unitPrice(product, ctx) };
     };
     const wsCtx = await buildWholesalePriceContext(productId ? [productId] : []);
+    // 저장 전 화면에 입력한 상품별 도매 할인율을 미리보기에 반영 (비우면 카테고리·공통 할인율)
+    if (b.wholesale_discount_percent !== undefined) {
+      const wr = parseWholesaleDiscountPercent(b.wholesale_discount_percent);
+      if (!product.id) product.id = '__preview__';
+      if (wr.ok && wr.value !== null && wr.value !== undefined) wsCtx.product_bp[product.id] = Math.round(wr.value * 100);
+      else delete wsCtx.product_bp[product.id];
+    }
     const hasOverride = !!(productId && wsCtx.overrides[productId] !== undefined);
     res.json({
       success: true,
@@ -1836,7 +1863,7 @@ app.post('/api/admin/channel-pricing/preview', authenticate, requireRole(['admin
         community_highest: asExample(ranked[0]),
         community_lowest: ranked.length > 1 ? asExample(ranked[ranked.length - 1]) : null,
         wholesale_unit_price: ChannelPricing.unitPrice(product, wsCtx),
-        wholesale_source: hasOverride ? 'product' : (product.category && wsCtx.category_bp[product.category] !== undefined ? 'category' : 'default'),
+        wholesale_source: ChannelPricing.wholesaleSource(product, wsCtx),
         wholesale_discount_percent: hasOverride ? null : ChannelPricing.wholesaleBpFor(product, wsCtx) / 100
       },
       timestamp: new Date().toISOString()
@@ -6348,7 +6375,7 @@ app.get('/api/wholesale/products', authenticate, requireRole(['wholesale', 'admi
     const data = (products || []).map(p => ({
       ...p,
       wholesale_price: computeChannelUnitPrice(p, wsCtx),
-      wholesale_price_source: wsCtx.overrides[p.id] !== undefined ? 'product' : (wsCtx.category_bp[p.category] !== undefined ? 'category' : 'default')
+      wholesale_price_source: ChannelPricing.wholesaleSource(p, wsCtx)
     }));
     res.json({ success: true, data, timestamp: new Date().toISOString() });
   } catch (err) {
@@ -6900,6 +6927,10 @@ app.post('/api/products', authenticate, requireRole(['provider', 'admin', 'super
     if (!qtpCreate.ok) {
       return res.status(400).json({ error: 'Bad Request', message: qtpCreate.message, timestamp: new Date().toISOString() });
     }
+    const wsRateCreate = parseWholesaleDiscountPercent(req.body.wholesale_discount_percent);
+    if (!wsRateCreate.ok) {
+      return res.status(400).json({ error: 'Bad Request', message: wsRateCreate.message, timestamp: new Date().toISOString() });
+    }
 
     const vatSplit = computeVatSplit(price, supply_amount, vat_amount);
     const initialStock = stock ? parseInt(stock, 10) : 0;
@@ -6913,6 +6944,8 @@ app.post('/api/products', authenticate, requireRole(['provider', 'admin', 'super
         price: parseFloat(price),
         discount_price: discount_price ? parseFloat(discount_price) : null,
         quantity_price_options: qtpCreate.value || null,
+        // 상품별 도매 할인율은 관리자만 정한다(공급자가 보내도 무시)
+        ...(isAdminRole(req.userRole) && wsRateCreate.value !== undefined ? { wholesale_discount_percent: wsRateCreate.value } : {}),
         category,
         stock: 0,
         barcode: barcode ? String(barcode).trim() : null,
@@ -7016,6 +7049,12 @@ async function updateProductCore(req, id, body) {
     if (long_description !== undefined) updates.long_description = long_description;
     if (price !== undefined) updates.price = parseFloat(price);
     if (discount_price !== undefined) updates.discount_price = discount_price === null || discount_price === '' ? null : parseFloat(discount_price);
+    // 상품별 도매 할인율 (관리자만 · 비우면 카테고리/공통 할인율)
+    if (isAdminRole(req.userRole) && (body || {}).wholesale_discount_percent !== undefined) {
+      const wsRate = parseWholesaleDiscountPercent(body.wholesale_discount_percent);
+      if (!wsRate.ok) return res.status(400).json({ error: 'Bad Request', message: wsRate.message, timestamp: new Date().toISOString() });
+      updates.wholesale_discount_percent = wsRate.value;
+    }
     if (category !== undefined) updates.category = category;
     if (images_urls !== undefined) updates.images_urls = images_urls;
     if (detail_sections !== undefined) updates.detail_sections = sanitizeDetailSections(detail_sections);
@@ -7426,10 +7465,12 @@ app.get('/api/admin/products', authenticate, requireRole(['provider', 'admin', '
       : { data: [] };
     const ownerMap = {};
     (ownerProfiles || []).forEach(p => { ownerMap[p.id] = p; });
+    const wsRateMap = isAdminRole(req.userRole) ? await getWholesaleProductRateMap((data || []).map(p => p.id)) : {};
     const enriched = (data || []).map(p => {
       const owner = ownerMap[p.supplier_id];
       return {
         ...p,
+        ...(isAdminRole(req.userRole) ? { wholesale_discount_percent: wsRateMap[p.id] !== undefined ? wsRateMap[p.id] / 100 : null } : {}),
         owner_role: owner ? owner.role : null,
         owner_name: owner ? (owner.full_name || owner.email) : null,
         is_self_stocked: !owner || owner.role !== 'provider' // 소유 계정이 provider가 아니면(관리자 등) 쇼핑몰 자체재고로 간주
