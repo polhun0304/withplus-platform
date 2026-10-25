@@ -15753,19 +15753,25 @@ function shortText(s, n) { const t = Array.from(String(s || '').replace(/#[^\s#]
 
 app.get('/api/home/live', async (req, res) => {
   try {
-    // "지금 이 순간" 피드는 최근 7일 이벤트만(조용한 기간엔 최근 60일까지 넓혀서 빈 칸을 피한다)
-    const FEED_LIMIT = 20;
-    const since7 = new Date(Date.now() - 7 * 864e5).toISOString();
-    const since60 = new Date(Date.now() - 60 * 864e5).toISOString();
-    const [bandRes, revRes, ordRes, cartRes, bandCnt, revCnt, ordCnt] = await Promise.all([
+    // "지금 이 순간" 피드: 기간 제한 없이 종류별 최신 활동을 모두 모아 시간순으로 보여준다.
+    // (장바구니 담기·결제완료·후기·밴드 후기·찜·출석체크·쿠폰 받기 — 비로그인 고객의 장바구니 담기도 포함)
+    // 밴드 후기가 많아도 다른 활동이 밀려나지 않도록, 다른 활동을 먼저 넣고 밴드 후기는 남은 칸(최소 10칸)을 채운다.
+    const FEED_TOTAL = 40, PER_TYPE = 20;
+    const [bandRes, revRes, ordRes, cartRes, guestCartRes, wishRes, attRes, cpnRes, bandCnt, revCnt, ordCnt] = await Promise.all([
       supabase.from('band_posts_with').select('post_no, author_masked, body, stored_photo_urls, posted_at, products_with(id, name, images_urls)')
         .eq('status', 'approved').eq('kind', 'review').order('posted_at', { ascending: false, nullsFirst: false }).limit(20),
       supabase.from('product_reviews').select('id, rating, comment, created_at, user_id, products_with(id, name, images_urls)')
-        .eq('status', 'published').order('created_at', { ascending: false }).limit(20),
+        .eq('status', 'published').order('created_at', { ascending: false }).limit(PER_TYPE),
       supabase.from('orders_with').select('created_at, payment_at, user_id, items').in('status', LIVE_ORDER_STATUSES)
-        .gte('created_at', since60).order('created_at', { ascending: false }).limit(20),
+        .order('created_at', { ascending: false }).limit(PER_TYPE),
       supabase.from(ACTIVITY_EVENTS_TABLE).select('created_at, user_id, product_id').eq('event_type', 'cart_add')
-        .gte('created_at', since60).order('created_at', { ascending: false }).limit(20),
+        .order('created_at', { ascending: false }).limit(PER_TYPE),
+      // 비로그인 고객의 장바구니 담기 (로그인 고객은 위 활동 이벤트에 이미 남으므로 user_id 없는 것만)
+      supabase.from('product_interactions_with').select('created_at, product_id').eq('event_type', 'cart_add').is('user_id', null)
+        .order('created_at', { ascending: false }).limit(PER_TYPE),
+      supabase.from('wishlist_with').select('created_at, user_id, product_id').order('created_at', { ascending: false }).limit(PER_TYPE),
+      supabase.from('attendance_checkins_with').select('created_at, user_id').order('created_at', { ascending: false }).limit(PER_TYPE),
+      supabase.from('coupon_claims_with').select('claimed_at, user_id').order('claimed_at', { ascending: false }).limit(PER_TYPE),
       supabase.from('band_posts_with').select('*', { count: 'exact', head: true }).eq('status', 'approved').eq('kind', 'review'),
       supabase.from('product_reviews').select('*', { count: 'exact', head: true }).eq('status', 'published'),
       supabase.from('orders_with').select('*', { count: 'exact', head: true }).in('status', LIVE_ORDER_STATUSES)
@@ -15784,27 +15790,41 @@ app.get('/api/home/live', async (req, res) => {
     const allReviews = [...band, ...withRev].filter(r => r.at).sort((a, b) => new Date(b.at) - new Date(a.at));
     const reviews = allReviews.filter(r => r.text || r.photo).slice(0, 12);
 
-    // 주문·장바구니 이벤트의 상품 정보(이름·사진) — 테스트·판매중지 상품은 빼고 지금 판매 중인 상품만
+    // 활동에 나온 상품 정보(이름·사진). 판매 중이 아닌 상품도 활동 자체는 보여주고 상품 링크만 걸지 않는다.
     const firstPid = o => (Array.isArray(o.items) && o.items[0] && o.items[0].product_id) || null;
-    const pids = [...new Set([...(ordRes.data || []).map(firstPid), ...(cartRes.data || []).map(c => c.product_id)].filter(Boolean))];
-    const { data: prodRows } = pids.length ? await supabase.from('products_with').select('id, name, images_urls').in('id', pids).eq('status', 'active') : { data: [] };
+    const pids = [...new Set([
+      ...(ordRes.data || []).map(firstPid),
+      ...[cartRes, guestCartRes, wishRes].flatMap(r => (r.data || []).map(c => c.product_id))
+    ].filter(Boolean))];
+    const { data: prodRows } = pids.length ? await supabase.from('products_with').select('id, name, images_urls, status').in('id', pids) : { data: [] };
     const prodById = {};
     (prodRows || []).forEach(p => { prodById[p.id] = p; });
-    const orders = await attachReviewerNames((ordRes.data || []).filter(o => prodById[firstPid(o)]));
-    const carts = await attachReviewerNames((cartRes.data || []).filter(c => prodById[c.product_id]));
-    const prodOut = id => (prodById[id] ? { product_id: id, product_name: prodById[id].name, product_image: firstImage(prodById[id]) } : { product_id: null, product_name: null, product_image: null });
+    const noProd = { product_id: null, product_name: null, product_image: null };
+    const prodOut = id => {
+      const p = prodById[id];
+      if (!p) return noProd;
+      return { product_id: p.status === 'active' ? id : null, product_name: p.name, product_image: firstImage(p) };
+    };
+    const [orders, carts, wishes, atts, cpns] = await Promise.all(
+      [ordRes, cartRes, wishRes, attRes, cpnRes].map(r => attachReviewerNames(r.data || []))
+    );
 
-    let feed = [
+    const others = [
       ...carts.map(c => ({ type: 'cart_add', author: c.author_name || '고객', ...prodOut(c.product_id), extra: 0, at: c.created_at })),
+      ...(guestCartRes.data || []).map(c => ({ type: 'cart_add', author: '고객', ...prodOut(c.product_id), extra: 0, at: c.created_at })),
       ...orders.map(o => {
         const items = Array.isArray(o.items) ? o.items : [];
         const first = items[0] || {};
-        return { type: 'order', author: o.author_name || '고객', ...prodOut(first.product_id), product_name: (prodById[first.product_id] || {}).name || first.name || '상품', extra: items.length > 1 ? items.length - 1 : 0, at: o.payment_at || o.created_at };
+        const po = prodOut(first.product_id);
+        return { type: 'order', author: o.author_name || '고객', ...po, product_name: po.product_name || first.name || '상품', extra: items.length > 1 ? items.length - 1 : 0, at: o.payment_at || o.created_at };
       }),
-      ...allReviews.slice(0, 20).map(r => ({ type: r.source === 'band' ? 'band_review' : 'review', author: r.author, product_id: r.product ? r.product.id : null, product_name: r.product ? r.product.name : null, product_image: r.product ? (r.product.image || r.photo) : r.photo, extra: 0, at: r.at }))
-    ].filter(e => e.at && new Date(e.at) >= new Date(since60)).sort((a, b) => new Date(b.at) - new Date(a.at));
-    const recent = feed.filter(e => new Date(e.at) >= new Date(since7));
-    feed = (recent.length >= 4 ? recent : feed).slice(0, FEED_LIMIT);
+      ...withRev.map(r => ({ type: 'review', author: r.author, product_id: r.product ? r.product.id : null, product_name: r.product ? r.product.name : null, product_image: r.product ? (r.product.image || r.photo) : r.photo, extra: 0, at: r.at })),
+      ...wishes.map(w => ({ type: 'wishlist', author: w.author_name || '고객', ...prodOut(w.product_id), extra: 0, at: w.created_at })),
+      ...atts.map(a => ({ type: 'attendance', author: a.author_name || '고객', ...noProd, extra: 0, at: a.created_at })),
+      ...cpns.map(c => ({ type: 'coupon', author: c.author_name || '고객', ...noProd, extra: 0, at: c.claimed_at }))
+    ].filter(e => e.at).sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, FEED_TOTAL - 10);
+    const bandFeed = band.filter(r => r.at).map(r => ({ type: 'band_review', author: r.author, product_id: r.product ? r.product.id : null, product_name: r.product ? r.product.name : null, product_image: r.product ? (r.product.image || r.photo) : r.photo, extra: 0, at: r.at }));
+    let feed = [...others, ...bandFeed.slice(0, FEED_TOTAL - others.length)].sort((a, b) => new Date(b.at) - new Date(a.at));
     // 같은 순간 키(정렬·애니메이션용) — 개인을 식별할 수 있는 값은 담지 않는다
     feed = feed.map(e => ({ ...e, key: [e.type, e.at, e.product_id || ''].join('|') }));
 

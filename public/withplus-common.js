@@ -229,11 +229,21 @@
     return { lineTotal: (getEffectiveUnitPrice(p) + adj) * q, tierApplied: false };
   }
 
+  // 출고 마감 시각(오후 2시, 한국 시간) 기준 배송 안내 배지 - LIVE+/WITH+ 공통 규칙.
+  // 재고가 없으면 표시하지 않고, 마감 전이면 "당일 출고", 마감 후면 "내일 출고"로 안내한다.
+  // 해외에서 접속해도 실제 출고 기준인 한국 시간으로 판단하도록 브라우저 로컬 시간이 아닌 Asia/Seoul을 쓴다.
+  const SHIPPING_CUTOFF_HOUR = 14;
+  function getKstHour() {
+    try {
+      return Number(new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Seoul', hour: 'numeric', hourCycle: 'h23' }).format(new Date()));
+    } catch (e) {
+      return new Date().getHours();
+    }
+  }
   function getShippingBadgeLabel(stock) {
     const n = Number(stock);
     if (!Number.isFinite(n) || n <= 0) return '';
-    if (n <= 5) return `⏰ 재고 ${n}개 남음 - 서둘러 주문해주세요`;
-    return '🚚 오후 2시까지 주문하면 당일 출고';
+    return getKstHour() < SHIPPING_CUTOFF_HOUR ? '🚚 오후 2시까지 주문하면 당일 출고' : '🚚 지금 주문하면 내일 출고';
   }
 
   // ============================================
