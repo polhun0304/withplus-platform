@@ -1645,7 +1645,9 @@ async function getWholesaleProductRateMap(productIds) {
   if (Array.isArray(productIds) && productIds.length === 0) return {};
   let q = supabase.from('products_with').select('id, wholesale_discount_percent').not('wholesale_discount_percent', 'is', null);
   if (Array.isArray(productIds)) q = q.in('id', productIds);
-  const { data } = await q;
+  const { data, error } = await q;
+  // 조회 실패를 "할인율 없음"으로 취급하면 결제가 기본 할인율로 계산되고, 관리자 화면 저장 시 할인율이 지워질 수 있다 → 오류로 멈춘다
+  if (error) throw error;
   const map = {};
   (data || []).forEach(r => { const v = Number(r.wholesale_discount_percent); if (Number.isFinite(v) && v >= 0) map[r.id] = Math.round(v * 100); });
   return map;
