@@ -533,6 +533,24 @@
         .qtp-row input { width:100%; min-width:0; box-sizing:border-box; }
         .qtp-row .qtp-calc { grid-column: 1 / -1; font-size:0.8em; color:#555; }
         .qtp-row .qtp-remove { grid-row:1; grid-column:5; }
+        /* 수량별 가격 + 사이즈/색상 옵션 */
+        .qtv-box { margin-top:12px; padding-top:10px; border-top:1px dashed #d5dae1; }
+        .qtv-title { font-weight:700; font-size:0.9em; margin-bottom:2px; }
+        .qtv-title span { font-weight:400; color:var(--text-gray, #777); }
+        .qtv-help { font-size:0.78em; color:var(--text-gray, #777); margin:0 0 6px; }
+        .qtv-rows { display:flex; flex-direction:column; gap:8px; margin-bottom:6px; }
+        .qtv-row { display:grid; grid-template-columns: minmax(0,1.6fr) minmax(0,1fr) 80px auto; gap:6px 8px; align-items:end; background:#fff; border:1px solid #e3e6ea; border-radius:8px; padding:8px; min-width:0; }
+        .qtv-row label { display:flex; flex-direction:column; font-size:0.75em; color:var(--text-gray, #777); gap:3px; min-width:0; }
+        .qtv-row input { width:100%; min-width:0; box-sizing:border-box; }
+        .qtv-preview { font-size:0.8em; overflow-x:auto; }
+        .qtv-preview table { border-collapse:collapse; margin-top:6px; white-space:nowrap; background:#fff; }
+        .qtv-preview th, .qtv-preview td { border:1px solid #e3e6ea; padding:4px 8px; text-align:right; }
+        .qtv-preview th:first-child, .qtv-preview td:first-child { text-align:left; }
+        .qtv-preview td.bad { color:#C62828; font-weight:700; }
+        @media (max-width: 640px) {
+            .qtv-row { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
+            .qtv-row .qtv-remove { grid-column: 1 / -1; }
+        }
         @media (max-width: 640px) {
             .qtp-row { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }
             .qtp-row .qtp-remove { grid-row:auto; grid-column: 1 / -1; }
@@ -779,6 +797,13 @@
                         <div id="pf-qtp-rows" class="qtp-rows"></div>
                         <button type="button" class="btn btn-secondary btn-sm" id="pf-qtp-add" style="margin-top:6px;">+ 수량 추가</button>
                         <p class="msg" id="pf-qtp-msg" style="margin-top:6px;"></p>
+                        <div class="qtv-box">
+                            <div class="qtv-title">🎨 사이즈/색상 옵션 <span>(선택)</span></div>
+                            <p class="qtv-help">옵션별 추가금액은 <b>개당 금액</b>입니다. 고른 수량만큼 곱해서 묶음 가격에 더해집니다. 예) 2개 52,920원 + 추가금 1,000원 → 2개 54,920원</p>
+                            <div id="pf-qtv-rows" class="qtv-rows"></div>
+                            <button type="button" class="btn btn-secondary btn-sm" id="pf-qtv-add">+ 옵션 추가</button>
+                            <div id="pf-qtv-preview" class="qtv-preview"></div>
+                        </div>
                     </div>
                 </div>
                 <div class="field" id="pf-cost-field" style="display:none; background:#FFF8E1; border:1px dashed #E0A800; border-radius:8px; padding:12px;">
@@ -886,7 +911,7 @@
                     <input type="text" id="vf-name" required placeholder="예: 블랙 / L" class="small-input" style="width:100%;">
                 </div>
                 <div class="field" style="width:110px; margin-bottom:0;">
-                    <label>추가금액(원)</label>
+                    <label>추가금액(개당, 원)</label>
                     <input type="number" id="vf-price-adjustment" value="0" class="small-input" style="width:100%;">
                 </div>
                 <div class="field" style="width:90px; margin-bottom:0;">
@@ -3826,8 +3851,9 @@
                                 <div class="vname">${WithPlus.escapeHtml(v.name)} ${v.is_active ? '' : '<span class="badge discontinued">비활성</span>'}</div>
                                 <div class="vmeta">${Number(v.price_adjustment) !== 0 ? (Number(v.price_adjustment) > 0 ? '+' : '') + Number(v.price_adjustment).toLocaleString('ko-KR') + '원 · ' : ''}재고 ${v.stock}개</div>
                             </div>
-                            <input type="number" class="small-input v-stock-input" value="${v.stock}" min="0" style="width:70px;">
-                            <button type="button" class="btn-xs v-save-stock">재고저장</button>
+                            <input type="number" class="small-input v-adj-input" value="${Number(v.price_adjustment) || 0}" step="1" style="width:90px;" title="추가금액(개당, 원)" aria-label="추가금액(개당, 원)">
+                            <input type="number" class="small-input v-stock-input" value="${v.stock}" min="0" style="width:70px;" title="재고" aria-label="재고">
+                            <button type="button" class="btn-xs v-save-stock">저장</button>
                             <button type="button" class="btn-xs">${v.is_active ? '비활성화' : '활성화'}</button>
                             <button type="button" class="btn-xs danger v-delete">삭제</button>
                         </div>`).join('');
@@ -3838,7 +3864,9 @@
                         row.querySelector('.v-save-stock').addEventListener('click', async () => {
                             const newStock = parseInt(row.querySelector('.v-stock-input').value, 10);
                             if (!Number.isFinite(newStock) || newStock < 0) { alert('올바른 재고 수량을 입력해주세요'); return; }
-                            const { ok, json: j } = await authedFetch('/api/admin/product-variants/' + vid, { method: 'PUT', body: JSON.stringify({ stock: newStock }) });
+                            const newAdj = Number(row.querySelector('.v-adj-input').value || 0);
+                            if (!Number.isInteger(newAdj)) { alert('추가금액은 원 단위 정수로 입력해주세요'); return; }
+                            const { ok, json: j } = await authedFetch('/api/admin/product-variants/' + vid, { method: 'PUT', body: JSON.stringify({ stock: newStock, price_adjustment: newAdj }) });
                             if (!ok) { alert(j.message || '재고 저장에 실패했습니다'); return; }
                             await loadVariantList();
                             await loadStockHistory();
@@ -5028,6 +5056,150 @@
                 if (e.target.classList.contains('qtp-remove')) { e.target.closest('.qtp-row').remove(); qtpRecalc(); }
             });
             qtpRowsEl.addEventListener('input', qtpRecalc);
+
+            // ============================================
+            // 수량별 가격 옵션과 함께 쓰는 사이즈/색상 옵션 편집기 - 행: { 옵션명, 개당 추가금액, 재고 }
+            // 저장하면 상품을 먼저 저장한 뒤 옵션을 추가/수정/삭제한다(기존 옵션 API 그대로 사용).
+            // 판매가 = 묶음 총액 + 추가금액 × 수량 (서버 computeProductLineTotal과 같은 규칙)
+            // ============================================
+            const qtvRowsEl = document.getElementById('pf-qtv-rows');
+            const qtvPreviewEl = document.getElementById('pf-qtv-preview');
+            let qtvRemovedIds = [];
+            let qtvLoadSeq = 0;
+            function qtvAddRow(v) {
+                v = v || {};
+                const div = document.createElement('div');
+                div.className = 'qtv-row';
+                if (v.id) {
+                    div.dataset.id = v.id;
+                    div.dataset.orig = JSON.stringify({ name: v.name || '', adj: Number(v.price_adjustment) || 0, stock: Number(v.stock) || 0 });
+                }
+                div.innerHTML = `
+                    <label>옵션명<input type="text" class="qtv-name" maxlength="60" value="${WithPlus.escapeHtml(v.name || '')}" placeholder="예: 블랙 / L"></label>
+                    <label>추가금액(개당, 원)<input type="number" class="qtv-adj" step="1" value="${v.price_adjustment != null ? Number(v.price_adjustment) : 0}"></label>
+                    <label>재고<input type="number" class="qtv-stock" min="0" step="1" value="${v.stock != null ? Number(v.stock) : 0}"></label>
+                    <button type="button" class="btn btn-secondary btn-sm qtv-remove" title="이 옵션 삭제">삭제</button>`;
+                qtvRowsEl.appendChild(div);
+                qtvRecalc();
+            }
+            async function qtvLoad(productId) {
+                const seq = ++qtvLoadSeq;
+                qtvRowsEl.innerHTML = '';
+                qtvRemovedIds = [];
+                qtvRecalc();
+                if (!productId) return;
+                try {
+                    const { ok, json } = await authedFetch('/api/admin/products/' + productId + '/variants');
+                    if (seq !== qtvLoadSeq || !ok || !json.success) return;
+                    // 비활성 옵션은 여기서 건드리지 않는다(🎨 옵션/재고 창에서 관리)
+                    (json.data || []).filter(v => v.is_active !== false).forEach(v => qtvAddRow(v));
+                } catch (e) { /* 옵션 목록을 못 불러와도 상품 수정은 계속 가능 */ }
+            }
+            function qtvRows() {
+                return [...qtvRowsEl.querySelectorAll('.qtv-row')].map(r => ({
+                    el: r,
+                    id: r.dataset.id || null,
+                    orig: r.dataset.orig ? JSON.parse(r.dataset.orig) : null,
+                    name: r.querySelector('.qtv-name').value.trim(),
+                    adjRaw: r.querySelector('.qtv-adj').value,
+                    stockRaw: r.querySelector('.qtv-stock').value
+                }));
+            }
+            // 미리보기용 묶음 목록 (1개 묶음이 없으면 상품 페이지처럼 1개 가격 행을 맨 앞에 넣는다)
+            function qtvTiers() {
+                const unit = qtpUnitPrice();
+                const tiers = [...qtpRowsEl.querySelectorAll('.qtp-row')].map(r => ({
+                    qty: Number(r.querySelector('.qtp-qty').value), price: Number(r.querySelector('.qtp-price').value)
+                })).filter(t => Number.isInteger(t.qty) && t.qty >= 1 && t.price > 0).sort((a, b) => a.qty - b.qty);
+                if (!tiers.some(t => t.qty === 1) && unit > 0) tiers.unshift({ qty: 1, price: unit });
+                return tiers;
+            }
+            function qtvRecalc() {
+                if (!qtvPreviewEl) return;
+                const rows = qtvRows().filter(r => r.name);
+                const tiers = qtvTiers();
+                if (rows.length === 0 || tiers.length === 0) { qtvPreviewEl.innerHTML = ''; return; }
+                const fmt = n => Math.round(n).toLocaleString('ko-KR') + '원';
+                qtvPreviewEl.innerHTML = `<div style="margin-top:8px; font-weight:600;">옵션별 판매가 미리보기</div><table><thead><tr><th>옵션</th>${tiers.map(t => `<th>${t.qty}개</th>`).join('')}</tr></thead><tbody>` +
+                    rows.map(r => {
+                        const adj = Number(r.adjRaw) || 0;
+                        return `<tr><td>${WithPlus.escapeHtml(r.name)}${adj ? ` <span style="color:#777;">(${adj > 0 ? '+' : ''}${adj.toLocaleString('ko-KR')}원/개)</span>` : ''}</td>` +
+                            tiers.map(t => { const total = t.price + adj * t.qty; return `<td class="${total > 0 ? '' : 'bad'}">${fmt(total)}</td>`; }).join('') + '</tr>';
+                    }).join('') + '</tbody></table>';
+            }
+            // 검증 후 저장 계획 반환 - 오류면 throw. 수량별 가격 옵션을 쓰지 않으면(편집기가 닫혀 있으면) 옵션은 건드리지 않는다.
+            function qtvCollect() {
+                if (!qtpEnabledEl.checked) return null;
+                const rows = qtvRows();
+                const seen = new Set();
+                const tiers = qtvTiers();
+                const plan = { creates: [], updates: [], deletes: qtvRemovedIds.slice() };
+                rows.forEach(r => {
+                    if (!r.name) throw new Error('사이즈/색상 옵션: 옵션명을 입력하거나 빈 행을 삭제해주세요');
+                    const key = r.name.toLowerCase();
+                    if (seen.has(key)) throw new Error(`사이즈/색상 옵션: '${r.name}' 옵션이 중복되었습니다`);
+                    seen.add(key);
+                    const adj = r.adjRaw === '' ? 0 : Number(r.adjRaw);
+                    if (!Number.isInteger(adj)) throw new Error(`사이즈/색상 옵션: '${r.name}'의 추가금액은 원 단위 정수여야 합니다`);
+                    const stock = Number(r.stockRaw);
+                    if (r.stockRaw === '' || !Number.isInteger(stock) || stock < 0) throw new Error(`사이즈/색상 옵션: '${r.name}'의 재고는 0 이상의 정수여야 합니다`);
+                    const bad = tiers.find(t => t.price + adj * t.qty <= 0);
+                    if (bad) throw new Error(`사이즈/색상 옵션: '${r.name}'을(를) ${bad.qty}개 살 때 판매가가 0원 이하가 됩니다. 추가금액을 확인해주세요`);
+                    if (!r.id) plan.creates.push({ el: r.el, body: { name: r.name, price_adjustment: adj, stock } });
+                    else {
+                        const body = {};
+                        if (r.name !== r.orig.name) body.name = r.name;
+                        if (adj !== r.orig.adj) body.price_adjustment = adj;
+                        if (stock !== r.orig.stock) body.stock = stock;
+                        if (Object.keys(body).length) plan.updates.push({ el: r.el, id: r.id, body, next: { name: r.name, adj, stock } });
+                    }
+                });
+                return plan;
+            }
+            // 성공한 작업은 바로 편집기에 반영한다 - 일부가 실패해 다시 [저장]을 눌러도 이미 된 추가·수정·삭제를 반복하지 않게
+            async function qtvSave(productId, plan) {
+                if (!plan || !productId) return;
+                const fail = [];
+                for (const vid of plan.deletes) {
+                    const { ok, status, json } = await authedFetch('/api/admin/product-variants/' + vid, { method: 'DELETE' });
+                    if (ok || status === 404) qtvRemovedIds = qtvRemovedIds.filter(x => x !== vid); // 404 = 이미 지워짐
+                    else fail.push((json && json.message) || '옵션 삭제 실패');
+                }
+                for (const u of plan.updates) {
+                    const { ok, json } = await authedFetch('/api/admin/product-variants/' + u.id, { method: 'PUT', body: JSON.stringify(u.body) });
+                    if (ok) { if (u.el && u.el.isConnected) u.el.dataset.orig = JSON.stringify(u.next); }
+                    else fail.push((json && json.message) || '옵션 수정 실패');
+                }
+                for (const c of plan.creates) {
+                    const { ok, json } = await authedFetch('/api/admin/products/' + productId + '/variants', { method: 'POST', body: JSON.stringify(c.body) });
+                    if (ok && json && json.data && json.data.id) {
+                        if (c.el && c.el.isConnected) {
+                            c.el.dataset.id = json.data.id;
+                            c.el.dataset.orig = JSON.stringify({ name: c.body.name, adj: c.body.price_adjustment, stock: c.body.stock });
+                        }
+                    } else fail.push(`${c.body.name}: ${(json && json.message) || '옵션 추가 실패'}`);
+                }
+                if (fail.length) throw new Error('상품은 저장됐지만 일부 옵션 저장에 실패했습니다 - ' + fail.join(' / ') + ' (다시 [저장]을 누르면 실패한 것만 다시 시도합니다)');
+            }
+            document.getElementById('pf-qtv-add').addEventListener('click', () => qtvAddRow());
+            qtvRowsEl.addEventListener('click', (e) => {
+                if (!e.target.classList.contains('qtv-remove')) return;
+                const row = e.target.closest('.qtv-row');
+                if (row.dataset.id) {
+                    const nm = row.querySelector('.qtv-name').value.trim() || '이';
+                    if (!confirm(`'${nm}' 옵션을 삭제할까요? (저장 버튼을 눌러야 실제로 삭제됩니다)`)) return;
+                    qtvRemovedIds.push(row.dataset.id);
+                }
+                row.remove();
+                qtvRecalc();
+            });
+            qtvRowsEl.addEventListener('input', qtvRecalc);
+            qtpRowsEl.addEventListener('input', qtvRecalc);
+            qtpRowsEl.addEventListener('click', () => setTimeout(qtvRecalc, 0));
+            document.getElementById('pf-qtp-add').addEventListener('click', () => setTimeout(qtvRecalc, 0));
+            qtpEnabledEl.addEventListener('change', () => setTimeout(qtvRecalc, 0));
+            document.getElementById('pf-price').addEventListener('input', qtvRecalc);
+            document.getElementById('pf-discount-price').addEventListener('input', qtvRecalc);
             document.getElementById('pf-price').addEventListener('input', qtpRecalc);
             document.getElementById('pf-discount-price').addEventListener('input', qtpRecalc);
 
@@ -5081,6 +5253,7 @@
                     document.getElementById('pf-price').value = product.price;
                     document.getElementById('pf-discount-price').value = product.discount_price || '';
                     qtpSetOptions(product.quantity_price_options);
+                    qtvLoad(product.id);
                     document.getElementById('pf-stock').value = product.stock;
                     document.getElementById('pf-status').value = product.status;
                     document.getElementById('pf-images').value = Array.isArray(product.images_urls) ? product.images_urls.join('\n') : '';
@@ -5099,6 +5272,7 @@
                     document.getElementById('product-modal-title').textContent = '새 상품 등록';
                     document.getElementById('pf-id').value = '';
                     qtpSetOptions(null);
+                    qtvLoad(null);
                     document.getElementById('pf-status').value = 'active';
                     document.getElementById('pf-vendor').value = '';
                     document.getElementById('pf-brand').value = '';
@@ -5188,6 +5362,16 @@
                     qtpMsgEl.className = 'msg error';
                     return;
                 }
+                let variantPlan;
+                try {
+                    variantPlan = qtvCollect();
+                } catch (qtvErr) {
+                    pfMsg.textContent = qtvErr.message;
+                    pfMsg.className = 'msg error';
+                    qtpMsgEl.textContent = qtvErr.message;
+                    qtpMsgEl.className = 'msg error';
+                    return;
+                }
                 qtpMsgEl.className = 'msg'; qtpMsgEl.textContent = '';
                 const payload = {
                     quantity_price_options: quantityPriceOptions,
@@ -5235,6 +5419,10 @@
                         : await authedFetch('/api/products', { method: 'POST', body: JSON.stringify(payload) });
 
                     if (!ok) throw new Error(json.message || '저장에 실패했습니다');
+                    // 새 상품이 만들어졌으면 폼에 그 ID를 넣어둔다 - 뒤 단계(옵션 저장)가 실패해 다시 [저장]을 눌러도 상품이 또 만들어지지 않고 수정으로 처리되게
+                    if (!id && json.data && json.data.id) document.getElementById('pf-id').value = json.data.id;
+                    // 사이즈/색상 옵션 추가·수정·삭제 (수량별 가격 옵션을 쓸 때만)
+                    await qtvSave(id || (json.data && json.data.id), variantPlan);
                     // 블록별 사진 크기·정렬 저장 (관리자 권한일 때만 — 실패해도 상품 저장은 그대로)
                     try { await saveSectionLayout(id || (json.data && json.data.id)); } catch (layoutErr) { console.warn('블록 배치 저장 건너뜀', layoutErr.message); }
                     // 홈 배너 사진 크기·위치를 바꿨으면 함께 저장 (관리자 전용 — 실패해도 상품 저장은 그대로)
