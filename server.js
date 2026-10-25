@@ -13062,7 +13062,9 @@ async function getReviewGrantUserIds() {
 async function getReviewEligibility(userId, productId) {
   const [{ data: profile }, { data: orders }, grantIds] = await Promise.all([
     supabase.from('profiles').select('role').eq('id', userId).maybeSingle(),
-    supabase.from('orders_with').select('id, status, items').eq('user_id', userId).in('status', REVIEW_PURCHASE_STATUSES).order('created_at', { ascending: false }).limit(300),
+    // 이 상품이 들어 있는 주문만 DB에서 먼저 고른다(items jsonb @> [{product_id}]) - 주문이 아주 많은 회원도 오래전 구매가 빠지지 않게
+    supabase.from('orders_with').select('id, status, items').eq('user_id', userId).in('status', REVIEW_PURCHASE_STATUSES)
+      .contains('items', JSON.stringify([{ product_id: productId }])).order('created_at', { ascending: false }).limit(50),
     getReviewGrantUserIds()
   ]);
   const withProduct = (orders || []).filter(o => Array.isArray(o.items) && o.items.some(i => i && i.product_id === productId));
