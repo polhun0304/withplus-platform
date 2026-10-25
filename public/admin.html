@@ -11684,6 +11684,10 @@
                 // PC 사진(권장 1200×400, 3:1)과 선택 모바일 사진(권장 750×500, 3:2)·링크·대체문구·노출기간·순서·켜기/끄기를
                 // 한 목록으로 관리하고 [저장]을 눌러야 홈에 반영된다. 사진은 상품 사진과 같은 저장소(product-images/<사이트>/home-banner/)에 올라간다.
                 let hbList = [];
+                const hbNewId = () => 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+                // 저장은 한 번에 하나씩 차례로(사진 두 장을 동시에 올려도 저장이 엇갈려 사진이 빠지지 않게)
+                let hbSaveChain = Promise.resolve();
+                function hbQueueSave() { hbSaveChain = hbSaveChain.then(() => hbSave()).catch(() => {}); return hbSaveChain; }
                 let hbToday = '';
                 const hbEsc = (v) => WithPlus.escapeHtml(v == null ? '' : String(v));
                 function hbStatus(b) {
@@ -11830,12 +11834,12 @@
                 function hbBind() {
                     const area = document.getElementById('hb-sec-images');
                     document.getElementById('hb-add').addEventListener('click', () => {
-                        hbList.push({ id: '', pc_image: '', mobile_image: '', link_url: '', alt: '', start_date: '', end_date: '', sort_order: hbList.length + 1, active: true });
+                        hbList.push({ id: hbNewId(), pc_image: '', mobile_image: '', link_url: '', alt: '', start_date: '', end_date: '', sort_order: hbList.length + 1, active: true });
                         hbRender();
                         const last = area.querySelector('.hb-card:last-child');
                         if (last) last.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     });
-                    document.getElementById('hb-save').addEventListener('click', hbSave);
+                    document.getElementById('hb-save').addEventListener('click', hbQueueSave);
                     area.querySelectorAll('.hb-card').forEach(card => {
                         const i = Number(card.dataset.i);
                         const b = hbList[i];
@@ -11879,16 +11883,21 @@
                             const key = dev === 'pc' ? 'pc_pos' : 'mo_pos';
                             let start = null;
                             box.addEventListener('pointerdown', (e) => {
-                                start = { px: e.clientX, py: e.clientY, x: b[key].x, y: b[key].y, w: box.clientWidth || 1, h: box.clientHeight || 1 };
+                                const img = box.querySelector('img');
+                                const w = box.clientWidth || 1, h = box.clientHeight || 1;
+                                const nw = (img && img.naturalWidth) || w, nh = (img && img.naturalHeight) || h;
+                                const sc = b[key].fit === 'contain' ? Math.min(w / nw, h / nh) : Math.max(w / nw, h / nh);
+                                // object-position x% = (상자 - 사진) × x% 만큼 왼쪽에서 띄운다 → 남는 공간(+)·넘치는 공간(-)
+                                start = { px: e.clientX, py: e.clientY, x: b[key].x, y: b[key].y, fx: w - nw * sc, fy: h - nh * sc };
                                 box.setPointerCapture(e.pointerId);
                                 e.preventDefault();
                             });
                             box.addEventListener('pointermove', (e) => {
                                 if (!start) return;
-                                // 사진을 끄는 방향으로 움직이도록 위치값은 반대로 바꾼다
-                                const k = 100 / Math.max(1, b[key].zoom);
-                                b[key].x = Math.min(100, Math.max(0, start.x - (e.clientX - start.px) / start.w * k));
-                                b[key].y = Math.min(100, Math.max(0, start.y - (e.clientY - start.py) / start.h * k));
+                                // 사진이 손가락을 따라가도록: 위치 변화 = 움직인 거리 ÷ (남는/넘치는 공간). 공간이 없으면 그 방향은 움직일 수 없다
+                                const z = Math.max(1, b[key].zoom);
+                                if (Math.abs(start.fx) >= 1) b[key].x = Math.min(100, Math.max(0, start.x + (e.clientX - start.px) / start.fx * 100 / z));
+                                if (Math.abs(start.fy) >= 1) b[key].y = Math.min(100, Math.max(0, start.y + (e.clientY - start.py) / start.fy * 100 / z));
                                 hbApplyPreview(card, dev, b[key]);
                             });
                             const end = () => { if (start) { start = null; b[key].x = Math.round(b[key].x); b[key].y = Math.round(b[key].y); hbApplyPreview(card, dev, b[key]); hbMarkDirty(); } };
@@ -11902,14 +11911,19 @@
                                 const msg = card.querySelector('.hb-msg');
                                 msg.style.color = ''; msg.textContent = '⏳ 사진 올리는 중...';
                                 try {
+                                    const bid = b.id;
                                     const url = await hbUpload(file, inp.dataset.kind);
-                                    if (inp.dataset.kind === 'mobile') b.mobile_image = url; else b.pc_image = url;
+                                    // 올리는 동안 다른 저장·순서 변경으로 목록이 바뀌었을 수 있으니, 지금 목록에서 같은 배너를 찾아 넣는다
+                                    const cur = hbList.find(x => x.id === bid);
+                                    if (!cur) throw new Error('사진을 올리는 동안 이 배너가 목록에서 빠졌습니다. 다시 올려주세요');
+                                    if (inp.dataset.kind === 'mobile') cur.mobile_image = url; else cur.pc_image = url;
                                     hbRender();
-                                    const m2 = document.querySelector(`#home-banners-area .hb-card[data-i="${i}"] .hb-msg`);
+                                    const ci = hbList.indexOf(cur);
+                                    const m2 = document.querySelector(`#home-banners-area .hb-card[data-i="${ci}"] .hb-msg`);
                                     // 사진을 올려놓고 [저장]을 깜빡해 사라지던 일이 없도록, 모든 배너에 PC 사진이 있으면 바로 저장한다
                                     if (hbList.every(x => x.pc_image)) {
                                         if (m2) { m2.style.color = '#2e7d32'; m2.textContent = '사진을 올렸습니다. 자동으로 저장합니다...'; }
-                                        await hbSave();
+                                        await hbQueueSave();
                                     } else if (m2) { m2.style.color = '#E65100'; m2.textContent = '사진을 올렸습니다. PC 사진이 없는 배너가 있어 아직 저장하지 않았어요 — PC 사진을 모두 올린 뒤 [이미지 배너 저장]을 눌러주세요.'; }
                                 } catch (e) {
                                     msg.style.color = '#d32f2f'; msg.textContent = '⚠️ ' + e.message;
@@ -11923,10 +11937,12 @@
                     const btn = document.getElementById('hb-save');
                     btn.disabled = true; msg.style.color = ''; msg.textContent = '저장 중...';
                     try {
-                        const banners = hbList.map((b, i) => Object.assign({}, b, { sort_order: i + 1 }));
+                        const sent = hbList.slice();
+                        const banners = sent.map((b, i) => Object.assign({}, b, { sort_order: i + 1 }));
                         const r = await authedFetch('/api/admin/home/hero-banners', { method: 'PUT', body: JSON.stringify({ banners }) });
                         if (!r.ok || !r.json || !r.json.success) throw new Error((r.json && r.json.message) || `저장하지 못했습니다 (오류 ${r.status || '알 수 없음'})`);
-                        hbList = r.json.data;
+                        // 서버가 ID를 새로 정한 배너(예전 형식 ID)만 맞추고, 그 사이 바뀐 화면 내용은 그대로 둔다
+                        (r.json.data || []).forEach((saved, i) => { if (sent[i] && sent[i].id !== saved.id) sent[i].id = saved.id; });
                         hbRender();
                         const m2 = document.getElementById('hb-save-msg');
                         m2.style.color = '#2e7d32'; m2.textContent = '✅ 저장했습니다. 홈 화면에 바로 반영됩니다.';
