@@ -2794,12 +2794,45 @@
                     <div id="returns-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                 </div>
                 <div class="tab-panel" id="tab-reviews">
-                    <p style="color:var(--text-gray); font-size:0.88em; margin-bottom:14px;">회원이 작성한 리뷰를 모두 확인하고, 도배·조작·부적절한 내용은 숨김 처리할 수 있습니다. "✅ 구매인증"은 실제로 그 회원이 배송완료된 주문으로 이 상품을 구매했음을 서버가 검증한 리뷰에만 표시됩니다.</p>
-                    <div class="panel-toolbar">
+                    <p style="color:var(--text-gray); font-size:0.88em; margin-bottom:12px; line-height:1.7;">구매 후기 · 밴드 후기를 한곳에서 관리합니다. <b>🏆 베스트</b>로 고른 리뷰는 상품 화면 · 홈 "실시간 리뷰" · 전체 후기에서 <b>맨 위에</b> 보이고, 불필요한 리뷰는 숨기거나 삭제할 수 있습니다.<br>
+                    후기는 공식적으로 <b>이 상품을 구매한 회원만</b> 쓸 수 있습니다. 관리자가 직접 올린 후기는 '관리자 등록 후기', 권한을 준 회원의 후기는 '체험 후기'로 화면에 표시되고, 구매인증 배지 · 만족도 집계에는 들어가지 않습니다. "✅ 구매인증"은 배송완료 주문을 서버가 확인한 리뷰에만 붙습니다.</p>
+                    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:10px; margin-bottom:14px;">
+                        <details id="rv-admin-write" style="background:#fff; border:1px solid var(--border-color); border-radius:10px; padding:10px 12px;">
+                            <summary style="cursor:pointer; font-weight:700;">✍️ 관리자 후기 등록</summary>
+                            <p style="font-size:0.8em; color:var(--text-gray); margin:6px 0;">전화 · 오프라인 주문 고객의 후기 등을 대신 올릴 때 사용하세요. 화면에 '관리자 등록 후기'로 표시됩니다.</p>
+                            <div style="display:flex; flex-direction:column; gap:6px;">
+                                <input type="text" id="rv-aw-product" list="rv-aw-products" placeholder="상품 이름으로 검색해서 고르기" autocomplete="off">
+                                <datalist id="rv-aw-products"></datalist>
+                                <div style="display:flex; gap:6px;">
+                                    <select id="rv-aw-rating" style="width:110px;"><option value="5">★★★★★</option><option value="4">★★★★</option><option value="3">★★★</option><option value="2">★★</option><option value="1">★</option></select>
+                                    <input type="text" id="rv-aw-author" maxlength="30" placeholder="작성자 표시 이름 (선택)" style="flex:1;">
+                                </div>
+                                <textarea id="rv-aw-comment" rows="3" placeholder="후기 내용"></textarea>
+                                <button type="button" class="btn btn-primary btn-sm" id="rv-aw-submit">후기 등록</button>
+                                <p class="msg" id="rv-aw-msg"></p>
+                            </div>
+                        </details>
+                        <details id="rv-grant-box" style="background:#fff; border:1px solid var(--border-color); border-radius:10px; padding:10px 12px;">
+                            <summary style="cursor:pointer; font-weight:700;">🔑 구매 없이 후기 작성 권한</summary>
+                            <p style="font-size:0.8em; color:var(--text-gray); margin:6px 0;">체험단처럼 구매하지 않고도 후기를 쓸 수 있게 할 회원을 추가합니다. 이 회원들의 후기는 '체험 후기'로 표시됩니다.</p>
+                            <div style="display:flex; gap:6px;">
+                                <input type="email" id="rv-grant-email" placeholder="회원 이메일" style="flex:1;">
+                                <button type="button" class="btn btn-secondary btn-sm" id="rv-grant-add">권한 주기</button>
+                            </div>
+                            <div id="rv-grant-list" style="margin-top:8px; font-size:0.86em;"></div>
+                            <p class="msg" id="rv-grant-msg"></p>
+                        </details>
+                    </div>
+                    <div class="panel-toolbar" style="flex-wrap:wrap; gap:8px;">
+                        <div class="status-filter" id="review-source-filter">
+                            <button data-src="member" class="active">⭐ 구매 후기</button>
+                            <button data-src="band">📣 밴드 후기</button>
+                        </div>
                         <div class="status-filter" id="review-status-filter">
                             <button data-status="" class="active">전체</button>
                             <button data-status="published">공개중</button>
                             <button data-status="hidden">숨김</button>
+                            <button data-status="best">🏆 베스트</button>
                         </div>
                     </div>
                     <div id="reviews-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
@@ -12442,15 +12475,23 @@
 
                 // ===== 리뷰 관리 (구매인증 배지 확인 + 숨김/공개 모더레이션) =====
                 let currentReviewStatusFilter = '';
+                let currentReviewSource = 'member';
+                const REVIEW_SOURCE_LABEL = { member: '구매 회원', admin: '관리자 등록', granted: '체험 후기' };
+                const rvBtn = (cls, label, extra) => `<button type="button" class="${cls}" ${extra || ''} style="padding:5px 10px; border:none; border-radius:6px; font-size:0.8em; cursor:pointer; white-space:nowrap;">${label}</button>`;
 
                 async function loadReviewsAdmin() {
+                    if (currentReviewSource === 'band') return loadBandReviewsAdmin();
                     const tableArea = document.getElementById('reviews-table-area');
                     tableArea.innerHTML = `<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>`;
                     try {
-                        const qs = currentReviewStatusFilter ? ('?status=' + encodeURIComponent(currentReviewStatusFilter)) : '';
+                        const st = currentReviewStatusFilter;
+                        const qs = st && st !== 'best' ? ('?status=' + encodeURIComponent(st)) : '';
                         const { ok, json } = await authedFetch('/api/admin/reviews' + qs);
                         if (!ok || !json.success) throw new Error(json.message || '리뷰 목록을 불러오지 못했습니다');
-                        const reviews = json.data;
+                        let reviews = json.data || [];
+                        if (st === 'best') reviews = reviews.filter(r => r.is_best);
+                        // 베스트가 위로
+                        reviews.sort((a, b) => (b.is_best ? 1 : 0) - (a.is_best ? 1 : 0));
 
                         if (reviews.length === 0) {
                             tableArea.innerHTML = `<div class="state-box"><div class="emoji">⭐</div><h3>해당 조건의 리뷰가 없습니다</h3></div>`;
@@ -12459,23 +12500,28 @@
 
                         tableArea.innerHTML = `
                             <table>
-                                <thead><tr><th>작성일</th><th>상품</th><th>작성자</th><th>별점</th><th>구매인증</th><th>내용</th><th>상태</th><th></th></tr></thead>
+                                <thead><tr><th>작성일</th><th>상품</th><th>작성자</th><th>별점</th><th>출처</th><th>구매인증</th><th>내용</th><th>상태</th><th>🏆 베스트</th><th></th></tr></thead>
                                 <tbody>
                                     ${reviews.map(r => `
-                                    <tr data-id="${r.id}">
+                                    <tr data-id="${r.id}" data-best="${r.is_best ? '1' : ''}">
                                         <td data-label="작성일">${new Date(r.created_at).toLocaleDateString('ko-KR')}</td>
                                         <td data-label="상품">${WithPlus.escapeHtml((r.products_with && r.products_with.name) || '-')}</td>
-                                        <td data-label="작성자">${WithPlus.escapeHtml((r.profiles && (r.profiles.full_name || r.profiles.email)) || '-')}</td>
+                                        <td data-label="작성자">${WithPlus.escapeHtml((r.profiles && (r.profiles.full_name || r.profiles.email)) || '-')}${r.author_display ? `<br><small style="color:#777;">표시: ${WithPlus.escapeHtml(r.author_display)}</small>` : ''}</td>
                                         <td data-label="별점">${'⭐'.repeat(r.rating)}</td>
+                                        <td data-label="출처">${REVIEW_SOURCE_LABEL[r.review_source || 'member'] || '-'}</td>
                                         <td data-label="구매인증">${r.verified_purchase ? '✅' : '-'}</td>
                                         <td data-label="내용" style="max-width:260px; white-space:normal;">${WithPlus.escapeHtml(r.title ? (r.title + ' — ') : '')}${WithPlus.escapeHtml(r.comment)}</td>
                                         <td data-label="상태">
-                                            <select class="status-select act-review-status">
-                                                <option value="published" ${r.status === 'published' ? 'selected' : ''}>공개중</option>
-                                                <option value="hidden" ${r.status === 'hidden' ? 'selected' : ''}>숨김</option>
-                                            </select>
+                                            <div style="display:flex; gap:4px; align-items:center;">
+                                                <select class="status-select act-review-status">
+                                                    <option value="published" ${r.status === 'published' ? 'selected' : ''}>공개중</option>
+                                                    <option value="hidden" ${r.status === 'hidden' ? 'selected' : ''}>숨김</option>
+                                                </select>
+                                                ${rvBtn('act-review-save', '저장', 'data-kind="save"').replace('style="', 'style="background:var(--primary-color); color:white; ')}
+                                            </div>
                                         </td>
-                                        <td><button type="button" class="act-review-save" style="padding:5px 10px; border:none; border-radius:6px; background:var(--primary-color); color:white; font-size:0.8em; cursor:pointer;">저장</button></td>
+                                        <td data-label="베스트">${rvBtn('act-review-best', r.is_best ? '🏆 베스트 해제' : '☆ 베스트로', '').replace('style="', `style="background:${r.is_best ? '#E8125C' : '#F1F3F5'}; color:${r.is_best ? '#fff' : '#333'}; `)}</td>
+                                        <td>${rvBtn('act-review-delete', '삭제', '').replace('style="', 'style="background:#FDECEA; color:#C62828; ')}</td>
                                     </tr>`).join('')}
                                 </tbody>
                             </table>`;
@@ -12498,11 +12544,89 @@
                                 btn.disabled = false;
                                 btn.textContent = '저장';
                                 if (!ok) { alert(json.message || '저장에 실패했습니다'); return; }
-                                btn.textContent = '✓ 저장됨';
-                                setTimeout(() => { btn.textContent = '저장'; }, 1500);
                                 loadReviewsAdmin();
                             });
                         });
+                        tableArea.querySelectorAll('.act-review-best').forEach(btn => {
+                            btn.addEventListener('click', async () => {
+                                const row = btn.closest('tr');
+                                btn.disabled = true;
+                                const { ok, json } = await authedFetch('/api/admin/reviews/' + row.dataset.id + '/best', { method: 'PATCH', body: JSON.stringify({ is_best: !row.dataset.best }) });
+                                btn.disabled = false;
+                                if (!ok) { alert(json.message || '베스트 지정에 실패했습니다'); return; }
+                                loadReviewsAdmin();
+                            });
+                        });
+                        tableArea.querySelectorAll('.act-review-delete').forEach(btn => {
+                            btn.addEventListener('click', async () => {
+                                const row = btn.closest('tr');
+                                if (!confirm('이 리뷰를 삭제할까요? 삭제하면 되돌릴 수 없습니다. (잠시 안 보이게만 하려면 상태를 "숨김"으로 바꾸세요)')) return;
+                                btn.disabled = true;
+                                const { ok, json } = await authedFetch('/api/admin/reviews/' + row.dataset.id, { method: 'DELETE' });
+                                btn.disabled = false;
+                                if (!ok) { alert(json.message || '삭제에 실패했습니다'); return; }
+                                loadReviewsAdmin();
+                            });
+                        });
+                    } catch (err) {
+                        tableArea.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>목록을 불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
+                    }
+                }
+
+                // 밴드 후기: 상태 공개중=승인, 숨김=숨김, 🏆 베스트=베스트만 / 삭제=숨김 처리(밴드 연동이 다시 가져오지 않도록 글은 남겨둔다)
+                async function loadBandReviewsAdmin() {
+                    const tableArea = document.getElementById('reviews-table-area');
+                    tableArea.innerHTML = `<div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div>`;
+                    try {
+                        const st = currentReviewStatusFilter;
+                        const qs = new URLSearchParams({ kind: 'review', size: '100' });
+                        if (st === 'published') qs.set('status', 'approved');
+                        if (st === 'hidden') qs.set('status', 'hidden');
+                        if (st === 'best') qs.set('best', 'yes');
+                        const { ok, json } = await authedFetch('/api/admin/band-posts?' + qs);
+                        if (!ok || !json.success) throw new Error(json.message || '밴드 후기를 불러오지 못했습니다');
+                        const posts = (json.data || []).slice().sort((a, b) => (b.is_best ? 1 : 0) - (a.is_best ? 1 : 0));
+                        if (!posts.length) { tableArea.innerHTML = `<div class="state-box"><div class="emoji">📣</div><h3>해당 조건의 밴드 후기가 없습니다</h3></div>`; return; }
+                        const stLabel = { approved: '공개중', hidden: '숨김', pending: '승인 대기' };
+                        tableArea.innerHTML = `
+                            <p style="font-size:0.82em; color:var(--text-gray); margin-bottom:6px;">최근 100건까지 보입니다${json.total > 100 ? ` (전체 ${json.total.toLocaleString('ko-KR')}건 — 상품 연결·승인은 📣 밴드 후기 탭에서)` : ''}.</p>
+                            <table>
+                                <thead><tr><th>작성일</th><th>상품</th><th>작성자</th><th>내용</th><th>상태</th><th>🏆 베스트</th><th></th></tr></thead>
+                                <tbody>
+                                    ${posts.map(b => `
+                                    <tr data-no="${b.post_no}" data-best="${b.is_best ? '1' : ''}" data-status="${b.status}">
+                                        <td data-label="작성일">${WithPlus.escapeHtml(b.posted_label || (b.posted_at ? new Date(b.posted_at).toLocaleDateString('ko-KR') : '-'))}</td>
+                                        <td data-label="상품">${WithPlus.escapeHtml((b.products_with && b.products_with.name) || '연결 안 됨')}</td>
+                                        <td data-label="작성자">${WithPlus.escapeHtml(b.author_masked || '-')}</td>
+                                        <td data-label="내용" style="max-width:320px; white-space:normal;">${WithPlus.escapeHtml(String(b.body || '').slice(0, 200))}${String(b.body || '').length > 200 ? '…' : ''}</td>
+                                        <td data-label="상태">${stLabel[b.status] || b.status}</td>
+                                        <td data-label="베스트">${b.status === 'approved' ? rvBtn('act-band-best', b.is_best ? '🏆 베스트 해제' : '☆ 베스트로', '').replace('style="', `style="background:${b.is_best ? '#E8125C' : '#F1F3F5'}; color:${b.is_best ? '#fff' : '#333'}; `) : '-'}</td>
+                                        <td>${b.status === 'hidden'
+                                            ? rvBtn('act-band-show', '다시 공개', '').replace('style="', 'style="background:#E8F5E9; color:#2E7D32; ')
+                                            : rvBtn('act-band-hide', '삭제', '').replace('style="', 'style="background:#FDECEA; color:#C62828; ')}</td>
+                                    </tr>`).join('')}
+                                </tbody>
+                            </table>`;
+                        const act = async (btn, url, body, errMsg) => {
+                            btn.disabled = true;
+                            const { ok, json: j } = await authedFetch(url, { method: 'PATCH', body: JSON.stringify(body) });
+                            btn.disabled = false;
+                            if (!ok) { alert(j.message || errMsg); return; }
+                            loadReviewsAdmin();
+                        };
+                        tableArea.querySelectorAll('.act-band-best').forEach(btn => btn.addEventListener('click', () => {
+                            const row = btn.closest('tr');
+                            act(btn, '/api/admin/band-posts/' + row.dataset.no + '/best', { is_best: !row.dataset.best }, '베스트 지정에 실패했습니다');
+                        }));
+                        tableArea.querySelectorAll('.act-band-hide').forEach(btn => btn.addEventListener('click', () => {
+                            if (!confirm('이 밴드 후기를 삭제할까요? 화면에서 사라지고, 밴드 연동이 다시 가져와도 보이지 않습니다. (숨김 목록에서 "다시 공개"로 되돌릴 수 있습니다)')) return;
+                            const row = btn.closest('tr');
+                            act(btn, '/api/admin/band-posts/' + row.dataset.no, { status: 'hidden' }, '삭제에 실패했습니다');
+                        }));
+                        tableArea.querySelectorAll('.act-band-show').forEach(btn => btn.addEventListener('click', () => {
+                            const row = btn.closest('tr');
+                            act(btn, '/api/admin/band-posts/' + row.dataset.no, { status: 'approved' }, '다시 공개하지 못했습니다');
+                        }));
                     } catch (err) {
                         tableArea.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>목록을 불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p></div>`;
                     }
@@ -12516,6 +12640,75 @@
                         loadReviewsAdmin();
                     });
                 });
+                document.querySelectorAll('#review-source-filter button').forEach(btn => {
+                    btn.addEventListener('click', () => {
+                        document.querySelectorAll('#review-source-filter button').forEach(b => b.classList.remove('active'));
+                        btn.classList.add('active');
+                        currentReviewSource = btn.dataset.src;
+                        loadReviewsAdmin();
+                    });
+                });
+
+                // ✍️ 관리자 후기 등록 - 상품은 이름으로 검색해서 고른다
+                let rvAwProducts = [];
+                async function loadReviewWriteProducts() {
+                    if (rvAwProducts.length) return;
+                    try {
+                        const { ok, json } = await WithPlus.fetchJSON('/api/products');
+                        if (!ok || !json.success) return;
+                        rvAwProducts = (json.data || []).map(p => ({ id: p.id, name: p.name }));
+                        document.getElementById('rv-aw-products').innerHTML = rvAwProducts.map(p => `<option value="${WithPlus.escapeHtml(p.name)}"></option>`).join('');
+                    } catch (e) { /* 상품 목록을 못 불러오면 검색 칸만 비어 있다 */ }
+                }
+                document.getElementById('rv-aw-submit').addEventListener('click', async () => {
+                    const msg = document.getElementById('rv-aw-msg');
+                    msg.className = 'msg';
+                    const name = document.getElementById('rv-aw-product').value.trim();
+                    const matches = rvAwProducts.filter(p => p.name === name);
+                    const comment = document.getElementById('rv-aw-comment').value.trim();
+                    if (matches.length !== 1) { msg.textContent = matches.length ? '같은 이름의 상품이 여러 개입니다. 상품 화면에서 직접 등록해주세요.' : '목록에서 상품을 골라주세요.'; msg.className = 'msg error'; return; }
+                    if (!comment) { msg.textContent = '후기 내용을 입력해주세요.'; msg.className = 'msg error'; return; }
+                    const btn = document.getElementById('rv-aw-submit');
+                    btn.disabled = true;
+                    const { ok, json } = await authedFetch('/api/reviews', { method: 'POST', body: JSON.stringify({
+                        product_id: matches[0].id, rating: Number(document.getElementById('rv-aw-rating').value), comment,
+                        as_admin: true, author_display: document.getElementById('rv-aw-author').value.trim() || undefined
+                    }) });
+                    btn.disabled = false;
+                    if (!ok) { msg.textContent = (json && json.message) || '등록에 실패했습니다'; msg.className = 'msg error'; return; }
+                    msg.textContent = '관리자 등록 후기로 올렸습니다.'; msg.className = 'msg success';
+                    document.getElementById('rv-aw-comment').value = '';
+                    document.getElementById('rv-aw-author').value = '';
+                    if (currentReviewSource === 'member') loadReviewsAdmin();
+                });
+
+                // 🔑 구매 없이 후기 작성 권한
+                async function loadReviewGrants() {
+                    const list = document.getElementById('rv-grant-list');
+                    const { ok, json } = await authedFetch('/api/admin/review-grants');
+                    if (!ok || !json.success) { list.textContent = '목록을 불러오지 못했습니다'; return; }
+                    const rows = json.data || [];
+                    list.innerHTML = rows.length ? rows.map(u => `<div style="display:flex; justify-content:space-between; align-items:center; padding:4px 0; border-bottom:1px solid #f0f0f0;"><span>${WithPlus.escapeHtml(u.full_name || '')} <span style="color:#777;">${WithPlus.escapeHtml(u.email || '')}</span></span><button type="button" class="btn-xs danger rv-grant-del" data-id="${u.id}">권한 해제</button></div>`).join('') : '<span style="color:#777;">권한을 받은 회원이 없습니다.</span>';
+                    list.querySelectorAll('.rv-grant-del').forEach(b => b.addEventListener('click', async () => {
+                        b.disabled = true;
+                        const { ok: dok, json: dj } = await authedFetch('/api/admin/review-grants/' + b.dataset.id, { method: 'DELETE' });
+                        if (!dok) { alert(dj.message || '해제하지 못했습니다'); b.disabled = false; return; }
+                        loadReviewGrants();
+                    }));
+                }
+                document.getElementById('rv-grant-add').addEventListener('click', async () => {
+                    const msg = document.getElementById('rv-grant-msg');
+                    msg.className = 'msg';
+                    const email = document.getElementById('rv-grant-email').value.trim();
+                    if (!email) { msg.textContent = '회원 이메일을 입력해주세요.'; msg.className = 'msg error'; return; }
+                    const { ok, json } = await authedFetch('/api/admin/review-grants', { method: 'POST', body: JSON.stringify({ email }) });
+                    if (!ok) { msg.textContent = (json && json.message) || '권한을 주지 못했습니다'; msg.className = 'msg error'; return; }
+                    msg.textContent = '후기 작성 권한을 주었습니다.'; msg.className = 'msg success';
+                    document.getElementById('rv-grant-email').value = '';
+                    loadReviewGrants();
+                });
+                document.getElementById('rv-admin-write').addEventListener('toggle', (e) => { if (e.target.open) loadReviewWriteProducts(); });
+                document.getElementById('rv-grant-box').addEventListener('toggle', (e) => { if (e.target.open) loadReviewGrants(); });
 
                 document.querySelector('[data-tab="reviews"]').addEventListener('click', () => {
                     if (!document.getElementById('reviews-table-area').dataset.loaded) {

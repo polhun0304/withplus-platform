@@ -854,7 +854,7 @@
                         document.getElementById('band-reviews-count').textContent = '(' + (json.total || list.length) + ')';
                         document.getElementById('band-reviews-list').innerHTML = list.map(r => `
                             <div class="review-item band-review-item">
-                                <div class="wp-review-author">${WithPlus.escapeHtml(r.author_masked || '회원')}</div>
+                                <div class="wp-review-author">${WithPlus.escapeHtml(r.author_masked || '회원')}${r.is_best ? '<span style="display:inline-block; margin-left:6px; padding:1px 7px; border-radius:999px; background:#FFF1F5; color:#E8125C; font-size:0.78em; font-weight:700; vertical-align:middle;">🏆 베스트</span>' : ''}</div>
                                 <div class="review-comment band-review-text">${WithPlus.escapeHtml(r.body || '')}</div>
                                 ${(r.stored_photo_urls || []).length ? `<div class="band-review-photos">${r.stored_photo_urls.slice(0, 6).map(u => `<img src="${WithPlus.safeUrlAttr(u)}" alt="후기 사진" loading="lazy">`).join('')}</div>` : ''}
                                 <div class="review-date">${WithPlus.escapeHtml(r.posted_label || '')}</div>
@@ -1295,18 +1295,21 @@
                     return;
                 }
 
-                // 이 상품이 포함된 배송완료 주문이 있으면 "구매인증" 리뷰로 등록할 수 있도록 찾아둔다
-                // (서버가 실제로 다시 검증하므로, 여기서는 화면에 옵션을 보여줄지 결정하는 용도일 뿐이다)
+                // 후기는 이 상품을 구매한 회원만 쓸 수 있다(관리자 · 관리자가 권한을 준 회원은 예외 — 서버가 다시 검증한다).
+                // 배송완료된 주문이 있으면 "구매인증" 리뷰로 등록할 수 있도록 그 주문도 함께 받아둔다.
                 let verifiedOrderId = null;
+                let elig = null;
                 try {
                     const token = await WithPlus.getAccessToken();
-                    const ordersRes = await fetch('/api/orders', { headers: { 'Authorization': 'Bearer ' + token } });
-                    const ordersJson = await ordersRes.json();
-                    if (ordersJson.success) {
-                        const eligible = (ordersJson.data || []).find(o => o.status === 'delivered' && Array.isArray(o.items) && o.items.some(i => i.product_id === productId));
-                        if (eligible) verifiedOrderId = eligible.id;
-                    }
-                } catch (e) { /* 주문 조회가 실패해도 리뷰 작성 자체는 계속 가능해야 하므로 조용히 넘어간다 */ }
+                    const eligRes = await fetch('/api/reviews/eligibility?product_id=' + encodeURIComponent(productId), { headers: { 'Authorization': 'Bearer ' + token } });
+                    const eligJson = await eligRes.json();
+                    if (eligJson.success) { elig = eligJson.data; verifiedOrderId = elig.delivered_order_id || null; }
+                } catch (e) { /* 확인에 실패하면 작성 칸은 보여주고, 등록할 때 서버가 판단한다 */ }
+                if (elig && !elig.can_write) {
+                    area.innerHTML = `<div class="review-login-prompt">이 상품을 구매하신 고객만 후기를 남길 수 있습니다.</div>`;
+                    return;
+                }
+                const isAdminWriter = !!(elig && elig.is_admin);
 
                 area.innerHTML = `
                     <div class="review-form">
@@ -1316,6 +1319,11 @@
                         <textarea id="review-comment" placeholder="이 상품에 대한 솔직한 후기를 남겨주세요"></textarea>
                         <br>
                         ${verifiedOrderId ? `<label style="display:flex; align-items:center; gap:6px; font-size:0.85em; margin:8px 0; color:var(--text-gray);"><input type="checkbox" id="review-verified-check" checked> ✅ 구매인증 리뷰로 등록 (배송완료된 주문 확인됨)</label>` : ''}
+                        ${isAdminWriter ? `<div style="font-size:0.85em; margin:8px 0; color:var(--text-gray); display:flex; flex-direction:column; gap:6px;">
+                            <label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" id="review-as-admin" ${elig.mode === 'admin' ? 'checked' : ''}> 🛠 관리자 등록 후기로 올리기 (화면에 '관리자 등록 후기'로 표시)</label>
+                            <input type="text" id="review-author-display" maxlength="30" placeholder="작성자 표시 이름 (선택 · 예: 전화주문 고객 이름 — 가운데를 가려서 보입니다)" style="padding:8px; border:1px solid var(--border-color); border-radius:8px;">
+                        </div>` : ''}
+                        ${elig && elig.mode === 'granted' ? `<p style="font-size:0.82em; color:var(--text-gray); margin:6px 0;">관리자가 후기 작성 권한을 드린 회원이에요. 이 후기는 '체험 후기'로 표시됩니다.</p>` : ''}
                         <button class="review-submit-btn" id="review-submit-btn">리뷰 등록</button>
                         <div class="review-msg" id="review-msg"></div>
                     </div>`;
@@ -1358,7 +1366,11 @@
                         const res = await fetch('/api/reviews', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-                            body: JSON.stringify({ product_id: productId, order_id: useOrderId, rating: selectedRating, comment })
+                            body: JSON.stringify({
+                                product_id: productId, order_id: useOrderId, rating: selectedRating, comment,
+                                as_admin: !!(document.getElementById('review-as-admin') || {}).checked,
+                                author_display: ((document.getElementById('review-author-display') || {}).value || '').trim() || undefined
+                            })
                         });
                         const json = await res.json();
                         if (!res.ok || !json.success) throw new Error(json.message || '리뷰 등록에 실패했습니다');
