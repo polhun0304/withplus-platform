@@ -1393,10 +1393,15 @@
         /* 🖼️ 메인 이미지 배너 — 슬라이드 전체를 사진으로 꽉 채운다(PC 3:1 · 모바일 3:2, 넘치는 부분은 가운데 기준으로 잘림) */
         .hero-slide.img-slide { padding: 0 !important; display: block; position: relative; aspect-ratio: 3 / 1; overflow: hidden; background: #F4E9ED; color: inherit; text-decoration: none; }
         .img-slide picture, .img-slide img { position: absolute; inset: 0; width: 100%; height: 100%; display: block; object-fit: cover; object-position: center; }
+        /* 관리자 > 배너 관리에서 정한 사진 위치·확대·맞춤(PC / 모바일 따로) */
+        .img-slide.has-pos { background: var(--hb-bg, #F4E9ED); }
+        .img-slide.has-pos img { object-fit: var(--hb-fit, cover); object-position: var(--hb-x, 50%) var(--hb-y, 50%); transform: scale(var(--hb-z, 1)); transform-origin: var(--hb-x, 50%) var(--hb-y, 50%); }
         .hero.has-img-banners .hero-dots span { box-shadow: 0 0 0 1px rgba(255,255,255,.75); }
         @media (max-width: 768px) {
             .hero-slide.img-slide { aspect-ratio: 3 / 2; }
             .hero-slide.img-slide:not(.has-mobile) { aspect-ratio: 2 / 1; }
+            .img-slide.has-pos { background: var(--hb-mbg, var(--hb-bg, #F4E9ED)); }
+            .img-slide.has-pos img { object-fit: var(--hb-mfit, cover); object-position: var(--hb-mx, 50%) var(--hb-my, 50%); transform: scale(var(--hb-mz, 1)); transform-origin: var(--hb-mx, 50%) var(--hb-my, 50%); }
         }
 
         /* 공동체 바 — 좁은 화면에서는 라벨을 줄여 두 줄로 유지 */
@@ -2089,9 +2094,19 @@
                         const pic = `<picture>${mobile}<img src="${WithPlus.safeUrlAttr(b.pc_image)}" alt="${alt}" ${i === 0 && config.order !== 'deals_first' ? 'fetchpriority="high"' : 'loading="lazy"'} decoding="async"></picture>`;
                         const link = String(b.link_url || '');
                         const safeLink = (/^\/(?!\/)/.test(link) || /^https?:\/\//i.test(link)) ? link : '';
+                        // 사진 위치·확대·맞춤 (숫자·정해진 값만 CSS 변수로 넘긴다)
+                        const pv = (o, pre) => {
+                            if (!o || typeof o !== 'object') return '';
+                            const n = (v, d) => (Number.isFinite(Number(v)) ? Number(v) : d);
+                            const bg = /^#[0-9a-f]{6}$/i.test(String(o.bg || '')) ? o.bg : '';
+                            return `--hb-${pre}x:${n(o.x, 50)}%;--hb-${pre}y:${n(o.y, 50)}%;--hb-${pre}z:${n(o.zoom, 1)};--hb-${pre}fit:${o.fit === 'contain' ? 'contain' : 'cover'};${bg ? `--hb-${pre}bg:${bg};` : ''}`;
+                        };
+                        const posStyle = pv(b.pc_pos, '') + pv(b.mo_pos, 'm');
+                        const posAttr = posStyle ? ` style="${posStyle}"` : '';
+                        const cls = `hero-slide img-slide${mobile ? ' has-mobile' : ''}${posStyle ? ' has-pos' : ''}`;
                         return safeLink
-                            ? `<a class="hero-slide img-slide${mobile ? ' has-mobile' : ''}" href="${WithPlus.safeUrlAttr(safeLink)}" aria-label="${alt}">${pic}</a>`
-                            : `<div class="hero-slide img-slide${mobile ? ' has-mobile' : ''}" role="img" aria-label="${alt}">${pic}</div>`;
+                            ? `<a class="${cls}"${posAttr} href="${WithPlus.safeUrlAttr(safeLink)}" aria-label="${alt}">${pic}</a>`
+                            : `<div class="${cls}"${posAttr} role="img" aria-label="${alt}">${pic}</div>`;
                     }).join('');
                     track.insertAdjacentHTML('afterbegin', html);
                     document.getElementById('hero-slider').classList.add('has-img-banners');
