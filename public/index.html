@@ -1340,7 +1340,7 @@
             .recently-viewed .horizontal-scroll {
                 display: grid;
                 grid-auto-flow: column;
-                grid-template-rows: repeat(2, auto);
+                grid-template-rows: auto;
                 grid-template-columns: none;
                 grid-auto-columns: calc((100% - 24px) / 2.5);
                 gap: 18px 12px;
@@ -1525,7 +1525,7 @@
     <link rel="stylesheet" href="/typography.css">
     <link rel="stylesheet" href="/flash-deals.css?v=1">
     <style>
-        /* ⭐ 베스트 상품 — 휴대폰에서는 가로 스크롤 대신 2열로 펼쳐서, 8/16/24/전체 버튼을 누르면 늘어난 상품이 바로 보이게 */
+        /* ⭐ 베스트 상품 — 휴대폰에서는 실시간 랭킹처럼 한 줄 가로 스크롤 (8/16/24/전체 버튼으로 늘린 상품은 옆으로 넘겨서 보기) */
         .best-more-link { display: block; width: max-content; max-width: 100%; margin: 22px auto 0; padding: 11px 26px; border-radius: 999px; border: 1px solid var(--primary-color); color: var(--primary-color); text-decoration: none; font-weight: 700; }
         .best-more-link[hidden] { display: none; }
         @media (max-width: 768px) {
@@ -1534,7 +1534,6 @@
             #best-section .count-selector { overflow-x: auto; scrollbar-width: none; min-width: 0; }
             #best-section .count-btn { padding: 7px 12px; }
             #best-section .view-all { white-space: nowrap; font-size: .92em; }
-            #best-section .product-grid { grid-auto-flow: row; grid-template-rows: none; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-columns: auto; overflow-x: visible; scroll-snap-type: none; margin-right: 0; padding-right: 0; gap: 22px 10px; }
         }
     </style>
 </head>
