@@ -12531,6 +12531,13 @@ function cleanHeroBanner(b, i) {
   if (start && end && start > end) throw new Error(`${n}번 배너: 종료일이 시작일보다 빠릅니다`);
   const order = Number(b && b.sort_order);
   const rawId = s(b && b.id, 40);
+  // 사진 위치·확대 (PC/모바일 따로) - 관리자 > 배너 관리에서 조절. 값이 없으면 가운데·꽉 채우기(예전과 같음)
+  const pos = (v) => {
+    const o = v && typeof v === 'object' ? v : {};
+    const num = (x, d, lo, hi) => { const n = Number(x); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, Math.round(n * 100) / 100)) : d; };
+    const bg = /^#[0-9a-f]{6}$/i.test(String(o.bg || '')) ? String(o.bg).toLowerCase() : '';
+    return { x: num(o.x, 50, 0, 100), y: num(o.y, 50, 0, 100), zoom: num(o.zoom, 1, 1, 3), fit: o.fit === 'contain' ? 'contain' : 'cover', bg };
+  };
   return {
     id: /^[a-z0-9-]{4,40}$/i.test(rawId) ? rawId : 'b' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
     pc_image: pc,
@@ -12540,7 +12547,9 @@ function cleanHeroBanner(b, i) {
     start_date: start,
     end_date: end,
     sort_order: Number.isFinite(order) ? Math.round(order) : n,
-    active: !!(b && b.active)
+    active: !!(b && b.active),
+    pc_pos: pos(b && b.pc_pos),
+    mo_pos: pos(b && b.mo_pos)
   };
 }
 async function readHeroBanners() {
@@ -12607,7 +12616,7 @@ app.get('/api/home/hero-banners', async (req, res) => {
     const config = await readHeroConfig();
     const banners = (await readHeroBanners())
       .filter(b => b.active && b.pc_image && (!b.start_date || b.start_date <= today) && (!b.end_date || b.end_date >= today))
-      .map(b => ({ id: b.id, pc_image: b.pc_image, mobile_image: b.mobile_image || '', link_url: b.link_url || '', alt: b.alt || '' }));
+      .map(b => ({ id: b.id, pc_image: b.pc_image, mobile_image: b.mobile_image || '', link_url: b.link_url || '', alt: b.alt || '', pc_pos: b.pc_pos || null, mo_pos: b.mo_pos || null }));
     res.set('Cache-Control', 'no-cache');
     res.json({ success: true, data: banners, config, timestamp: new Date().toISOString() });
   } catch (err) {
