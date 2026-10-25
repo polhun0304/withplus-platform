@@ -5145,33 +5145,41 @@
                     if (r.stockRaw === '' || !Number.isInteger(stock) || stock < 0) throw new Error(`사이즈/색상 옵션: '${r.name}'의 재고는 0 이상의 정수여야 합니다`);
                     const bad = tiers.find(t => t.price + adj * t.qty <= 0);
                     if (bad) throw new Error(`사이즈/색상 옵션: '${r.name}'을(를) ${bad.qty}개 살 때 판매가가 0원 이하가 됩니다. 추가금액을 확인해주세요`);
-                    if (!r.id) plan.creates.push({ name: r.name, price_adjustment: adj, stock });
+                    if (!r.id) plan.creates.push({ el: r.el, body: { name: r.name, price_adjustment: adj, stock } });
                     else {
                         const body = {};
                         if (r.name !== r.orig.name) body.name = r.name;
                         if (adj !== r.orig.adj) body.price_adjustment = adj;
                         if (stock !== r.orig.stock) body.stock = stock;
-                        if (Object.keys(body).length) plan.updates.push({ id: r.id, body });
+                        if (Object.keys(body).length) plan.updates.push({ el: r.el, id: r.id, body, next: { name: r.name, adj, stock } });
                     }
                 });
                 return plan;
             }
+            // 성공한 작업은 바로 편집기에 반영한다 - 일부가 실패해 다시 [저장]을 눌러도 이미 된 추가·수정·삭제를 반복하지 않게
             async function qtvSave(productId, plan) {
                 if (!plan || !productId) return;
                 const fail = [];
                 for (const vid of plan.deletes) {
-                    const { ok, json } = await authedFetch('/api/admin/product-variants/' + vid, { method: 'DELETE' });
-                    if (!ok) fail.push((json && json.message) || '옵션 삭제 실패');
+                    const { ok, status, json } = await authedFetch('/api/admin/product-variants/' + vid, { method: 'DELETE' });
+                    if (ok || status === 404) qtvRemovedIds = qtvRemovedIds.filter(x => x !== vid); // 404 = 이미 지워짐
+                    else fail.push((json && json.message) || '옵션 삭제 실패');
                 }
                 for (const u of plan.updates) {
                     const { ok, json } = await authedFetch('/api/admin/product-variants/' + u.id, { method: 'PUT', body: JSON.stringify(u.body) });
-                    if (!ok) fail.push((json && json.message) || '옵션 수정 실패');
+                    if (ok) { if (u.el && u.el.isConnected) u.el.dataset.orig = JSON.stringify(u.next); }
+                    else fail.push((json && json.message) || '옵션 수정 실패');
                 }
                 for (const c of plan.creates) {
-                    const { ok, json } = await authedFetch('/api/admin/products/' + productId + '/variants', { method: 'POST', body: JSON.stringify(c) });
-                    if (!ok) fail.push(`${c.name}: ${(json && json.message) || '옵션 추가 실패'}`);
+                    const { ok, json } = await authedFetch('/api/admin/products/' + productId + '/variants', { method: 'POST', body: JSON.stringify(c.body) });
+                    if (ok && json && json.data && json.data.id) {
+                        if (c.el && c.el.isConnected) {
+                            c.el.dataset.id = json.data.id;
+                            c.el.dataset.orig = JSON.stringify({ name: c.body.name, adj: c.body.price_adjustment, stock: c.body.stock });
+                        }
+                    } else fail.push(`${c.body.name}: ${(json && json.message) || '옵션 추가 실패'}`);
                 }
-                if (fail.length) throw new Error('상품은 저장됐지만 일부 옵션 저장에 실패했습니다 - ' + fail.join(' / '));
+                if (fail.length) throw new Error('상품은 저장됐지만 일부 옵션 저장에 실패했습니다 - ' + fail.join(' / ') + ' (다시 [저장]을 누르면 실패한 것만 다시 시도합니다)');
             }
             document.getElementById('pf-qtv-add').addEventListener('click', () => qtvAddRow());
             qtvRowsEl.addEventListener('click', (e) => {
@@ -5411,6 +5419,8 @@
                         : await authedFetch('/api/products', { method: 'POST', body: JSON.stringify(payload) });
 
                     if (!ok) throw new Error(json.message || '저장에 실패했습니다');
+                    // 새 상품이 만들어졌으면 폼에 그 ID를 넣어둔다 - 뒤 단계(옵션 저장)가 실패해 다시 [저장]을 눌러도 상품이 또 만들어지지 않고 수정으로 처리되게
+                    if (!id && json.data && json.data.id) document.getElementById('pf-id').value = json.data.id;
                     // 사이즈/색상 옵션 추가·수정·삭제 (수량별 가격 옵션을 쓸 때만)
                     await qtvSave(id || (json.data && json.data.id), variantPlan);
                     // 블록별 사진 크기·정렬 저장 (관리자 권한일 때만 — 실패해도 상품 저장은 그대로)
