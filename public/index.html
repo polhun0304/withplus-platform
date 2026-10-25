@@ -2376,14 +2376,17 @@
 
             // ============================================
             // 🔴 실시간 리뷰 + 지금 이 순간 — /api/home/live (실제 이벤트만, 이름은 가려서)
-            // 장바구니 담기 · 결제완료 · 리뷰 작성 · 밴드 후기를 최신순으로 보여주고 30초마다 새 소식을 위에 끼워 넣는다.
+            // 장바구니 담기 · 결제완료 · 후기 · 밴드 후기 · 찜 · 출석체크 · 쿠폰 받기를 최신순으로 보여주고 30초마다 새 소식을 위에 끼워 넣는다.
             // ============================================
             const LP_EMOJI = n => `<img class="wp-emoji" src="/images/emoji/${n}.png" width="128" height="128" alt="" aria-hidden="true">`;
             const LP_TYPES = {
                 cart_add: { icon: 'cart', verb: '장바구니에 담았습니다', josa: '을(를) ' },
-                order: { icon: 'card', verb: '구매했습니다', josa: '을(를) ' },
-                review: { icon: 'memo', verb: '리뷰를 작성했습니다', josa: ' ' },
-                band_review: { icon: 'speech', verb: '후기를 남겼습니다', josa: ' ', pre: '밴드에 ' }
+                order: { icon: 'card', verb: '결제완료 했습니다', josa: '을(를) ' },
+                review: { icon: 'memo', verb: '후기를 남겼습니다', josa: '에 ' },
+                band_review: { icon: 'speech', verb: '후기를 남겼습니다', josa: ' ', pre: '밴드에 ' },
+                wishlist: { icon: 'glowstar', verb: '찜했습니다', josa: '을(를) ' },
+                attendance: { icon: 'coin', verb: '출석체크 했습니다', josa: '' },
+                coupon: { icon: 'ticket', verb: '쿠폰을 받았습니다', josa: '' }
             };
             let lpSeen = null;
             function renderLpItem(e, isNew) {
@@ -2434,7 +2437,7 @@
                             const empty = feedEl.querySelector('.lp-empty');
                             if (empty) empty.remove();
                             feedEl.insertAdjacentHTML('afterbegin', renderLpItem(e, true));
-                            while (feedEl.children.length > 20) feedEl.lastElementChild.remove();
+                            while (feedEl.children.length > 40) feedEl.lastElementChild.remove();
                         }, i * 1200));
                     }
                     // 상대 시간("7분 전")은 매번 다시 계산
