@@ -5048,7 +5048,7 @@
                         product_id: document.getElementById('pf-id').value || null,
                         price,
                         discount_price: document.getElementById('pf-discount-price').value || null,
-                        wholesale_discount_percent: document.getElementById('pf-ws-rate').value,
+                        ...(isAdmin ? { wholesale_discount_percent: document.getElementById('pf-ws-rate').value } : {}),
                         category: document.getElementById('pf-category').value || null
                     }) });
                     if (seq !== channelPreviewSeq) return;

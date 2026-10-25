@@ -1847,7 +1847,8 @@ app.post('/api/admin/channel-pricing/preview', authenticate, requireRole(['admin
     };
     const wsCtx = await buildWholesalePriceContext(productId ? [productId] : []);
     // 저장 전 화면에 입력한 상품별 도매 할인율을 미리보기에 반영 (비우면 카테고리·공통 할인율)
-    if (b.wholesale_discount_percent !== undefined) {
+    // 관리자만 이 값을 바꿀 수 있으므로, 공급자 미리보기는 저장된 할인율을 그대로 쓴다
+    if (b.wholesale_discount_percent !== undefined && isAdminRole(req.userRole)) {
       const wr = parseWholesaleDiscountPercent(b.wholesale_discount_percent);
       if (!product.id) product.id = '__preview__';
       if (wr.ok && wr.value !== null && wr.value !== undefined) wsCtx.product_bp[product.id] = Math.round(wr.value * 100);
@@ -8340,7 +8341,9 @@ app.get('/api/admin/products/:id/channel-prices', authenticate, requireRole(['ad
     const { data: rows } = await supabase.from('product_channel_prices_with').select('channel, price, is_manual_override, updated_at').eq('product_id', id);
     const byChannel = {};
     (rows || []).forEach(r => { byChannel[r.channel] = r; });
+    // 자동 도매가: 고정 도매채널가(overrides)는 빼고, 이 상품의 상품별 도매 할인율은 반영(주문 금액과 같게)
     const wsAutoCtx = await buildWholesalePriceContext([]);
+    wsAutoCtx.product_bp = await getWholesaleProductRateMap([id]);
     const data = PRICING_CHANNELS.map(channel => ({
       channel,
       // 도매채널가가 없으면 주문과 같은 자동 도매가(기본가 - 도매 할인율), 그 외 채널은 판매가로 폴백
