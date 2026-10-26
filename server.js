@@ -20743,6 +20743,18 @@ app.get('/api/admin/manual', authenticate, requireRole(['admin', 'super_admin'])
   });
 });
 
+// ============================================
+// 🛡 품질·거버넌스(QG) 센터 (관리자 전용) — 엔진 10종(검토·테스트·공격·법령·증거·출시·보안·정합성·AI·개선)
+// 화면(/admin/qg)은 내용 없는 껍데기이고, 데이터는 /api/admin/qg/* 가 관리자 인증(authenticate + requireRole)을 통과한 뒤
+// "그 관리자의 토큰"으로 DB(wpl_qg_*, WITH+·LIVE+ 공유)에 묻는다 → DB 안에서 관리자 확인·RLS 가 한 번 더 막는다.
+// ============================================
+app.get('/admin/qg', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.sendFile(path.join(__dirname, 'private', 'qg-center.html'));
+});
+app.use('/api/admin/qg', authenticate, requireRole(['admin', 'super_admin']),
+  require('./qg/qg-router')({ createClient, supabaseUrl, supabaseAnonKey, siteLabel: IS_LIVEPLUS_SITE ? 'LIVE+' : 'WITH+' }));
+
 // 푸터 하위 정보 페이지 (회사소개/고객지원/약관·정책/함께하기)
 const STATIC_INFO_PAGES = [
   'about', 'careers', 'press', 'sustainability',

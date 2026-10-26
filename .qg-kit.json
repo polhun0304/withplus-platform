@@ -1,0 +1,39 @@
+{
+  "kit": "QG_KIT",
+  "version": "1.1.0",
+  "installed_at": "2026-10-26T16:18:00.476Z",
+  "updated_at": "2026-10-26T16:18:00.480Z",
+  "prefix": "wpl",
+  "adapter": "adapter-wpl.sql",
+  "admin": "/admin",
+  "route_dir": "src/app/admin",
+  "via": "supabase",
+  "migrations": [
+    "supabase/migrations/20261027120000_wpl_qg_adapter.sql",
+    "supabase/migrations/20261027120001_wpl_qg_contract.sql",
+    "supabase/migrations/20261027120002_wpl_qg_spine.sql",
+    "supabase/migrations/20261027120003_wpl_qg_seed.sql",
+    "supabase/migrations/20261027120004_wpl_qg_security.sql",
+    "supabase/migrations/20261027120005_wpl_qg_integrity.sql",
+    "supabase/migrations/20261027120006_wpl_qg_testing.sql",
+    "supabase/migrations/20261027120007_wpl_qg_adversarial.sql",
+    "supabase/migrations/20261027120008_wpl_qg_review.sql",
+    "supabase/migrations/20261027120009_wpl_qg_compliance.sql",
+    "supabase/migrations/20261027120010_wpl_qg_ai_model.sql",
+    "supabase/migrations/20261027120011_wpl_qg_release.sql",
+    "supabase/migrations/20261027120012_wpl_qg_evolution.sql"
+  ],
+  "extra_migrations": [
+    "supabase/migrations/2026102712001[3-9]_wpl_qg_*.sql"
+  ],
+  "extra_tests": [
+    "supabase/tests/20261027120013_wpl_qg_platform_smoke.sql"
+  ],
+  "cron_route": false,
+  "smoke": "supabase/tests/20261027120000_wpl_qg_smoke.sql",
+  "adversarial": "supabase/tests/qg/adversarial_qg_core.sql",
+  "lib_dir": "src/lib/qg",
+  "app_dir": "src/app",
+  "tests_dir": "supabase/tests",
+  "upgrades": []
+}

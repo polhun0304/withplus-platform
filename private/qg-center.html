@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>관리자</title>
+<link rel="stylesheet" href="/typography.css">
+<style>
+:root{--bg:#f7f7f8;--card:#fff;--ink:#1f2328;--sub:#5b636e;--line:#e3e5e8;--brand:#D32F5B;--red:#c62828;--orange:#d9480f;--amber:#b7791f;--green:#2f855a;--blue:#2b6cb0;--slate:#64748b}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:'Noto Sans KR',system-ui,sans-serif;line-height:1.55;font-size:15px}
+a{color:var(--blue)}
+.top{position:sticky;top:0;z-index:5;background:#fff;border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.top h1{font-size:17px;margin:0;flex:1;min-width:180px}
+.badge{display:inline-block;font-size:12px;font-weight:700;border-radius:999px;padding:2px 9px;background:#eef0f3;color:var(--slate);white-space:nowrap}
+.b-red{background:#fdecec;color:var(--red)}.b-orange{background:#fff1e6;color:var(--orange)}.b-amber{background:#fdf6e3;color:var(--amber)}
+.b-green{background:#e8f5ee;color:var(--green)}.b-blue{background:#e8f0fb;color:var(--blue)}.b-brand{background:var(--brand);color:#fff}
+nav.tabs{display:flex;gap:6px;overflow-x:auto;padding:10px 16px;background:#fff;border-bottom:1px solid var(--line)}
+nav.tabs button{border:1px solid var(--line);background:#fff;border-radius:999px;padding:6px 13px;font-size:14px;cursor:pointer;white-space:nowrap}
+nav.tabs button.on{background:var(--ink);color:#fff;border-color:var(--ink)}
+main{max-width:1200px;margin:0 auto;padding:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px}
+.card h3{margin:0 0 6px;font-size:15px}
+.muted{color:var(--sub);font-size:13px}
+.stats{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.stat{background:#fff;border:1px solid var(--line);border-radius:12px;padding:12px}.stat b{display:block;font-size:22px}
+.btn{border:1px solid var(--line);background:#fff;border-radius:8px;padding:7px 12px;font-size:14px;cursor:pointer}
+.btn:disabled{opacity:.5;cursor:default}.btn.primary{background:var(--ink);color:#fff;border-color:var(--ink)}.btn.danger{color:var(--red);border-color:#f3c2c2}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.tbl{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.tblwrap{overflow-x:auto}
+.tbl th,.tbl td{border-bottom:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top;font-size:14px}
+.tbl th{background:#fafafa;font-weight:600;white-space:nowrap}
+.notice{border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:14px}
+.n-warn{background:#fdf6e3;border:1px solid #f3dfa6}.n-info{background:#eef4fb;border:1px solid #cfe0f5}.n-err{background:#fdecec;border:1px solid #f3c2c2}
+select,input,textarea{font:inherit;border:1px solid var(--line);border-radius:8px;padding:7px 9px;background:#fff;max-width:100%}
+textarea{width:100%;min-height:90px}
+pre{white-space:pre-wrap;word-break:break-all;background:#f4f5f7;border-radius:8px;padding:8px;font-size:12px;max-height:260px;overflow:auto;margin:6px 0 0}
+.gate{text-align:center;padding:80px 16px;color:var(--sub)}.gate a{display:inline-block;margin-top:16px;padding:10px 22px;background:var(--brand);color:#fff;border-radius:24px;text-decoration:none;font-weight:600}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;padding:16px;z-index:20}
+.modal{background:#fff;border-radius:14px;max-width:520px;width:100%;padding:18px}
+.modal h3{margin:0 0 8px}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--ink);color:#fff;padding:10px 16px;border-radius:999px;font-size:14px;display:none;z-index:30;max-width:90vw}
+details summary{cursor:pointer;color:var(--blue);font-size:13px}
+@media (max-width:600px){.top h1{font-size:15px}main{padding:12px}}
+</style>
+</head>
+<body data-wp-no-shell>
+<div id="app"><div class="gate">⏳ 권한을 확인하는 중...</div></div>
+<div class="modal-bg" id="modal-bg"><div class="modal">
+  <h3 id="m-title"></h3><div class="muted" id="m-body" style="margin-bottom:10px"></div>
+  <textarea id="m-note" placeholder="사유·메모"></textarea>
+  <div class="muted" id="m-count" style="text-align:right"></div>
+  <div class="row" style="justify-content:flex-end;margin-top:10px"><button class="btn" id="m-cancel">취소</button><button class="btn primary" id="m-ok">확인</button></div>
+</div></div>
+<div class="toast" id="toast"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="/withplus-pricing.js"></script>
+<script src="/withplus-common.js"></script>
+<script>
+(function () {
+  const API = '/api/admin/qg';
+  const app = document.getElementById('app');
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const SITES = { 'a17e0000-0000-4000-8000-000000000001': 'WITH+', 'a17e0000-0000-4000-8000-000000000002': 'LIVE+' };
+  const ENGINE = { review: '다중 검토', testing: '위험도별 테스트', adversarial: '공격·장애 시뮬레이션', compliance: '법령·정책', evidence: '증거 보존',
+    release: '출시 관문', security: '보안 탐지', integrity: '데이터 정합성', ai_model: 'AI 모델 관리', evolution: '개선 제안' };
+  const SEV = { critical: ['치명', 'b-red'], high: ['높음', 'b-orange'], medium: ['보통', 'b-amber'], low: ['낮음', ''] };
+  const ISSUE = { open: ['열림', 'b-red'], acknowledged: ['확인함', 'b-amber'], fixed: ['고침(확인 대기)', 'b-blue'], verified: ['해결 확인', 'b-green'],
+    accepted_risk: ['위험 수용', ''], false_positive: ['오탐', ''] };
+  const ISSUE_NEXT = { open: ['acknowledged', 'fixed', 'accepted_risk', 'false_positive'], acknowledged: ['fixed', 'accepted_risk', 'false_positive', 'open'],
+    fixed: ['verified', 'open'], verified: ['open'], accepted_risk: ['open'], false_positive: ['open'] };
+  const VERB = { open: '다시 열기', acknowledged: '확인함', fixed: '고쳤음', verified: '해결 확인', accepted_risk: '위험 수용', false_positive: '오탐' };
+  const RUN = { passed: ['모두 통과', 'b-green'], warned: ['주의 있음', 'b-amber'], failed: ['실패 있음', 'b-red'], error: ['실행 오류', 'b-orange'], empty: ['검사 없음', ''] };
+  const FIND = { pass: ['통과', 'b-green'], warn: ['주의', 'b-amber'], fail: ['실패', 'b-red'], error: ['실행 오류', 'b-orange'], skipped: ['건너뜀', ''] };
+  const PROP = { proposed: '제안됨', accepted: '채택', in_progress: '진행 중', shipped: '출시됨', verified: '효과 확인', declined: '거절' };
+  const PROP_NEXT = { proposed: ['accepted', 'declined'], accepted: ['in_progress', 'declined', 'proposed'], in_progress: ['shipped', 'accepted', 'declined'],
+    shipped: ['verified', 'in_progress'], verified: ['in_progress'], declined: ['proposed'] };
+  const REL = { draft: '초안', evaluated: '판정됨', blocked: '차단', approved: '승인', rejected: '거절', released: '출시됨', cancelled: '취소' };
+  const badge = (pair) => pair ? `<span class="badge ${pair[1] || ''}">${esc(pair[0])}</span>` : '';
+  const kdt = (v) => v ? new Date(v).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-';
+  const site = (id) => id ? (SITES[id] || '사이트') : '전체';
+  let token = null; let tab = 'center'; let siteLabel = 'WITH+';
+
+  function toast(msg) { const t = document.getElementById('toast'); t.textContent = msg; t.style.display = 'block'; clearTimeout(t._h); t._h = setTimeout(() => { t.style.display = 'none'; }, 3500); }
+  async function call(path, opts) {
+    opts = opts || {};
+    const res = await fetch(API + path, { method: opts.method || 'GET', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+      body: opts.body ? JSON.stringify(opts.body) : undefined });
+    let json = {}; try { json = await res.json(); } catch (e) {}
+    if (!res.ok) { const err = new Error(json.message || '처리하지 못했습니다'); err.status = res.status; throw err; }
+    return json.data;
+  }
+  // 확인창 + 사유(되돌리기 어려운 동작)
+  function ask(title, body, minLen) {
+    return new Promise((resolve) => {
+      const bg = document.getElementById('modal-bg'); const note = document.getElementById('m-note'); const cnt = document.getElementById('m-count');
+      document.getElementById('m-title').textContent = title; document.getElementById('m-body').textContent = body || '';
+      note.value = ''; note.style.display = minLen === null ? 'none' : 'block';
+      const upd = () => { cnt.textContent = minLen ? `${note.value.trim().length}자 / 최소 ${minLen}자` : ''; };
+      note.oninput = upd; upd(); bg.style.display = 'flex';
+      const done = (v) => { bg.style.display = 'none'; resolve(v); };
+      document.getElementById('m-cancel').onclick = () => done(null);
+      document.getElementById('m-ok').onclick = () => {
+        if (minLen && note.value.trim().length < minLen) { toast(`사유를 ${minLen}자 이상 적어 주세요.`); return; }
+        done(note.value.trim());
+      };
+    });
+  }
+
+  function shell() {
+    const tabs = [['center', '센터'], ['issues', '이슈함'], ['runs', '실행 기록'], ['evidence', '증거'], ['review', '다중 검토'], ['regulations', '법령·정책'],
+      ['releases', '출시 관문'], ['proposals', '개선 제안'], ['checks', '검사 항목'], ['settings', '설정']];
+    app.innerHTML = `<div class="top"><h1>품질·거버넌스 <span class="badge b-brand">${esc(siteLabel)}</span></h1><a href="/admin">← 관리자 화면</a></div>
+      <nav class="tabs">${tabs.map(([k, l]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</nav><main id="main"></main>`;
+    app.querySelectorAll('nav.tabs button').forEach((b) => { b.onclick = () => { tab = b.dataset.tab; try { localStorage.setItem('wp-qg-tab', tab); } catch (e) {} shell(); render(); }; });
+  }
+  const main = () => document.getElementById('main');
+  async function render() {
+    main().innerHTML = '<div class="muted">불러오는 중...</div>';
+    try { await VIEWS[tab](); } catch (e) { main().innerHTML = `<div class="notice n-err">${esc(e.message)}</div>`; }
+  }
+
+  const VIEWS = {
+    async center() {
+      const d = await call('/dashboard'); const db = d.dashboard; const tot = db.totals || {};
+      const warn = [];
+      if (!db.other_admins) warn.push('<div class="notice n-warn">두 번째 관리자가 없습니다. 위험 수용·출시 승인은 다른 관리자가 해야 해서 지금은 막히거나(기본) 자기 승인으로 내려갑니다. 두 번째 관리자 지정은 형님 결정입니다.</div>');
+      if (!db.cron_enabled) warn.push('<div class="notice n-warn">자동 실행이 꺼져 있습니다(설정 또는 긴급정지).</div>');
+      main().innerHTML = warn.join('') + `
+        <div class="stats">
+          <div class="stat"><span class="muted">열린 이슈</span><b>${tot.open_issues || 0}</b></div>
+          <div class="stat"><span class="muted">치명 · 높음</span><b>${tot.critical_open || 0} · ${tot.high_open || 0}</b></div>
+          <div class="stat"><span class="muted">고침(확인 대기)</span><b>${tot.fixed_waiting || 0}</b></div>
+          <div class="stat"><span class="muted">승인 대기</span><b>${tot.pending_approvals || 0}</b></div>
+          <div class="stat"><span class="muted">증거 기록</span><b>${tot.evidence_count || 0}</b></div>
+          <div class="stat"><span class="muted">최근 ${db.window_days}일 실행</span><b>${tot.runs_window || 0}</b></div>
+        </div>
+        <div class="row" style="margin-bottom:12px"><button class="btn primary" id="run-all">엔진 10종 모두 지금 실행</button>
+          ${tot.fixed_passed ? `<button class="btn" id="verify-fixed">확인 대기 ${tot.fixed_passed}건 모두 해결 확인</button>` : ''}
+          <span class="muted">어댑터: ${esc((d.adapter || {}).label || '')} · 자동 실행 ${db.cron_installed ? '등록됨' : '없음'}</span></div>
+        <div class="grid">${(db.engines || []).map((g) => {
+          const lr = g.last_run; const oi = g.open_issues || {};
+          return `<div class="card"><h3>${esc(ENGINE[g.code] || g.name)}</h3><div class="muted">${esc(g.purpose || '')}</div>
+            <div class="row" style="margin:8px 0">${lr ? badge(RUN[lr.status]) + ` <span class="muted">${kdt(lr.finished_at)}</span>` : '<span class="muted">실행 기록 없음</span>'}</div>
+            <div class="muted">검사 ${g.checks_active}개 · 통과율 ${g.pass_rate_window == null ? '-' : g.pass_rate_window + '%'} · 열린 이슈 ${oi.total || 0}${oi.critical ? ` (치명 ${oi.critical})` : ''}</div>
+            <div class="row" style="margin-top:8px"><button class="btn" data-run="${g.code}">지금 실행</button>${lr ? `<button class="btn" data-open-run="${lr.id}">결과 보기</button>` : ''}</div></div>`;
+        }).join('')}</div>`;
+      document.getElementById('run-all').onclick = async (ev) => {
+        ev.target.disabled = true; ev.target.textContent = '실행 중...';
+        try { const out = await call('/engines/all/run', { method: 'POST' }); const bad = out.filter((x) => x.error); toast(bad.length ? `실행 오류 ${bad.length}건: ${bad[0].error}` : '엔진 10종 실행을 마쳤습니다.'); } catch (e) { toast(e.message); }
+        render();
+      };
+      const vf = document.getElementById('verify-fixed');
+      if (vf) vf.onclick = async () => { const n = await ask('모두 해결 확인', '고친 뒤 다음 실행에서 통과한 이슈를 모두 "해결 확인"으로 바꿉니다.', null); if (n === null) return;
+        try { await call('/issues/verify-fixed', { method: 'POST', body: {} }); toast('해결 확인으로 바꿨습니다.'); } catch (e) { toast(e.message); } render(); };
+      main().querySelectorAll('[data-run]').forEach((b) => { b.onclick = async () => { b.disabled = true; b.textContent = '실행 중...';
+        try { const r = await call(`/engines/${b.dataset.run}/run`, { method: 'POST' }); toast('실행했습니다.'); openRun(r.run_id); } catch (e) { toast(e.message); render(); } }; });
+      main().querySelectorAll('[data-open-run]').forEach((b) => { b.onclick = () => openRun(b.dataset.openRun); });
+    },
+    async issues() {
+      const st = sessionStorage.getItem('wp-qg-issue-status') || 'active';
+      const rows = await call('/issues?status=' + encodeURIComponent(st));
+      main().innerHTML = `<div class="row" style="margin-bottom:10px"><label>상태 <select id="ist">${[['active', '열림·확인함'], ['fixed', '고침(확인 대기)'], ['verified', '해결 확인'], ['accepted_risk', '위험 수용'], ['false_positive', '오탐'], ['all', '전체']]
+          .map(([v, l]) => `<option value="${v}" ${v === st ? 'selected' : ''}>${l}</option>`).join('')}</select></label><span class="muted">${rows.length}건</span></div>
+        <div class="tblwrap"><table class="tbl"><tr><th>심각도</th><th>내용</th><th>엔진·범위</th><th>상태</th><th>마지막</th><th>처리</th></tr>
+        ${rows.map((i) => `<tr><td>${badge(SEV[i.severity])}</td><td>${esc(i.title)}<details><summary>자세히</summary><pre>${esc(JSON.stringify(i.last_detail || {}, null, 1))}</pre></details></td>
+          <td>${esc(ENGINE[i.engine_code] || i.engine_code)}<div class="muted">${esc(site(i.tenant_id))} · ${i.occurrences}회</div></td><td>${badge(ISSUE[i.status])}</td><td class="muted">${kdt(i.last_seen)}</td>
+          <td><div class="row">${(ISSUE_NEXT[i.status] || []).map((to) => `<button class="btn ${to === 'accepted_risk' || to === 'false_positive' ? 'danger' : ''}" data-i="${i.id}" data-to="${to}">${VERB[to]}</button>`).join('')}</div></td></tr>`).join('') || '<tr><td colspan="6" class="muted">이슈가 없습니다.</td></tr>'}
+        </table></div>`;
+      document.getElementById('ist').onchange = (e) => { sessionStorage.setItem('wp-qg-issue-status', e.target.value); render(); };
+      main().querySelectorAll('[data-to]').forEach((b) => { b.onclick = async () => {
+        const to = b.dataset.to; const strict = to === 'accepted_risk' || to === 'false_positive';
+        const note = await ask(`이슈를 "${VERB[to]}"(으)로`, strict ? '되돌리기 어려운 결정입니다. 사유가 기록되고, 치명·높음은 다른 관리자 승인이 필요합니다.' : '메모는 선택입니다.', strict ? 10 : 0);
+        if (note === null) return;
+        try { await call(`/issues/${b.dataset.i}/transition`, { method: 'POST', body: { to, note } }); toast('바꿨습니다.'); } catch (e) { toast(e.message); }
+        render(); }; });
+    },
+    async runs() {
+      const rows = await call('/runs');
+      main().innerHTML = `<div class="tblwrap"><table class="tbl"><tr><th>엔진</th><th>결과</th><th>검사</th><th>방식</th><th>시각</th><th></th></tr>
+        ${rows.map((r) => `<tr><td>${esc(ENGINE[r.engine_code] || r.engine_code)}</td><td>${badge(RUN[r.status])}</td>
+          <td class="muted">통과 ${(r.totals || {}).pass || 0} · 주의 ${(r.totals || {}).warn || 0} · 실패 ${(r.totals || {}).fail || 0}</td>
+          <td class="muted">${esc({ manual: '지금 실행', cron: '자동', release: '출시 관문', script: '스크립트', ci: 'CI' }[r.trigger] || r.trigger)}${r.actor_label ? ' · ' + esc(r.actor_label) : ''}</td>
+          <td class="muted">${kdt(r.finished_at)}</td><td><button class="btn" data-r="${r.id}">결과</button></td></tr>`).join('') || '<tr><td colspan="6" class="muted">실행 기록이 없습니다.</td></tr>'}</table></div>`;
+      main().querySelectorAll('[data-r]').forEach((b) => { b.onclick = () => openRun(b.dataset.r); });
+    },
+    async evidence() {
+      const rows = await call('/evidence');
+      main().innerHTML = `<div class="row" style="margin-bottom:10px"><button class="btn primary" id="ev-verify">해시체인 검증</button><button class="btn" id="ev-export">증거 묶음 내려받기</button><span id="ev-out" class="muted"></span></div>
+        <div class="tblwrap"><table class="tbl"><tr><th>번호</th><th>종류</th><th>제목</th><th>해시</th><th>시각</th></tr>
+        ${rows.map((e) => `<tr><td>${e.seq}</td><td>${esc(e.kind)}</td><td>${esc(e.title || '')}<div class="muted">${esc(site(e.tenant_id))}</div></td><td class="muted">${esc(String(e.hash || '').slice(0, 16))}… (방식 ${e.hash_v || 1})</td><td class="muted">${kdt(e.created_at)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">증거가 없습니다.</td></tr>'}</table></div>`;
+      document.getElementById('ev-verify').onclick = async () => { try { const v = await call('/evidence/verify'); document.getElementById('ev-out').textContent = v.ok ? `정상 — ${v.checked || 0}건 확인` : `끊김 — ${v.broken_seq || '?'}번`; } catch (e) { toast(e.message); } };
+      document.getElementById('ev-export').onclick = async () => {
+        try { const res = await fetch(API + '/evidence/export', { headers: { Authorization: 'Bearer ' + token } }); if (!res.ok) throw new Error('내려받지 못했습니다');
+          const blob = await res.blob(); const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+          a.download = (res.headers.get('Content-Disposition') || '').split('filename="')[1]?.replace('"', '') || 'qg-evidence.json'; a.click(); URL.revokeObjectURL(a.href);
+        } catch (e) { toast(e.message); } };
+    },
+    async review() {
+      const [cands, rows] = await Promise.all([call('/review/candidates'), call('/reviews')]);
+      main().innerHTML = `<div class="card" style="margin-bottom:12px"><h3>상품 문구 검토 요청</h3><div class="muted">상품 이름·설명·상세 설명을 법무·개인정보·보안·소비자 관점 검토자가 서로 모른 채 판정하고(규칙 검사), 사람이 최종 확정합니다.</div>
+        <div class="row" style="margin-top:8px"><select id="rv-target" style="min-width:240px">${cands.map((c) => `<option value="${esc(c.ref)}">${esc(c.label)}</option>`).join('')}</select>
+        <button class="btn primary" id="rv-go" ${cands.length ? '' : 'disabled'}>검토 요청</button></div></div>
+        <div class="tblwrap"><table class="tbl"><tr><th>대상</th><th>합의</th><th>확정</th><th>시각</th><th></th></tr>
+        ${rows.map((r) => `<tr><td>${esc(r.target_label || r.target_kind)}</td><td>${esc(r.outcome || r.status)}<details><summary>자세히</summary><pre>${esc(JSON.stringify(r.outcome_detail || {}, null, 1))}</pre></details></td>
+          <td>${r.final_decision ? esc(r.final_decision === 'approved' ? '통과' : '반려') : '<span class="muted">대기</span>'}</td><td class="muted">${kdt(r.created_at)}</td>
+          <td>${r.final_decision ? '' : `<div class="row"><button class="btn" data-rc="${r.id}" data-d="approved">통과 확정</button><button class="btn danger" data-rc="${r.id}" data-d="rejected">반려 확정</button></div>`}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">검토 기록이 없습니다.</td></tr>'}</table></div>`;
+      document.getElementById('rv-go').onclick = async (ev) => { ev.target.disabled = true; try { const r = await call('/reviews', { method: 'POST', body: { target: document.getElementById('rv-target').value } }); toast('검토 결과: ' + (r.outcome || '완료')); } catch (e) { toast(e.message); } render(); };
+      main().querySelectorAll('[data-rc]').forEach((b) => { b.onclick = async () => { const d = b.dataset.d;
+        const note = await ask(d === 'approved' ? '검토 통과로 확정' : '검토 반려로 확정', '확정 결과는 증거 원장에 남아 되돌릴 수 없습니다.', d === 'rejected' ? 5 : 0); if (note === null) return;
+        try { await call(`/reviews/${b.dataset.rc}/confirm`, { method: 'POST', body: { decision: d, note } }); toast('확정했습니다.'); } catch (e) { toast(e.message); } render(); }; });
+    },
+    async regulations() {
+      const rows = await call('/regulations');
+      main().innerHTML = `<div class="notice n-info">업종 법령은 동생 초안입니다(검토 필요). 내용을 확인한 뒤 '검토 기록'을 남기면 검토 기한이 다시 계산됩니다.</div>
+        <div class="tblwrap"><table class="tbl"><tr><th>법령</th><th>요지</th><th>연결</th><th>마지막 검토</th><th></th></tr>
+        ${rows.map((g) => `<tr><td><b>${esc(g.name)}</b><div class="muted">${esc(g.law_name)} ${esc(g.article || '')}</div>${g.source_url ? `<a href="${esc(g.source_url)}" target="_blank" rel="noopener">원문</a>` : ''}</td>
+          <td>${esc(g.summary)}${g.note ? `<div class="muted">${esc(g.note)}</div>` : ''}</td><td class="muted">${esc(Object.values(g.links || {}).flat().join(', ') || '-')}</td>
+          <td class="muted">${g.last_reviewed_at ? kdt(g.last_reviewed_at) : '검토 기록 없음'}</td><td><button class="btn" data-g="${esc(g.code)}">검토 기록</button></td></tr>`).join('')}</table></div>`;
+      main().querySelectorAll('[data-g]').forEach((b) => { b.onclick = async () => { const note = await ask('법령 검토 기록', '무엇을 확인했는지 적어 주세요(증거로 남습니다).', 5); if (note === null) return;
+        try { await call(`/regulations/${b.dataset.g}/reviewed`, { method: 'POST', body: { note } }); toast('기록했습니다.'); } catch (e) { toast(e.message); } render(); }; });
+    },
+    async releases() {
+      const rows = await call('/releases');
+      main().innerHTML = `<div class="notice n-info">이 플랫폼은 DB 안에 출시·공개 함수가 없어 '코드 배포'(Render 배포 커밋)만 출시 후보로 씁니다. 강제 스위치는 꺼져 있어(기본) 배포를 막지 않습니다.</div>
+        <div class="card" style="margin-bottom:12px"><h3>출시 후보 만들기</h3><div class="row"><input id="rl-sha" placeholder="배포할 커밋 SHA" maxlength="40" style="min-width:260px"><button class="btn primary" id="rl-go">후보 만들기</button></div></div>
+        <div class="tblwrap"><table class="tbl"><tr><th>번호</th><th>후보</th><th>상태</th><th>판정</th><th></th></tr>
+        ${rows.map((r) => `<tr><td>${r.rel_no}</td><td>${esc(r.title || r.target_label)}<div class="muted">${esc((r.git_sha || '').slice(0, 12))}</div></td><td>${esc(REL[r.status] || r.status)}</td>
+          <td><details><summary>${esc((r.verdict || {}).decision || (r.verdict ? '판정 있음' : '-'))}</summary><pre>${esc(JSON.stringify(r.verdict || {}, null, 1))}</pre></details></td>
+          <td><div class="row"><button class="btn" data-ev="${r.id}">판정</button><button class="btn" data-dc="${r.id}" data-d="approved">승인</button><button class="btn danger" data-dc="${r.id}" data-d="rejected">거절</button></div></td></tr>`).join('') || '<tr><td colspan="5" class="muted">출시 후보가 없습니다.</td></tr>'}</table></div>`;
+      document.getElementById('rl-go').onclick = async () => { try { await call('/releases', { method: 'POST', body: { git_sha: document.getElementById('rl-sha').value.trim() } }); toast('후보를 만들었습니다.'); } catch (e) { toast(e.message); } render(); };
+      main().querySelectorAll('[data-ev]').forEach((b) => { b.onclick = async () => { try { await call(`/releases/${b.dataset.ev}/evaluate`, { method: 'POST', body: { run_engines: false } }); toast('관문 판정을 했습니다.'); } catch (e) { toast(e.message); } render(); }; });
+      main().querySelectorAll('[data-dc]').forEach((b) => { b.onclick = async () => { const d = b.dataset.d;
+        const note = await ask(d === 'approved' ? '출시 승인' : '출시 거절', '승인은 후보를 만든 사람이 아닌 다른 관리자가 해야 합니다. 결정은 증거 원장에 남습니다.', d === 'rejected' ? 5 : 0); if (note === null) return;
+        try { await call(`/releases/${b.dataset.dc}/decide`, { method: 'POST', body: { decision: d, note } }); toast('결정했습니다.'); } catch (e) { toast(e.message); } render(); }; });
+    },
+    async proposals() {
+      const rows = await call('/proposals');
+      main().innerHTML = `<div class="tblwrap"><table class="tbl"><tr><th>제안</th><th>신호</th><th>우선순위</th><th>상태</th><th>처리</th></tr>
+        ${rows.map((p) => `<tr><td><b>${esc(p.title)}</b><div class="muted">${esc(p.problem)}</div><details><summary>개발 지시서</summary><pre>${esc(directive(p))}</pre></details></td>
+          <td class="muted">${p.signal_count}회 · ${kdt(p.last_signal_at)}</td><td>${p.priority_score == null ? '-' : esc(p.priority_score)}</td><td>${esc(PROP[p.status] || p.status)}</td>
+          <td><div class="row">${(PROP_NEXT[p.status] || []).map((to) => `<button class="btn ${to === 'declined' ? 'danger' : ''}" data-p="${p.id}" data-to="${to}">${esc(PROP[to])}</button>`).join('')}</div></td></tr>`).join('') || '<tr><td colspan="5" class="muted">개선 제안이 없습니다.</td></tr>'}</table></div>`;
+      main().querySelectorAll('[data-p]').forEach((b) => { b.onclick = async () => { const to = b.dataset.to;
+        const note = await ask(`제안을 "${PROP[to]}"(으)로`, to === 'declined' ? '거절 사유를 적어 주세요.' : '메모는 선택입니다.', to === 'declined' ? 5 : 0); if (note === null) return;
+        try { await call(`/proposals/${b.dataset.p}/transition`, { method: 'POST', body: { to, note } }); toast('바꿨습니다.'); } catch (e) { toast(e.message); } render(); }; });
+    },
+    async checks() {
+      const rows = await call('/checks');
+      main().innerHTML = `<div class="tblwrap"><table class="tbl"><tr><th>엔진</th><th>검사</th><th>위험</th><th>범위·주기</th><th>고치는 법</th></tr>
+        ${rows.map((c) => `<tr><td>${esc(ENGINE[c.engine_code] || c.engine_code)}</td><td><b>${esc(c.name)}</b><div class="muted">${esc(c.description || '')}</div></td>
+          <td>${badge(SEV[c.risk])}</td><td class="muted">${c.scope === 'tenant' ? '사이트별' : '전체'} · ${esc({ manual: '수동', hourly: '매시', daily: '매일', weekly: '매주', release: '출시 때' }[c.schedule] || c.schedule)}${c.active ? '' : ' · 꺼짐'}</td>
+          <td class="muted">${esc(c.remediation || '')}</td></tr>`).join('')}</table></div>`;
+    },
+    async settings() {
+      const rows = await call('/settings');
+      main().innerHTML = `<div class="notice n-info">출시 관문 강제 스위치(qg_enforce_…)는 기본 꺼짐입니다. 켜는 것은 형님 결정이라 이 화면에서는 바꾸지 않습니다.</div>
+        <div class="tblwrap"><table class="tbl"><tr><th>설정</th><th>값</th><th>설명</th></tr>
+        ${rows.map((s) => `<tr><td>${esc(s.label || s.key)}<div class="muted">${esc(s.key)}</div></td><td>${esc(typeof s.value === 'string' ? s.value : JSON.stringify(s.value))}</td><td class="muted">${esc(s.description || '')}</td></tr>`).join('')}</table></div>`;
+    },
+  };
+
+  function directive(p) {
+    return [`# 개발 지시서 — ${p.title}`, '', '## 문제', p.problem || '-', '', '## 범위', p.scope || '-', '', '## 완료 조건', p.acceptance || '-', '', '## 확인 방법', p.verification || '-',
+      '', `(품질·거버넌스 개선 제안 #${p.prop_no}, 신호 ${p.signal_count}회)`].join('\n');
+  }
+  async function openRun(id) {
+    if (!/^[0-9a-f-]{36}$/i.test(String(id || ''))) return;
+    tab = 'runs'; shell(); main().innerHTML = '<div class="muted">불러오는 중...</div>';
+    try {
+      const d = await call('/runs/' + id); const r = d.run;
+      main().innerHTML = `<div class="row" style="margin-bottom:10px"><button class="btn" id="back">← 실행 기록</button><b>${esc(ENGINE[r.engine_code] || r.engine_code)}</b>${badge(RUN[r.status])}<span class="muted">${kdt(r.finished_at)} · ${r.duration_ms}ms</span></div>
+        <div class="tblwrap"><table class="tbl"><tr><th>결과</th><th>검사</th><th>범위</th><th>내용</th></tr>
+        ${d.findings.map((f) => `<tr><td>${badge(FIND[f.status])} ${f.severity ? badge(SEV[f.severity]) : ''}</td><td class="muted">${esc(f.check_code)}</td><td class="muted">${esc(site(f.tenant_id))}</td>
+          <td>${esc(f.title || '')}<details><summary>자세히</summary><pre>${esc(JSON.stringify(f.detail || {}, null, 1))}</pre></details></td></tr>`).join('')}</table></div>`;
+      document.getElementById('back').onclick = () => { tab = 'runs'; shell(); render(); };
+    } catch (e) { main().innerHTML = `<div class="notice n-err">${esc(e.message)}</div>`; }
+  }
+
+  // 페이지 첫 단계: 권한 확인(관리자가 아니면 아무 내용도 그리지 않음 — 데이터는 서버 API 가 관리자에게만 내려줌)
+  (async function boot() {
+    const gate = (msg, link) => { app.innerHTML = `<div class="gate"><h2>🔒 ${msg}</h2>${link || ''}</div>`; };
+    try {
+      token = await WithPlus.getAccessToken();
+      if (!token) return gate('관리자 로그인이 필요합니다', '<a href="/login">로그인</a>');
+      const res = await fetch(API + '/dashboard', { headers: { Authorization: 'Bearer ' + token } });
+      if (res.status === 401) return gate('관리자 로그인이 필요합니다', '<a href="/login">로그인</a>');
+      if (res.status === 403) return gate('관리자만 볼 수 있는 화면입니다', '<a href="/">홈으로</a>');
+      const json = await res.json();
+      if (!res.ok) return gate(esc(json.message || '불러오지 못했습니다'), '<a href="/admin">관리자 화면으로</a>');
+      siteLabel = (json.data && json.data.site) || 'WITH+';
+      document.title = '품질·거버넌스 - ' + siteLabel;
+      try { const saved = localStorage.getItem('wp-qg-tab'); if (saved && VIEWS[saved]) tab = saved; } catch (e) {}
+      shell(); render();
+    } catch (e) { gate('불러오지 못했습니다: ' + esc(e.message)); }
+  })();
+})();
+</script>
+</body>
+</html>
