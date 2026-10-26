@@ -280,17 +280,23 @@ select pg_temp.chk('G_qg_itself_clean', $q$select (not exists (select 1 from wpl
    and (fingerprint like '%\_\_P\_\_\_qg%' escape '\' or fingerprint like '%wpl_qg\_%' or fingerprint like '%wpl_qga\_%')))::text$q$);
 select pg_temp.chk('G_issue_has_remediation', $q$select exists (select 1 from wpl_qg_issues i join wpl_qg_checks c on c.code = i.check_code
    where i.check_code = 'security.anon_definer' and i.status = 'open' and c.remediation like '%revoke%')::text$q$);
--- 공유 DB 범위(include_prefixes): 다른 제품 함수는 빼고 QG 자신은 계속 본다
+-- 공유 DB 범위(include_prefixes): 다른 제품 함수는 빼고 QG 자신·키트 시험 객체(zz_qg_)는 계속 본다(v1.2 — 플랫폼 include_prefixes 와 스모크 충돌 해소)
 select pg_temp.as_pg();
+create function public.zx_other_smoke_anon() returns int language sql security definer as $f$ select 1 $f$;
+grant execute on function public.zx_other_smoke_anon() to anon;
 update wpl_qg_checks set params = params || '{"include_prefixes":["zzz_other_product_"]}'::jsonb where code in ('security.anon_definer','security.definer_search_path');
 select pg_temp.as_user(pg_temp.v('admin1')::uuid);
 select pg_temp.put('sec2', $q$select public.wpl_qg_run_engine('security')::text$q$);
 select pg_temp.chk('G_scope_excludes_other_product', $q$select (not exists (select 1 from wpl_qg_findings where run_id = pg_temp.v('sec2')::uuid
-   and check_code in ('security.anon_definer','security.definer_search_path') and fingerprint like '%zz_qg_smoke_anon()'))::text$q$);
+   and check_code in ('security.anon_definer','security.definer_search_path') and fingerprint like '%zx_other_smoke_anon()'))::text$q$);
+select pg_temp.chk('G_scope_keeps_kit_smoke_objects', $q$select exists (select 1 from wpl_qg_findings where run_id = pg_temp.v('sec2')::uuid
+   and check_code = 'security.anon_definer' and status = 'fail' and fingerprint like '%zz_qg_smoke_anon()')::text$q$);
 select pg_temp.as_pg();
 select pg_temp.chk('G_scope_ok_helper', $q$select (public.wpl_qg_scope_ok_internal('wpl_qg_x', '{"include_prefixes":["nope_"]}')
+   and public.wpl_qg_scope_ok_internal('zz_qg_x', '{"include_prefixes":["nope_"]}')
    and not public.wpl_qg_scope_ok_internal('ekos_x', '{"include_prefixes":["gos_"]}') and public.wpl_qg_scope_ok_internal('gos_x', '{"include_prefixes":["gos_"]}')
    and not public.wpl_qg_scope_ok_internal('gos_x', '{"exclude_prefixes":["gos_"]}') and public.wpl_qg_scope_ok_internal('any_x', '{}'))::text$q$);
+drop function public.zx_other_smoke_anon();
 update wpl_qg_checks set params = params - 'include_prefixes' where code in ('security.anon_definer','security.definer_search_path');
 
 -- ───────── H. 정합성 엔진(일반 probe) ─────────
@@ -303,7 +309,8 @@ alter table public.zz_qg_parent enable row level security; alter table public.zz
 insert into public.zz_qg_parent values ('00000000-0000-0000-0000-0000000000a1', '00000000-0000-0000-0000-00000000000a');
 insert into public.zz_qg_child values ('00000000-0000-0000-0000-0000000000c1', '00000000-0000-0000-0000-00000000000b', '00000000-0000-0000-0000-0000000000a1', gen_random_uuid());
 update wpl_qg_checks set params = jsonb_set(params, '{tables}', (params->'tables') || '["zz_qg_ledger"]'::jsonb) where code = 'integrity.append_only_guards';
-update wpl_qg_checks set params = params || jsonb_build_object('table_prefixes', '["zz_qg_"]'::jsonb) where code = 'integrity.cross_tenant_fk';
+-- 시험 표 칸은 tenant_id — 플랫폼이 params.tenant_column 을 org_id 등으로 바꿔 둔 DB 에서도 같은 결과가 나오게 함께 지정(v1.2)
+update wpl_qg_checks set params = params || jsonb_build_object('table_prefixes', '["zz_qg_"]'::jsonb, 'tenant_column', 'tenant_id') where code = 'integrity.cross_tenant_fk';
 update wpl_qg_checks set params = params || jsonb_build_object('soft_refs', '[{"table":"zz_qg_child","column":"soft_ref","ref":"zz_qg_parent"}]'::jsonb) where code = 'integrity.orphans';
 select pg_temp.as_user(pg_temp.v('admin1')::uuid);
 select pg_temp.put('int', $q$select public.wpl_qg_run_engine('integrity')::text$q$);
@@ -473,6 +480,79 @@ select pg_temp.put('relrun', $q$select public.wpl_qg_run_engine('release')::text
 select pg_temp.chk('N_release_probes_clean', $q$select (not exists (select 1 from wpl_qg_findings where run_id = pg_temp.v('relrun')::uuid and check_code in ('release.approved_before_release','release.deploy_sha_match') and status <> 'pass'))::text$q$);
 select pg_temp.as_pg();
 select pg_temp.rej('N_release_direct_update_blocked', $q$update wpl_qg_releases set status = 'released' where id = pg_temp.v('rel_cd')::uuid$q$, '%절차%');
+
+-- ───────── N2. 서버 코드 출시 관문(v1.2 — TS 서버 액션·라우트용 check_server → 성공 뒤 mark_server) ─────────
+--  강제 스위치 꺼짐 = 항상 허용 + 관찰 기록만(원래 흐름과 결과가 같다) · 켜짐 = 승인 후보 없으면 allowed=false · 서버(service_role·서버 증명키)만
+select pg_temp.as_pg();
+create function pg_temp.as_service(p_claims boolean) returns void language plpgsql as $f$
+begin perform set_config('request.jwt.claims', case when p_claims then json_build_object('role', 'service_role')::text else '' end, true);
+      perform set_config('request.jwt.claim.sub', '', true); execute 'set local role service_role'; end $f$;
+grant all on r to service_role; grant usage, select on sequence r_n_seq to service_role; grant all on fx to service_role;
+grant execute on all functions in schema pg_temp to authenticated, anon, service_role;
+update wpl_qg_settings set value = to_jsonb(encode(sha256(convert_to('smoke-key-0123456789abcdef', 'UTF8')), 'hex')) where key = 'qg_server_attest_key_hash';
+update wpl_qg_settings set value = 'false' where key = 'qg_enforce_policy_change';
+select pg_temp.as_anon();
+select pg_temp.rej('N2_anon_denied', $q$select public.wpl_qg_release_gate_check_server('policy_change', 'qg_issue_sla_days', 'smoke-key-0123456789abcdef', null, null)$q$, '%permission denied%');
+select pg_temp.as_user(pg_temp.v('admin1')::uuid);
+select pg_temp.rej('N2_logged_in_denied', $q$select public.wpl_qg_release_gate_check_server('policy_change', 'qg_issue_sla_days', null, null, null)$q$, '%permission denied%');
+select pg_temp.rej('N2_mark_logged_in_denied', $q$select public.wpl_qg_release_mark_server('policy_change', 'qg_issue_sla_days', null, null, null, null)$q$, '%permission denied%');
+select pg_temp.as_pg();
+select pg_temp.rej('N2_no_service_no_key_denied', $q$select public.wpl_qg_release_gate_check_server('policy_change', 'qg_issue_sla_days', null, null, null)$q$, '%서버%');
+select pg_temp.rej('N2_wrong_key_denied', $q$select public.wpl_qg_release_gate_check_server('policy_change', 'qg_issue_sla_days', 'smoke-key-0123456789abcdeX', null, null)$q$, '%서버%');
+select pg_temp.chk('N2_server_key_ok', $q$select ((public.wpl_qg_release_gate_check_server('policy_change', 'qg_issue_sla_days', 'smoke-key-0123456789abcdef', null, null)->>'allowed')::boolean)::text$q$);
+select pg_temp.chk('N2_server_key_via_recorded', $q$select ((select via from wpl_qg_release_observations order by id desc limit 1) = 'server_key')::text$q$);
+-- 강제 꺼짐: 승인 후보가 없어도 허용 + '켰다면 막힘(would_block)' 관찰만
+select pg_temp.as_service(true);
+select pg_temp.put('n2_off', $q$select public.wpl_qg_release_gate_check_server('policy_change', 'qg_issue_sla_days', null, null, '이슈 처리 기한')::text$q$);
+select pg_temp.chk('N2_off_allows', $q$select ((pg_temp.v('n2_off')::jsonb->>'allowed')::boolean and not (pg_temp.v('n2_off')::jsonb->>'enforced')::boolean
+   and (pg_temp.v('n2_off')::jsonb->>'would_block')::boolean and pg_temp.v('n2_off')::jsonb->>'reason' = 'no_approved' and pg_temp.v('n2_off')::jsonb->>'message' is null)::text$q$);
+select pg_temp.chk('N2_unknown_kind_off_allows', $q$select ((public.wpl_qg_release_gate_check_server('zz_not_registered', 'x1', null, null, null)->>'reason') = 'no_policy'
+   and (public.wpl_qg_release_gate_check_server('zz_not_registered', 'x1', null, null, null)->>'allowed')::boolean)::text$q$);
+select pg_temp.put('n2_mark_off', $q$select public.wpl_qg_release_mark_server('policy_change', 'qg_issue_sla_days', null, null, null, '시험')::text$q$);
+select pg_temp.chk('N2_mark_off_no_candidate_ok', $q$select ((pg_temp.v('n2_mark_off')::jsonb->>'ok')::boolean and not (pg_temp.v('n2_mark_off')::jsonb->>'linked')::boolean
+   and pg_temp.v('n2_mark_off')::jsonb->>'reason' = 'no_approved')::text$q$);
+select pg_temp.as_service(false);
+select pg_temp.chk('N2_role_only_service_ok', $q$select ((public.wpl_qg_release_gate_check_server('policy_change', 'qg_issue_sla_days', null, null, null)->>'ok')::boolean)::text$q$);
+-- 강제 켜짐: 승인 후보 없으면 거부(사람 말·설정 키 노출 없음) — 예외가 아니라 allowed=false(TS 헬퍼가 사람 말 오류로 바꿈)
+select pg_temp.as_pg();
+update wpl_qg_settings set value = 'true' where key = 'qg_enforce_policy_change';
+select pg_temp.as_service(true);
+select pg_temp.put('n2_on', $q$select public.wpl_qg_release_gate_check_server('policy_change', 'qg_issue_sla_days', null, null, null)::text$q$);
+select pg_temp.chk('N2_on_blocks_unapproved', $q$select (not (pg_temp.v('n2_on')::jsonb->>'allowed')::boolean and (pg_temp.v('n2_on')::jsonb->>'enforced')::boolean
+   and pg_temp.v('n2_on')::jsonb->>'message' like '%출시 관문%' and pg_temp.v('n2_on')::jsonb->>'message' not like '%qg\_enforce%'
+   and pg_temp.v('n2_on')::jsonb->>'message' like '%강제 스위치 「%')::text$q$);
+-- 후보 → 판정 → 다른 관리자 승인 → 서버 확인 허용 → 성공 뒤 mark 로 출시 완료 연결
+select pg_temp.as_user(pg_temp.v('admin1')::uuid);
+select pg_temp.put('rel_srv', $q$select (public.wpl_qg_release_create('policy_change', 'qg_issue_sla_days', null, null, null)->>'id')$q$);
+select pg_temp.chk('N2_candidate_passes', $q$select ((public.wpl_qg_release_evaluate(pg_temp.v('rel_srv')::uuid, false)->>'result') = 'passed')::text$q$);
+select pg_temp.as_user(pg_temp.v('admin2')::uuid);
+select pg_temp.chk('N2_candidate_approved', $q$select ((public.wpl_qg_release_decide(pg_temp.v('rel_srv')::uuid, 'approved', '확인')->>'status') = 'approved')::text$q$);
+select pg_temp.as_service(true);
+select pg_temp.put('n2_ok', $q$select public.wpl_qg_release_gate_check_server('policy_change', 'qg_issue_sla_days', null, null, null)::text$q$);
+select pg_temp.chk('N2_on_allows_approved', $q$select ((pg_temp.v('n2_ok')::jsonb->>'allowed')::boolean and pg_temp.v('n2_ok')::jsonb->>'reason' = 'approved'
+   and pg_temp.v('n2_ok')::jsonb->>'release_id' = pg_temp.v('rel_srv'))::text$q$);
+select pg_temp.chk('N2_check_does_not_consume', $q$select ((select status from wpl_qg_releases where id = pg_temp.v('rel_srv')::uuid) = 'approved')::text$q$);
+select pg_temp.put('n2_mark', $q$select public.wpl_qg_release_mark_server('policy_change', 'qg_issue_sla_days', null, null, null, '서버 액션 성공')::text$q$);
+select pg_temp.chk('N2_mark_links_release', $q$select ((pg_temp.v('n2_mark')::jsonb->>'linked')::boolean and pg_temp.v('n2_mark')::jsonb->>'release_id' = pg_temp.v('rel_srv'))::text$q$);
+select pg_temp.chk('N2_candidate_released', $q$select ((select status = 'released' from wpl_qg_releases where id = pg_temp.v('rel_srv')::uuid))::text$q$);
+select pg_temp.chk('N2_on_blocks_after_consumed', $q$select (not (public.wpl_qg_release_gate_check_server('policy_change', 'qg_issue_sla_days', null, null, null)->>'allowed')::boolean)::text$q$);
+select pg_temp.chk('N2_code_deploy_not_marked', $q$select ((public.wpl_qg_release_mark_server('code_deploy', 'abcdef1234567', null, null, null, null)->>'reason') = 'code_deploy_use_record_deploy')::text$q$);
+-- 다시 끄면 원래대로(항상 허용)
+select pg_temp.as_pg();
+update wpl_qg_settings set value = 'false' where key = 'qg_enforce_policy_change';
+select pg_temp.as_service(true);
+select pg_temp.chk('N2_off_again_allows', $q$select ((public.wpl_qg_release_gate_check_server('policy_change', 'qg_issue_sla_days', null, null, null)->>'allowed')::boolean)::text$q$);
+-- 관찰 기록: 추가 전용 · 관리자만 읽음
+select pg_temp.as_pg();
+select pg_temp.chk('N2_observations_recorded', $q$select ((select count(*) from wpl_qg_release_observations where kind = 'policy_change' and target_ref = 'qg_issue_sla_days' and phase = 'check') >= 6
+   and exists (select 1 from wpl_qg_release_observations where phase = 'released' and release_id = pg_temp.v('rel_srv')::uuid)
+   and exists (select 1 from wpl_qg_release_observations where phase = 'check' and enforced and not allowed))::text$q$);
+select pg_temp.rej('N2_observation_append_only', $q$update wpl_qg_release_observations set allowed = false where id = (select max(id) from wpl_qg_release_observations)$q$, '%추가%');
+select pg_temp.as_user(pg_temp.v('outsider')::uuid);
+select pg_temp.chk('N2_outsider_reads_none', $q$select ((select count(*) from wpl_qg_release_observations) = 0)::text$q$);
+select pg_temp.as_user(pg_temp.v('admin1')::uuid);
+select pg_temp.chk('N2_admin_reads', $q$select ((select count(*) from wpl_qg_release_observations) > 0)::text$q$);
+select pg_temp.as_pg();
 
 -- ───────── O. 개선 제안 ─────────
 select pg_temp.as_user(pg_temp.v('admin1')::uuid);

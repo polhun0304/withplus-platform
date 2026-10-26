@@ -81,6 +81,21 @@ const server = app.listen(0, async () => {
     assert(r.status === 400 || r.status === 404, '법령 코드 형식 검사');
     r = await req('GET', '/api/admin/qg/evidence/export');
     assert(r.status === 200 && /attachment; filename="qg-evidence-wpl-\d{4}-\d{2}-\d{2}\.json"/.test(r.headers['content-disposition'] || ''), '증거 내려받기(한국 날짜 파일 이름)');
+    // 서버 코드 출시 관문 종류(v1.2): 대상 목록·후보 만들기·관찰 요약
+    r = await req('GET', '/api/admin/qg/releases/targets?kind=supplier_approve');
+    assert(r.status === 200 && calls.some((c) => c.name === 'wpl_qg_release_target_list' && c.args.p_kind === 'supplier_approve' && c.auth === 'Bearer tok-admin'), '출시 대상 목록(관리자 토큰으로 DB 확인)');
+    r = await req('GET', '/api/admin/qg/releases/targets?kind=DROP');
+    assert(r.status === 400, '출시 종류 형식 검사');
+    r = await req('GET', '/api/admin/qg/releases/targets?kind=code_deploy');
+    assert(r.status === 400, '코드 배포는 대상 목록 없음(커밋 SHA 입력)');
+    r = await req('POST', '/api/admin/qg/releases', { kind: 'live_go_live', target: '' });
+    assert(r.status === 400 && /목록/.test(r.json.message), '대상 없는 후보 거부');
+    r = await req('POST', '/api/admin/qg/releases', { kind: 'supplier_approve', target: iid });
+    assert(r.status === 200 && calls.some((c) => c.name === 'wpl_qg_release_create' && c.args.p_kind === 'supplier_approve' && c.args.p_target === iid && c.args.p_git_sha === null), '입점 승인 출시 후보 만들기');
+    r = await req('GET', '/api/admin/qg/releases/observations');
+    assert(r.status === 200 && Array.isArray(r.json.data.summary) && calls.some((c) => c.kind === 'from' && c.table === 'wpl_qg_release_observations'), '서버 코드 출시 관찰 요약');
+    r = await req('GET', '/api/admin/qg/releases/kinds');
+    assert(r.status === 200 && calls.some((c) => c.kind === 'from' && c.table === 'wpl_qg_gate_policies'), '출시 종류(관문 정책) 목록');
     r = await req('GET', '/api/admin/qg/nothing');
     assert(r.status === 404, '없는 기능 404');
   } catch (e) { fail++; console.log('❌ 예외', e.message); }

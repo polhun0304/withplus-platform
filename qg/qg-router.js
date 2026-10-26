@@ -169,12 +169,42 @@ module.exports = function createQgRouter({ createClient, supabaseUrl, supabaseAn
     ok(res, await rpc(req, 'regulation_mark_reviewed', { p_code: code, p_note: note }));
   }));
 
-  // 출시 관문(코드 배포 후보: Render 배포 커밋)
+  // 출시 관문 — 후보 종류: 코드 배포(Render 배포 커밋) + 서버 코드 출시 관문 종류(입점 승인·도매 승인·라이브 공개 시작 — server.js 라우트에 연결, QG 키트 v1.2 §7.2)
+  const KIND_RE = /^[a-z][a-z0-9_]{2,39}$/;
+  router.get('/releases/kinds', route(async (req, res) => {
+    ok(res, await sel(req.qgdb.from(t('gate_policies')).select('kind,name,description,required_engines,max_age_hours,block_severities,issue_scope,require_review,active').order('kind').limit(100)));
+  }));
+  // 대상 고르기(UUID 손입력 없음): 심사 대기 입점·도매 신청, 예정된 라이브 세션 — DB 함수가 관리자 확인
+  router.get('/releases/targets', route(async (req, res) => {
+    const kind = String(req.query.kind || '');
+    if (!KIND_RE.test(kind) || kind === 'code_deploy') throw Object.assign(new Error('출시 종류를 골라 주세요.'), { status: 400 });
+    ok(res, await rpc(req, 'release_target_list', { p_kind: kind, p_limit: 200 }));
+  }));
+  // 서버 코드 출시 관찰(추가 전용 기록, 관리자만 읽음): 강제 스위치를 켰다면 막혔을 출시 건수 — 켜기 전에 이 건수가 승인 후보를 먼저 거치게 한다(형님 결정)
+  router.get('/releases/observations', route(async (req, res) => {
+    const rows = await sel(req.qgdb.from(t('release_observations')).select('id,phase,kind,target_ref,target_label,tenant_id,enforced,allowed,would_block,reason,release_id,via,created_at')
+      .order('id', { ascending: false }).limit(500));
+    const byKind = {};
+    for (const r of rows) {
+      const k = byKind[r.kind] || (byKind[r.kind] = { kind: r.kind, checks: 0, would_block: 0, blocked: 0, released: 0, linked: 0, last_at: null });
+      if (!k.last_at || r.created_at > k.last_at) k.last_at = r.created_at;
+      if (r.phase === 'check') { k.checks++; if (r.would_block) k.would_block++; if (r.enforced && !r.allowed) k.blocked++; }
+      else { k.released++; if (r.release_id) k.linked++; }
+    }
+    ok(res, { summary: Object.values(byKind), recent: rows.slice(0, 50) });
+  }));
   router.get('/releases', route(async (req, res) => {
     ok(res, await sel(req.qgdb.from(t('releases')).select('id,rel_no,kind,target_ref,target_label,title,git_sha,status,verdict,evaluated_at,approved_at,decided_at,decision_note,deploy_state,deploy_sha,released_at,created_at').order('created_at', { ascending: false }).limit(50)));
   }));
   router.post('/releases', route(async (req, res) => {
     const b = req.body || {};
+    const kind = String(b.kind || 'code_deploy');
+    if (kind !== 'code_deploy') {
+      if (!KIND_RE.test(kind)) throw Object.assign(new Error('출시 종류를 골라 주세요.'), { status: 400 });
+      const target = String(b.target || '').trim();
+      if (!target || target.length > 200) throw Object.assign(new Error('출시 대상을 목록에서 골라 주세요.'), { status: 400 });
+      return ok(res, await rpc(req, 'release_create', { p_kind: kind, p_target: target, p_title: clip(b.title, 200), p_git_sha: null, p_note: clip(b.note, 2000) }));
+    }
     const sha = String(b.git_sha || '').trim();
     if (!/^[0-9a-f]{7,40}$/.test(sha)) throw Object.assign(new Error('커밋 SHA(7~40자리 16진수)를 넣어 주세요.'), { status: 400 });
     ok(res, await rpc(req, 'release_create', { p_kind: 'code_deploy', p_target: sha, p_title: clip(b.title, 200) || `${siteLabel} 코드 배포 ${sha.slice(0, 7)}`, p_git_sha: sha, p_note: clip(b.note, 2000) }));

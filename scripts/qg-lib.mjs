@@ -321,6 +321,27 @@ export function expandGlobs(root, patterns, readdir) {
   return [...new Set(out)];
 }
 
+/** 키트가 렌더링한 마이그레이션 이름(접두어 뒤) — 확장 마이그레이션 목록에서 자동으로 뺀다(v1.2) */
+export const KIT_SQL_NAMES = ["adapter", "contract", "spine", "seed", "security", "integrity", "testing", "adversarial", "review", "compliance", "ai_model", "release", "evolution"];
+const slash = (f) => String(f).replace(/\\/g, "/");
+/**
+ * 키트 마이그레이션인가: .qg-kit.json migrations 에 있는 파일(이름 비교) 또는 <번호>_<접두어>_qg_{키트 이름 | kit_X_Y_Z_upgrade}.sql.
+ * --extra-migrations "911[3-9]_*" 처럼 넓은 패턴이 업그레이드 파일까지 잡아 두 번 적용되던 문제(gos 피드백)를 막는다.
+ */
+export function isKitMigration(file, kit, prefix) {
+  const base = path.posix.basename(slash(file));
+  if ((kit?.migrations ?? []).some((m) => path.posix.basename(slash(m)) === base)) return true;
+  const p = prefix ?? kit?.prefix;
+  if (!p) return false;
+  return new RegExp(`^\\d+_${p}_qg_(${KIT_SQL_NAMES.join("|")}|kit_\\d+_\\d+_\\d+_upgrade)\\.sql$`).test(base);
+}
+/** 확장 마이그레이션 목록에서 키트 파일을 뺀다 → { extra, skipped } */
+export function splitExtraMigrations(files, kit, prefix) {
+  const extra = []; const skipped = [];
+  for (const f of files) (isKitMigration(f, kit, prefix) ? skipped : extra).push(slash(f));
+  return { extra, skipped };
+}
+
 /** 결과 행 값 정리: ok = 참거짓, steps·failed = 숫자, failures = JSON */
 function normalizeRow(row) {
   const out = { ...row };
