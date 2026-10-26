@@ -511,6 +511,7 @@ const requireRole = (allowedRoles) => async (req, res, next) => {
       .select('role')
       .eq('id', req.user.id)
       .single();
+    if (profile) await applySiteRole(profile, req.user.id);
 
     if (error || !profile) {
       return res.status(403).json({
@@ -563,6 +564,28 @@ const requireRole = (allowedRoles) => async (req, res, next) => {
 };
 
 const isAdminRole = (role) => role === 'admin' || role === 'super_admin';
+
+// 🔑 WITH+ 전용 관리자 — profiles.role 은 LIVE+(GMWOS)와 같은 DB를 함께 쓰는 칸이라, 거기를 admin 으로 바꾸면
+// LIVE+ 에서도 관리자가 된다. "WITH+ 에서만 관리자"인 회원은 role 을 그대로 두고 platform_settings(key='with_site_admins')
+// 목록에 올려, WITH+ 서버만 관리자(admin)로 인정한다(LIVE+ 서버는 이 목록을 읽지 않는다).
+const SITE_ADMINS_KEY = 'with_site_admins';
+let siteAdminCache = { at: 0, ids: new Set() };
+async function getSiteAdminIds() {
+  if (Date.now() - siteAdminCache.at < 30 * 1000) return siteAdminCache.ids;
+  const { data, error } = await supabase.from('platform_settings').select('value').eq('key', SITE_ADMINS_KEY).maybeSingle();
+  if (error) return siteAdminCache.ids; // 조회 실패 시 직전 목록 유지(없으면 아무도 올리지 않음 = 안전한 쪽)
+  const list = data && data.value && Array.isArray(data.value.user_ids) ? data.value.user_ids : [];
+  siteAdminCache = { at: Date.now(), ids: new Set(list.filter(id => typeof id === 'string')) };
+  return siteAdminCache.ids;
+}
+// 프로필 조회 결과에 WITH+ 전용 관리자 권한을 반영한다(그 자리에서 role 을 'admin'으로). 이미 관리자면 그대로.
+async function applySiteRole(profile, userId) {
+  if (!profile || typeof profile !== 'object') return profile;
+  const id = userId || profile.id;
+  if (!id || isAdminRole(profile.role)) return profile;
+  if ((await getSiteAdminIds()).has(id)) profile.role = 'admin';
+  return profile;
+}
 
 // ============================================
 // 원가(cost_price) 접근 제어 인프라
@@ -755,6 +778,7 @@ async function hasAnyOwnerStepUpFactor(profileId, user) {
 async function checkOwnerStepUp(req, { allowBootstrap = false } = {}) {
   if (!req.user) return { ok: false, status: 403, message: '로그인이 필요합니다', reason: 'not_authenticated' };
   const { data: profile, error } = await supabase.from('profiles').select('id, role, is_owner').eq('id', req.user.id).single();
+  if (profile) await applySiteRole(profile, req.user.id);
   if (error || !profile) return { ok: false, status: 403, message: '프로필 정보를 확인할 수 없습니다', reason: 'profile_not_found' };
   if (profile.role !== 'super_admin' || !profile.is_owner) {
     return { ok: false, status: 403, message: '대표자 계정만 조회/수정할 수 있습니다', reason: 'not_owner' };
@@ -840,6 +864,7 @@ app.get('/api/me', authenticate, async (req, res) => {
       .select('id, email, full_name, role, is_owner, phone, birth_date, gender, region, marketing_consent')
       .eq('id', req.user.id)
       .single();
+    if (profile) await applySiteRole(profile, req.user.id);
 
     if (error || !profile) {
       return res.json({
@@ -1729,6 +1754,7 @@ app.get('/api/me/price-context', optionalAuth, async (req, res) => {
     let ctx = { mode: 'default' };
     if (req.user) {
       const { data: profile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
+      if (profile) await applySiteRole(profile, req.user.id);
       if (profile && profile.role === 'wholesale') {
         ctx = await buildWholesalePriceContext();
       } else {
@@ -6039,6 +6065,7 @@ app.post('/api/me/supplier-applications', authenticate, async (req, res) => {
     }
 
     const { data: profile } = await supabase.from('profiles').select('role').eq('id', req.user.id).single();
+    if (profile) await applySiteRole(profile, req.user.id);
     if (profile && ['provider', 'admin', 'super_admin'].includes(profile.role)) {
       return res.status(400).json({ error: 'Bad Request', message: '이미 판매자(또는 관리자) 권한을 가진 계정입니다', timestamp: new Date().toISOString() });
     }
@@ -6210,6 +6237,7 @@ app.post('/api/me/wholesale-applications', authenticate, async (req, res) => {
     }
 
     const { data: profile } = await supabase.from('profiles').select('role').eq('id', req.user.id).single();
+    if (profile) await applySiteRole(profile, req.user.id);
     if (profile && ['wholesale', 'admin', 'super_admin'].includes(profile.role)) {
       return res.status(400).json({ error: 'Bad Request', message: '이미 도매 회원(또는 관리자) 권한을 가진 계정입니다', timestamp: new Date().toISOString() });
     }
@@ -7850,6 +7878,7 @@ async function handleOwnerStepUpVerify(req, res) {
   const ip = getClientIp(req);
   try {
     const { data: profile, error } = await supabase.from('profiles').select('id, role, is_owner, email').eq('id', req.user.id).single();
+    if (profile) await applySiteRole(profile, req.user.id);
     if (error || !profile) {
       return res.status(403).json({ error: 'Forbidden', message: '프로필을 확인할 수 없습니다', timestamp: new Date().toISOString() });
     }
@@ -7896,6 +7925,7 @@ app.post('/api/admin/owner/stepup/via-account-mfa', authenticate, async (req, re
   const ip = getClientIp(req);
   try {
     const { data: profile, error } = await supabase.from('profiles').select('id, role, is_owner').eq('id', req.user.id).single();
+    if (profile) await applySiteRole(profile, req.user.id);
     if (error || !profile || profile.role !== 'super_admin' || !profile.is_owner) {
       await logCostAudit({ profileId: req.user.id, action: 'step_up_verify_failed', detail: { reason: 'not_owner', method: 'account_mfa' }, ip });
       return res.status(403).json({ error: 'Forbidden', message: '대표자 계정만 사용할 수 있습니다', timestamp: new Date().toISOString() });
@@ -11489,6 +11519,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
     // (일반 회원이 도매가를 알아내 그대로 주문에 꽂아넣는 것을 막기 위해, 클라이언트가 보낸 값이 아니라
     //  서버가 로그인한 계정의 실제 role을 다시 조회해서 판단한다)
     const { data: buyerProfile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
+    if (buyerProfile) await applySiteRole(buyerProfile, req.user.id);
     const isWholesaleBuyer = !!(buyerProfile && buyerProfile.role === 'wholesale');
     // 채널별 자동 가격 컨텍스트 (resolvePriceContext 참고) - 도매 회원이면 도매가(상품별 도매채널가 > 카테고리 할인율 > 공통 도매 할인율),
     // 아니면 위에서 가입 검증한 community_id(= 이 주문에 실제로 붙는 공동체)의 적립율 차이만큼 가감한 공동체가.
@@ -13123,6 +13154,7 @@ async function getReviewEligibility(userId, productId) {
       .contains('items', JSON.stringify([{ product_id: productId }])).order('created_at', { ascending: false }).limit(50),
     getReviewGrantUserIds()
   ]);
+  if (profile) await applySiteRole(profile, userId);
   const withProduct = (orders || []).filter(o => Array.isArray(o.items) && o.items.some(i => i && i.product_id === productId));
   const delivered = withProduct.find(o => o.status === 'delivered');
   return {
@@ -16251,6 +16283,7 @@ app.post('/api/boards', authenticate, async (req, res) => {
 
     if (board_type === 'notice') {
       const { data: profile } = await supabase.from('profiles').select('role').eq('id', req.user.id).single();
+      if (profile) await applySiteRole(profile, req.user.id);
       if (!profile || !isAdminRole(profile.role)) {
         return res.status(403).json({ error: 'Forbidden', message: '공지사항은 관리자만 작성할 수 있습니다', timestamp: new Date().toISOString() });
       }
@@ -16286,6 +16319,7 @@ app.put('/api/boards/:id', authenticate, async (req, res) => {
     }
 
     const { data: profile } = await supabase.from('profiles').select('role').eq('id', req.user.id).single();
+    if (profile) await applySiteRole(profile, req.user.id);
     const isOwnerOrAdmin = existing.author_id === req.user.id || isAdminRole(profile?.role);
     if (!isOwnerOrAdmin) {
       return res.status(403).json({ error: 'Forbidden', message: '본인 게시글만 수정할 수 있습니다', timestamp: new Date().toISOString() });
@@ -16315,6 +16349,7 @@ app.delete('/api/boards/:id', authenticate, async (req, res) => {
     }
 
     const { data: profile } = await supabase.from('profiles').select('role').eq('id', req.user.id).single();
+    if (profile) await applySiteRole(profile, req.user.id);
     const isOwnerOrAdmin = existing.author_id === req.user.id || isAdminRole(profile?.role);
     if (!isOwnerOrAdmin) {
       return res.status(403).json({ error: 'Forbidden', message: '본인 게시글만 삭제할 수 있습니다', timestamp: new Date().toISOString() });
@@ -16345,6 +16380,7 @@ app.post('/api/boards/:id/comments', authenticate, async (req, res) => {
     }
 
     const { data: profile } = await supabase.from('profiles').select('role, email, full_name').eq('id', req.user.id).single();
+    if (profile) await applySiteRole(profile, req.user.id);
     const isAdminReply = isAdminRole(profile?.role);
     const authorName = profile?.full_name || profile?.email || req.user.email || '회원';
 
@@ -16376,6 +16412,7 @@ app.delete('/api/boards/:postId/comments/:commentId', authenticate, async (req, 
     }
 
     const { data: profile } = await supabase.from('profiles').select('role').eq('id', req.user.id).single();
+    if (profile) await applySiteRole(profile, req.user.id);
     const isOwnerOrAdmin = existing.author_id === req.user.id || isAdminRole(profile?.role);
     if (!isOwnerOrAdmin) {
       return res.status(403).json({ error: 'Forbidden', message: '본인 댓글만 삭제할 수 있습니다', timestamp: new Date().toISOString() });
@@ -17268,6 +17305,7 @@ app.get('/api/admin/community-settlements', authenticate, async (req, res) => {
     // 이 엔드포인트는 requireRole을 쓰지 않고(관리자·분양조직 담당자 모두 호출 가능해야 하므로) authenticate만
     // 거치기 때문에 req.userRole이 채워지지 않는다(requireRole 미들웨어에서만 설정됨) - 직접 프로필을 조회한다.
     const { data: callerProfile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
+    if (callerProfile) await applySiteRole(callerProfile, req.user.id);
     if (callerProfile && isAdminRole(callerProfile.role)) {
       // 관리자 화면("💵 분양조직 정산" 탭)에서 조회하는 경로는 전체 조직의 매출·수수료·은행계좌가 그대로
       // 노출되므로 대표자 전용으로 제한한다. requireRole 미들웨어로 걸 수 없는 이유는 바로 아래 else 분기
@@ -17818,6 +17856,7 @@ app.get('/api/admin/settlements/:id/withholding-receipt', authenticate, async (r
     if (error) throw error;
     if (!row) return res.status(404).json({ error: 'Not Found', message: '정산 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
     const { data: callerProfile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
+    if (callerProfile) await applySiteRole(callerProfile, req.user.id);
     const isSelf = row.supplier_id === req.user.id;
     if (!isSelf && !(callerProfile && isAdminRole(callerProfile.role))) {
       return res.status(403).json({ error: 'Forbidden', message: '본인의 정산 건만 조회할 수 있습니다', timestamp: new Date().toISOString() });
@@ -17841,6 +17880,7 @@ app.get('/api/admin/community-settlements/:id/withholding-receipt', authenticate
     if (error) throw error;
     if (!row) return res.status(404).json({ error: 'Not Found', message: '정산 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
     const { data: callerProfile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
+    if (callerProfile) await applySiteRole(callerProfile, req.user.id);
     let allowed = !!(callerProfile && isAdminRole(callerProfile.role));
     if (!allowed) {
       const myCommunity = await getMyManagedCommunity(req.user.id);
