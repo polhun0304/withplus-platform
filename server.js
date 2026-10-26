@@ -15036,39 +15036,22 @@ app.delete('/api/admin/communities/:id/logo', authenticate, requireRole(['admin'
 
 // 관리자: 분양 조직 일괄 삭제 (분양 조직 관리 목록의 체크박스)
 // communities 행을 지우면 orders_with·community_points·회원 연결 등이 CASCADE 로 함께 지워진다.
-// 거래 기록을 지키기 위해 주문·정산·헌금(offerings) 기록이 하나라도 있는 조직은 지우지 않고 건너뛴다(대신 비활성화 안내).
+// 그래서 확인과 삭제를 DB 함수 delete_communities_safely 한 번으로 처리한다(docs/migrations/2026-10-27_delete_communities_safely.sql):
+//  - 조직 행을 잠근 뒤 조직마다 주문·정산·헌금(offerings) 기록을 확인 → 동시에 들어온 주문이 끼어들어 지워지거나, 결과 개수 제한으로 기록이 빠지는 일이 없다
+//  - 기록이 있는 조직은 지우지 않고 사유와 함께 돌려준다(화면에서 비활성화 안내), 공개 전환했던 영업 후보는 미공개로 되돌린다
 app.post('/api/admin/communities/bulk-delete', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const raw = Array.isArray(req.body && req.body.ids) ? req.body.ids : [];
-    const ids = [...new Set(raw.map(String).filter(id => /^[0-9a-f-]{36}$/i.test(id)))].slice(0, 200);
+    const ids = [...new Set(raw.map(String).filter(id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)))].slice(0, 200);
     if (!ids.length) return res.status(400).json({ error: 'Bad Request', message: '삭제할 조직을 골라주세요', timestamp: new Date().toISOString() });
-    const [commRes, ordRes, stRes, offRes] = await Promise.all([
-      supabase.from('communities').select('id, name').in('id', ids),
-      supabase.from('orders_with').select('community_id').in('community_id', ids).limit(10000),
-      supabase.from('community_settlements_with').select('community_id').in('community_id', ids).limit(10000),
-      supabase.from('offerings').select('community_id').in('community_id', ids).limit(10000)
-    ]);
-    for (const r of [commRes, ordRes, stRes, offRes]) if (r.error) throw r.error;
-    const reasons = {};
-    const mark = (rows, label) => (rows || []).forEach(r => { (reasons[r.community_id] = reasons[r.community_id] || new Set()).add(label); });
-    mark(ordRes.data, '주문');
-    mark(stRes.data, '정산');
-    mark(offRes.data, '헌금');
-    const found = commRes.data || [];
-    const deletable = found.filter(c => !reasons[c.id]);
-    const skipped = found.filter(c => reasons[c.id]).map(c => ({ id: c.id, name: c.name, reasons: [...reasons[c.id]] }));
-    if (deletable.length) {
-      const delIds = deletable.map(c => c.id);
-      // 분양 영업 리스트에서 공개 전환했던 후보는 다시 공개 전환할 수 있도록 연결만 푼다
-      const { error: pErr } = await supabase.from('community_prospects').update({ promoted_community_id: null }).in('promoted_community_id', delIds);
-      if (pErr) throw pErr;
-      const { error: dErr } = await supabase.from('communities').delete().in('id', delIds);
-      if (dErr) throw dErr;
-    }
+    const { data, error } = await supabase.rpc('delete_communities_safely', { p_ids: ids });
+    if (error) throw error;
+    const deleted = (data && data.deleted) || [];
+    const skipped = (data && data.skipped) || [];
     res.json({
       success: true,
-      data: { deleted: deletable.map(c => ({ id: c.id, name: c.name })), skipped, not_found: ids.length - found.length },
-      message: `${deletable.length}개 조직을 삭제했습니다` + (skipped.length ? ` (거래 기록이 있는 ${skipped.length}개는 건너뜀)` : ''),
+      data: { deleted, skipped, not_found: ids.length - deleted.length - skipped.length },
+      message: `${deleted.length}개 조직을 삭제했습니다` + (skipped.length ? ` (거래 기록이 있는 ${skipped.length}개는 건너뜀)` : ''),
       timestamp: new Date().toISOString()
     });
   } catch (err) {
