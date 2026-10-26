@@ -10,3 +10,5 @@ build/
 withplus-key.pem
 *.zip
 nodemailer-pkg.zip
+
+supabase/.temp/
