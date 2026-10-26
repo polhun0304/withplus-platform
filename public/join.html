@@ -157,7 +157,16 @@
 
                 try {
                     const client = await WithPlus.getClient();
-                    const { data, error } = await client.auth.signUp({ email, password });
+                    // 인증 메일(Supabase 이메일 양식)에 가입한 사이트 이름을 넣고, 메일 링크를 누르면 이 사이트로 돌아오게 한다
+                    // (두 사이트가 같은 Supabase 프로젝트를 써서, 양식은 하나 - {{ .Data.signup_site }} 로 사이트를 구분한다)
+                    const { data, error } = await client.auth.signUp({
+                        email,
+                        password,
+                        options: {
+                            emailRedirectTo: location.origin + '/login',
+                            data: { signup_site: 'WITH+', signup_site_url: location.origin }
+                        }
+                    });
 
                     if (error) {
                         msg.textContent = error.message === 'User already registered'
