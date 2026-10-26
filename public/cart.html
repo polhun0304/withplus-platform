@@ -791,17 +791,15 @@
                 const addressSearchBtn = document.getElementById('address-search-btn');
                 if (addressSearchBtn) {
                     addressSearchBtn.addEventListener('click', () => {
-                        if (typeof daum === 'undefined' || !daum.Postcode) return;
-                        new daum.Postcode({
-                            oncomplete: function (data) {
-                                document.getElementById('receiver-postal').value = data.zonecode;
-                                document.getElementById('receiver-address').value = data.roadAddress || data.jibunAddress;
-                                document.getElementById('receiver-address-detail').focus();
-                                if (savedAddressSelect) savedAddressSelect.value = '__new__';
-                                // 우편번호가 바뀌었으므로 배송비(도서산간 추가금액)를 다시 계산해 반영한다
-                                if (data.zonecode !== lastKnownPostal) { lastKnownPostal = data.zonecode; renderCart(); }
-                            }
-                        }).open();
+                        // 팝업 대신 화면 안 레이어로 연다(보안 헤더 때문에 팝업은 고른 주소를 돌려주지 못함)
+                        WithPlus.openAddressSearch(function (data) {
+                            document.getElementById('receiver-postal').value = data.zonecode;
+                            document.getElementById('receiver-address').value = data.roadAddress || data.jibunAddress;
+                            document.getElementById('receiver-address-detail').focus();
+                            if (savedAddressSelect) savedAddressSelect.value = '__new__';
+                            // 우편번호가 바뀌었으므로 배송비(도서산간 추가금액)를 다시 계산해 반영한다
+                            if (data.zonecode !== lastKnownPostal) { lastKnownPostal = data.zonecode; renderCart(); }
+                        });
                     });
                 }
 

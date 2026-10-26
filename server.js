@@ -158,7 +158,8 @@ app.use(helmet({
       "img-src": ["'self'", "data:", "https:", "blob:"],
       "connect-src": ["'self'", "https:", "wss:"],
       // 📺 라이브(WITH+ 라이브커머스): 유튜브/페이스북 임베드 재생, Cloudflare Stream HLS(blob: MSE), hls.js 워커(blob:)
-      "frame-src": ["'self'", "https://www.youtube.com", "https://www.youtube-nocookie.com", "https://www.facebook.com", "https://web.facebook.com"],
+      // 📮 주소 검색(다음/카카오 우편번호) 레이어: postcode.map.daum.net / postcode.map.kakao.com 의 iframe
+      "frame-src": ["'self'", "https://www.youtube.com", "https://www.youtube-nocookie.com", "https://www.facebook.com", "https://web.facebook.com", "https://postcode.map.daum.net", "https://postcode.map.kakao.com", "https://*.daum.net", "https://*.kakao.com"],
       "media-src": ["'self'", "https:", "blob:", "data:"],
       "worker-src": ["'self'", "blob:"],
       "object-src": ["'none'"],
