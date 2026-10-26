@@ -1656,11 +1656,26 @@ async function getChannelPricingSettings() {
 }
 
 // 상품별 도매채널가 맵 { product_id: price } - productIds 를 주면 그 상품만 조회
+// 상품 ID가 수백 개면 한 번에 in(...)으로 보내면 주소가 너무 길어져 DB가 거절(Bad Request)한다 → 150개씩 나눠 조회
+const ID_CHUNK = 150;
+async function selectByIdChunks(productIds, build) {
+  if (!Array.isArray(productIds)) return build(null);
+  const out = { data: [], error: null };
+  for (let i = 0; i < productIds.length; i += ID_CHUNK) {
+    const { data, error } = await build(productIds.slice(i, i + ID_CHUNK));
+    if (error) return { data: null, error };
+    out.data.push(...(data || []));
+  }
+  return out;
+}
+
 async function getWholesaleOverrideMap(productIds) {
   if (Array.isArray(productIds) && productIds.length === 0) return {};
-  let q = supabase.from('product_channel_prices_with').select('product_id, price').eq('channel', 'wholesale');
-  if (Array.isArray(productIds)) q = q.in('product_id', productIds);
-  const { data } = await q;
+  const { data, error } = await selectByIdChunks(productIds, ids => {
+    let q = supabase.from('product_channel_prices_with').select('product_id, price').eq('channel', 'wholesale');
+    return ids ? q.in('product_id', ids) : q;
+  });
+  if (error) console.error('도매채널가 조회 실패:', error.message);
   const map = {};
   (data || []).forEach(r => { if (Number.isFinite(Number(r.price)) && Number(r.price) > 0) map[r.product_id] = Number(r.price); });
   return map;
@@ -1669,9 +1684,10 @@ async function getWholesaleOverrideMap(productIds) {
 // 상품별 도매 할인율 맵 { product_id: bp(0.01% 단위) } - 값이 있는 상품만, productIds 를 주면 그 상품만 조회
 async function getWholesaleProductRateMap(productIds) {
   if (Array.isArray(productIds) && productIds.length === 0) return {};
-  let q = supabase.from('products_with').select('id, wholesale_discount_percent').not('wholesale_discount_percent', 'is', null);
-  if (Array.isArray(productIds)) q = q.in('id', productIds);
-  const { data, error } = await q;
+  const { data, error } = await selectByIdChunks(productIds, ids => {
+    const q = supabase.from('products_with').select('id, wholesale_discount_percent').not('wholesale_discount_percent', 'is', null);
+    return ids ? q.in('id', ids) : q;
+  });
   // 조회 실패를 "할인율 없음"으로 취급하면 결제가 기본 할인율로 계산되고, 관리자 화면 저장 시 할인율이 지워질 수 있다 → 오류로 멈춘다
   if (error) throw error;
   const map = {};
