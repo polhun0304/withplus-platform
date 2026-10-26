@@ -78,7 +78,7 @@ details summary{cursor:pointer;color:var(--blue);font-size:13px}
   const PROP = { proposed: '제안됨', accepted: '채택', in_progress: '진행 중', shipped: '출시됨', verified: '효과 확인', declined: '거절' };
   const PROP_NEXT = { proposed: ['accepted', 'declined'], accepted: ['in_progress', 'declined', 'proposed'], in_progress: ['shipped', 'accepted', 'declined'],
     shipped: ['verified', 'in_progress'], verified: ['in_progress'], declined: ['proposed'] };
-  const REL = { draft: '초안', evaluated: '판정됨', blocked: '차단', approved: '승인', rejected: '거절', released: '출시됨', cancelled: '취소' };
+  const REL = { candidate: '후보', checking: '판정 중', passed: '관문 통과', draft: '초안', evaluated: '판정됨', blocked: '차단', approved: '승인', rejected: '거절', released: '출시 완료', cancelled: '취소' };
   const badge = (pair) => pair ? `<span class="badge ${pair[1] || ''}">${esc(pair[0])}</span>` : '';
   const kdt = (v) => v ? new Date(v).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-';
   const site = (id) => id ? (SITES[id] || '사이트') : '전체';
@@ -224,14 +224,41 @@ details summary{cursor:pointer;color:var(--blue);font-size:13px}
         try { await call(`/regulations/${b.dataset.g}/reviewed`, { method: 'POST', body: { note } }); toast('기록했습니다.'); } catch (e) { toast(e.message); } render(); }; });
     },
     async releases() {
-      const rows = await call('/releases');
-      main().innerHTML = `<div class="notice n-info">이 플랫폼은 DB 안에 출시·공개 함수가 없어 '코드 배포'(Render 배포 커밋)만 출시 후보로 씁니다. 강제 스위치는 꺼져 있어(기본) 배포를 막지 않습니다.</div>
-        <div class="card" style="margin-bottom:12px"><h3>출시 후보 만들기</h3><div class="row"><input id="rl-sha" placeholder="배포할 커밋 SHA" maxlength="40" style="min-width:260px"><button class="btn primary" id="rl-go">후보 만들기</button></div></div>
+      const [rows, kinds, obs] = await Promise.all([call('/releases'), call('/releases/kinds').catch(() => []), call('/releases/observations').catch(() => null)]);
+      const kname = (k) => ((kinds.find((x) => x.kind === k) || {}).name || k);
+      const sum = (obs && obs.summary) || [];
+      main().innerHTML = `<div class="notice n-info">출시 후보 종류: 코드 배포(Render 배포 커밋)와 서버 코드 출시 관문 — 판매자 입점 승인·도매 회원 승인·라이브 방송 공개 시작(관리자 화면의 그 버튼에 연결됨).
+          강제 스위치가 모두 꺼져 있어(기본) 아무것도 막지 않고 '관찰 기록'만 남깁니다. 스위치를 켜는 것은 형님 결정입니다.</div>
+        <div class="card" style="margin-bottom:12px"><h3>서버 코드 출시 관찰</h3>
+          <div class="muted" style="margin-bottom:6px">입점 승인·도매 승인·라이브 공개 시작 버튼이 눌릴 때마다 남는 기록입니다. '켰다면 막힘'은 강제 스위치를 켰다면 승인된 출시 후보가 없어 거부됐을 건수입니다 — 켜기 전에 이 출시들이 후보 → 판정 → 다른 관리자 승인을 먼저 거치게 하세요.</div>
+          <div class="tblwrap"><table class="tbl"><tr><th>종류</th><th>확인</th><th>켰다면 막힘</th><th>실제로 막힘</th><th>완료 기록(후보 연결)</th><th>마지막</th></tr>
+          ${sum.map((k) => `<tr><td>${esc(kname(k.kind))}</td><td>${k.checks}</td><td>${k.would_block ? `<span class="badge b-amber">${k.would_block}</span>` : '0'}</td>
+            <td>${k.blocked ? `<span class="badge b-red">${k.blocked}</span>` : '0'}</td><td>${k.released} (${k.linked})</td><td class="muted">${kdt(k.last_at)}</td></tr>`).join('') || '<tr><td colspan="6" class="muted">아직 관찰 기록이 없습니다(승인·공개 버튼이 눌리면 쌓입니다).</td></tr>'}</table></div></div>
+        <div class="card" style="margin-bottom:12px"><h3>출시 후보 만들기</h3><div class="row">
+          <select id="rl-kind">${kinds.filter((k) => k.active && k.kind !== 'policy_change').map((k) => `<option value="${esc(k.kind)}">${esc(k.name)}</option>`).join('') || '<option value="code_deploy">코드 배포</option>'}</select>
+          <span id="rl-target-box"></span><button class="btn primary" id="rl-go">후보 만들기</button></div>
+          <div class="muted" id="rl-desc" style="margin-top:6px"></div></div>
         <div class="tblwrap"><table class="tbl"><tr><th>번호</th><th>후보</th><th>상태</th><th>판정</th><th></th></tr>
-        ${rows.map((r) => `<tr><td>${r.rel_no}</td><td>${esc(r.title || r.target_label)}<div class="muted">${esc((r.git_sha || '').slice(0, 12))}</div></td><td>${esc(REL[r.status] || r.status)}</td>
-          <td><details><summary>${esc((r.verdict || {}).decision || (r.verdict ? '판정 있음' : '-'))}</summary><pre>${esc(JSON.stringify(r.verdict || {}, null, 1))}</pre></details></td>
+        ${rows.map((r) => `<tr><td>${r.rel_no}</td><td>${esc(r.title || r.target_label)}<div class="muted">${esc(kname(r.kind))}${r.git_sha ? ' · ' + esc(r.git_sha.slice(0, 12)) : ''}</div></td><td>${esc(REL[r.status] || r.status)}</td>
+          <td><details><summary>${esc((r.verdict || {}).result || (r.verdict ? '판정 있음' : '-'))}</summary><pre>${esc(JSON.stringify(r.verdict || {}, null, 1))}</pre></details></td>
           <td><div class="row"><button class="btn" data-ev="${r.id}">판정</button><button class="btn" data-dc="${r.id}" data-d="approved">승인</button><button class="btn danger" data-dc="${r.id}" data-d="rejected">거절</button></div></td></tr>`).join('') || '<tr><td colspan="5" class="muted">출시 후보가 없습니다.</td></tr>'}</table></div>`;
-      document.getElementById('rl-go').onclick = async () => { try { await call('/releases', { method: 'POST', body: { git_sha: document.getElementById('rl-sha').value.trim() } }); toast('후보를 만들었습니다.'); } catch (e) { toast(e.message); } render(); };
+      const kindSel = document.getElementById('rl-kind'); const box = document.getElementById('rl-target-box');
+      const showTarget = async () => {
+        const k = kindSel.value; document.getElementById('rl-desc').textContent = (kinds.find((x) => x.kind === k) || {}).description || '';
+        if (k === 'code_deploy') { box.innerHTML = '<input id="rl-sha" placeholder="배포할 커밋 SHA" maxlength="40" style="min-width:260px">'; return; }
+        box.innerHTML = '<span class="muted">대상 불러오는 중...</span>';
+        try {
+          const list = await call('/releases/targets?kind=' + encodeURIComponent(k));
+          box.innerHTML = list.length ? `<select id="rl-target" style="min-width:260px">${list.map((x) => `<option value="${esc(x.ref)}">${esc(x.label)}${x.detail ? ' — ' + esc(x.detail) : ''}</option>`).join('')}</select>`
+            : '<span class="muted">고를 대상이 없습니다(심사 대기 신청·예정된 방송 없음).</span>';
+        } catch (e) { box.innerHTML = `<span class="muted">${esc(e.message)}</span>`; }
+      };
+      kindSel.onchange = showTarget; await showTarget();
+      document.getElementById('rl-go').onclick = async () => {
+        const k = kindSel.value;
+        const body = k === 'code_deploy' ? { kind: k, git_sha: ((document.getElementById('rl-sha') || {}).value || '').trim() } : { kind: k, target: (document.getElementById('rl-target') || {}).value || '' };
+        if (k !== 'code_deploy' && !body.target) { toast('출시 대상을 목록에서 골라 주세요.'); return; }
+        try { await call('/releases', { method: 'POST', body }); toast('후보를 만들었습니다.'); } catch (e) { toast(e.message); } render(); };
       main().querySelectorAll('[data-ev]').forEach((b) => { b.onclick = async () => { try { await call(`/releases/${b.dataset.ev}/evaluate`, { method: 'POST', body: { run_engines: false } }); toast('관문 판정을 했습니다.'); } catch (e) { toast(e.message); } render(); }; });
       main().querySelectorAll('[data-dc]').forEach((b) => { b.onclick = async () => { const d = b.dataset.d;
         const note = await ask(d === 'approved' ? '출시 승인' : '출시 거절', '승인은 후보를 만든 사람이 아닌 다른 관리자가 해야 합니다. 결정은 증거 원장에 남습니다.', d === 'rejected' ? 5 : 0); if (note === null) return;

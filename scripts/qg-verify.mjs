@@ -10,13 +10,14 @@
  *          [--extra-migrations "supabase/migrations/911[3-9]_*.sql,…"]  플랫폼 확장 마이그레이션(기본: .qg-kit.json extra_migrations)
  *          [--extra-tests "supabase/tests/9113_*.sql,…"]                플랫폼 시험(기본: .qg-kit.json extra_tests) — 형식은 qg-run 과 같음
  *        [--allowlist-draft]  익명 실행 DEFINER 실측 → supabase/qg-anon-allowlist-draft.sql 초안(사유는 사람이 채움, 날짜는 한국 시각)
- *  확인 항목: 표·함수 존재, QG 표 RLS, QG DEFINER search_path, 익명 실행 QG 함수 0, 내부 함수 로그인 실행 0,
+ *          (확장 패턴이 키트 파일·업그레이드 파일까지 잡으면 자동으로 뺀다 — v1.2)
+ *  확인 항목: 표·함수 존재, QG 표 RLS, QG DEFINER search_path, 익명 실행 QG 함수 0, 내부 함수 로그인 실행 0, 서버 전용 출시 관문 RPC 로그인 실행 0,
  *            엔진 10·검사 항목, 엔진 실행(10종), 증거 체인, 어댑터 정보, pg_cron 등록, 강제 스위치 기본 false.
  *  종료 코드: 0 = 모두 통과, 1 = 실패 있음, 2 = 실행 준비 실패. 운영 데이터를 바꾸지 않는다(--commit-runs 제외).
  */
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { assertNoCommit, expandGlobs, kstDate, makeDb, parseArgs, parseSmoke, resolveVia, stripTxControl } from "./qg-lib.mjs";
+import { assertNoCommit, expandGlobs, kstDate, makeDb, parseArgs, parseSmoke, resolveVia, splitExtraMigrations, stripTxControl } from "./qg-lib.mjs";
 
 const ROOT = process.cwd();
 const a = parseArgs(process.argv.slice(2));
@@ -25,7 +26,9 @@ const P = String(a.prefix ?? kit.prefix ?? "");
 if (!/^[a-z][a-z0-9]{1,11}$/.test(P)) { console.error("접두어를 알 수 없습니다(.qg-kit.json 또는 --prefix)."); process.exit(2); }
 const db = makeDb(resolveVia(a, kit), { cwd: ROOT });
 const list = (v) => (Array.isArray(v) ? v : String(v ?? "").split(",")).map((x) => String(x).trim()).filter(Boolean);
-const EXTRA_MIGS = expandGlobs(ROOT, a["extra-migrations"] !== undefined ? list(a["extra-migrations"]) : list(kit.extra_migrations), readdirSync);
+// 확장 마이그레이션 패턴이 키트 파일(업그레이드 파일 포함)까지 잡으면 자동으로 뺀다(v1.2 — 두 번 적용 방지)
+const { extra: EXTRA_MIGS, skipped: EXTRA_SKIPPED } = splitExtraMigrations(
+  expandGlobs(ROOT, a["extra-migrations"] !== undefined ? list(a["extra-migrations"]) : list(kit.extra_migrations), readdirSync), kit, P);
 const EXTRA_TESTS = expandGlobs(ROOT, a["extra-tests"] !== undefined ? list(a["extra-tests"]) : list(kit.extra_tests), readdirSync);
 const describeTest = (label, rows, error, errorText) => {
   const p = parseSmoke(rows, errorText || error);
@@ -45,25 +48,27 @@ catch (e) { add("DB 연결", false, String(e instanceof Error ? e.message : e).s
 const TABLES = ["settings", "engines", "checks", "anon_allowlist", "evidence", "runs", "issues", "findings", "risk_approvals", "issue_events",
   "risk_items", "test_suites", "scenarios", "banned_phrases", "required_clauses", "reviewers", "reviews", "review_verdicts",
   "regulations", "regulation_changes", "compliance_targets", "ai_models", "ai_tasks", "ai_calls", "ai_eval_sets", "ai_evals", "ai_model_approvals", "ai_model_events",
-  "gate_policies", "releases", "release_events", "proposals", "proposal_events"];
+  "gate_policies", "releases", "release_events", "release_observations", "proposals", "proposal_events"];
 const RPCS = ["run_engine(text,uuid)", "ingest(jsonb,text)", "issue_transition(uuid,text,text)", "issue_decide(uuid,text,text)", "dashboard()", "verify_evidence_chain()",
   "setting_set(text,jsonb)", "adapter_info()", "review_request(text,text,text,text,uuid,boolean)", "review_submit(uuid,text,jsonb)", "review_finalize(uuid)", "review_confirm(uuid,text,text)",
   "regulation_change_add(text,text,date,text,text,jsonb,uuid)", "regulation_mark_reviewed(text,text)", "ai_eval_record(text,text,text,text,integer,uuid,text,uuid)",
   "ai_model_set_status(text,text,text,text)", "ai_model_decide(text,text,text,text)", "ai_routing_policy(text)", "ai_call_record(text,text,text,integer,numeric,text,uuid,integer,integer)",
   "release_create(text,text,text,text,text)", "release_evaluate(uuid,boolean)", "release_decide(uuid,text,text)", "release_record_deploy(uuid,text,text,text,text,text)",
   "release_mark_released(uuid,text)", "release_gate_hook_internal(text,text)", "evolution_collect()", "proposal_transition(uuid,text,text,uuid)",
-  "issue_bulk_transition(uuid[],text,text)", "review_candidates(text,integer)", "release_gate_require_internal(text,text)"];
+  "issue_bulk_transition(uuid[],text,text)", "review_candidates(text,integer)", "release_gate_require_internal(text,text)",
+  "release_gate_check_server(text,text,text,uuid,text)", "release_mark_server(text,text,text,uuid,text,text)"];
 
 // ───────── 적용 전 한 트랜잭션 시험 ─────────
 if (a["dry-apply"]) {
-  const kitMigs = (kit.migrations ?? []).filter((m) => !EXTRA_MIGS.includes(m));
+  const kitMigs = [...new Map((kit.migrations ?? []).map((m) => [path.basename(String(m).replace(/\\/g, "/")), String(m).replace(/\\/g, "/")])).values()];
+  if (EXTRA_SKIPPED.length) add("확장 목록에서 키트 파일 뺌", true, EXTRA_SKIPPED.join(", "));
   const smoke = kit.smoke ? path.join(ROOT, kit.smoke) : null;
   if (kitMigs.length === 0 || !smoke || !existsSync(smoke)) { console.error(".qg-kit.json 의 마이그레이션·스모크 경로를 찾을 수 없습니다(qg-install.mjs 로 먼저 설치)."); process.exit(2); }
   const missing = [...kitMigs, ...EXTRA_MIGS, ...EXTRA_TESTS].filter((f) => !existsSync(path.join(ROOT, f)));
   if (missing.length) { add("파일 확인", false, `없는 파일: ${missing.join(", ")}`); finish(); }
   let migSql;
   // 적용 순서 = 파일 이름 순(supabase 와 같음) — 업그레이드 파일이 플랫폼 확장 파일 뒤에 오는 운영 순서를 그대로 흉내 낸다
-  const ordered = [...new Set([...kitMigs, ...EXTRA_MIGS])].sort((x, y) => { const bx = path.basename(x), by = path.basename(y); return bx < by ? -1 : bx > by ? 1 : 0; });
+  const ordered = [...new Map([...kitMigs, ...EXTRA_MIGS].map((f) => [path.basename(f), f])).values()].sort((x, y) => { const bx = path.basename(x), by = path.basename(y); return bx < by ? -1 : bx > by ? 1 : 0; });
   try { migSql = ordered.map((f) => `-- ▼ ${f}\n${stripTxControl(readFileSync(path.join(ROOT, f), "utf8"), f)}`).join("\n;\n"); }
   catch (e) { add("마이그레이션 준비", false, e.message); finish(); }
   if (EXTRA_MIGS.length) add("플랫폼 확장 마이그레이션 포함", true, EXTRA_MIGS.join(", "));
@@ -121,12 +126,15 @@ tryStep("보안 불변식", () => {
         and (p.proname like '${L(P)}\\_qg\\_%\\_internal' or p.proname like '${L(P)}\\_qg\\_probe\\_%' or (p.proname like '${L(P)}\\_qga\\_%' and p.proname not in ('${P}_qga_is_admin','${P}_qga_can_read_tenant')))
         and has_function_privilege('authenticated', p.oid, 'execute')) as internal_exec,
      (select count(*) from pg_class c where c.relnamespace = 'public'::regnamespace and c.relkind = 'r' and c.relname like '${L(P)}\\_qg\\_%'
-        and has_table_privilege('anon', c.oid, 'select,insert,update,delete')) as anon_table`);
+        and has_table_privilege('anon', c.oid, 'select,insert,update,delete')) as anon_table,
+     (select count(*) from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname in ('${P}_qg_release_gate_check_server','${P}_qg_release_mark_server')
+        and has_function_privilege('authenticated', p.oid, 'execute')) as server_rpc_login_exec`);
   add("QG 표 RLS 모두 켜짐", Number(x.rls_off) === 0, `꺼진 표 ${x.rls_off}`);
   add("익명 실행 가능한 QG 함수 0", Number(x.anon_exec) === 0, `${x.anon_exec}개`);
   add("QG DEFINER search_path 고정", Number(x.no_search_path) === 0, `없는 것 ${x.no_search_path}`);
   add("내부 함수 로그인 실행 0", Number(x.internal_exec) === 0, `${x.internal_exec}개`);
   add("QG 표 익명 권한 0", Number(x.anon_table) === 0, `${x.anon_table}개`);
+  add("서버 전용 출시 관문 RPC 로그인 실행 0", Number(x.server_rpc_login_exec ?? 0) === 0, `${x.server_rpc_login_exec ?? 0}개`);
 });
 tryStep("카탈로그", () => {
   const rows = db.rows(`select g.code, (select count(*) from public.${P}_qg_checks c where c.engine_code = g.code and c.active) as checks from public.${P}_qg_engines g order by g.sort`);

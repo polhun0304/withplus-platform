@@ -36,6 +36,12 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey);
 // 공개 클라이언트 (ANON_KEY) - RLS 정책이 적용됨
 const supabasePublic = createClient(supabaseUrl, supabaseAnonKey);
 
+// 품질·거버넌스(QG) 서버 코드 출시 관문(QG 키트 v1.2 §7.2, qg/release-gate.js) — 공개·승인 라우트에 두 단계로 건다:
+//  ① 바꾸기 전 qgReleaseBlocked(res, 대상): 강제 스위치 qg_enforce_<종류> 꺼짐(기본) = 관찰 기록만 남기고 항상 통과(원래 동작·응답 그대로),
+//     켜짐 = 승인된 출시 후보가 없으면 409 + 사람 말 메시지. ② 성공 뒤 qgReleaseMarkReleased(대상): 승인 후보 → 출시 완료(절대 던지지 않음).
+//  종류: supplier_approve(판매자 입점 승인) · wholesale_approve(도매 회원 승인) · live_go_live(라이브 방송 공개 시작) — 정책·대상 확인은 DB(wpl_qg_*).
+const qgRelease = require('./qg/release-gate').createQgReleaseGate({ db: supabase });
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -6170,6 +6176,10 @@ app.put('/api/admin/supplier-applications/:id/approve', authenticate, requireRol
       return res.status(400).json({ error: 'Bad Request', message: `신청자 계정의 현재 권한(${applicantProfile.role})은 이 화면에서 승인 처리할 수 없습니다`, timestamp: new Date().toISOString() });
     }
 
+    // [QG] 출시 관문 ①(판매자 입점 승인): 강제 스위치 꺼짐(기본) = 관찰만 · 켜짐 = 승인된 출시 후보 없으면 409(사람 말)
+    const qgTarget = { kind: 'supplier_approve', ref: appRow.id };
+    if (await qgRelease.qgReleaseBlocked(res, qgTarget)) return;
+
     const { error: roleErr } = await supabase.from('profiles').update({ role: 'provider' }).eq('id', appRow.applicant_id);
     if (roleErr) throw roleErr;
 
@@ -6193,6 +6203,7 @@ app.put('/api/admin/supplier-applications/:id/approve', authenticate, requireRol
       }]);
     } catch (_) { /* 감사로그 기록 실패는 승인 처리 자체를 막지 않음 */ }
 
+    await qgRelease.qgReleaseMarkReleased(qgTarget);   // [QG] 출시 관문 ②: 성공 뒤에만(승인 후보 → 출시 완료, 절대 던지지 않음)
     res.json({ success: true, data, message: '입점 신청을 승인했습니다', timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error approving supplier application:', err);
@@ -6342,6 +6353,10 @@ app.put('/api/admin/wholesale-applications/:id/approve', authenticate, requireRo
       return res.status(400).json({ error: 'Bad Request', message: `신청자 계정의 현재 권한(${applicantProfile.role})은 이 화면에서 승인 처리할 수 없습니다`, timestamp: new Date().toISOString() });
     }
 
+    // [QG] 출시 관문 ①(도매 회원 승인): 강제 스위치 꺼짐(기본) = 관찰만 · 켜짐 = 승인된 출시 후보 없으면 409(사람 말)
+    const qgTarget = { kind: 'wholesale_approve', ref: appRow.id };
+    if (await qgRelease.qgReleaseBlocked(res, qgTarget)) return;
+
     const { error: roleErr } = await supabase.from('profiles').update({ role: 'wholesale' }).eq('id', appRow.applicant_id);
     if (roleErr) throw roleErr;
 
@@ -6365,6 +6380,7 @@ app.put('/api/admin/wholesale-applications/:id/approve', authenticate, requireRo
       }]);
     } catch (_) { /* 감사로그 기록 실패는 승인 처리 자체를 막지 않음 */ }
 
+    await qgRelease.qgReleaseMarkReleased(qgTarget);   // [QG] 출시 관문 ②: 성공 뒤에만(승인 후보 → 출시 완료, 절대 던지지 않음)
     res.json({ success: true, data, message: '도매몰 입점 신청을 승인했습니다', timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error approving wholesale application:', err);
@@ -21874,6 +21890,10 @@ app.patch('/api/admin/live/channels/:id/sessions/:sessionId', authenticate, requ
       updates.pinned_product_id = req.body.pinned_product_id;
     }
 
+    // [QG] 출시 관문 ①(라이브 방송 공개 시작 — 방송 중으로 바꿀 때만): 강제 스위치 꺼짐(기본) = 관찰만 · 켜짐 = 승인된 출시 후보 없으면 409(사람 말)
+    const qgTarget = willGoLive ? { kind: 'live_go_live', ref: req.params.sessionId } : null;
+    if (qgTarget && await qgRelease.qgReleaseBlocked(res, qgTarget)) return;
+
     const { data, error } = await supabase.from(liveTable('live_sessions'))
       .update(updates).eq('id', req.params.sessionId).eq('channel_id', req.params.id).select().single();
     if (error) throw error;
@@ -21885,6 +21905,7 @@ app.patch('/api/admin/live/channels/:id/sessions/:sessionId', authenticate, requ
       notifyChannelMembersLiveStarted(req.params.id, data, getBaseUrl(req)).catch(err => console.error('라이브 시작 알림 발송 오류:', err.message));
     }
 
+    if (qgTarget) await qgRelease.qgReleaseMarkReleased(qgTarget);   // [QG] 출시 관문 ②: 성공 뒤에만(승인 후보 → 출시 완료, 절대 던지지 않음)
     res.json({ success: true, data, timestamp: new Date().toISOString() });
   } catch (err) {
     console.error('Error updating live session:', err);
