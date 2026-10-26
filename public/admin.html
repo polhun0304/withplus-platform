@@ -2682,7 +2682,10 @@
                 <div class="tab-panel" id="tab-communities">
                     <div class="panel-toolbar">
                         <span style="color:var(--text-gray); font-size:0.9em;">기본 정보를 입력하면 <code>/c/슬러그</code> 주소로 해당 조직 전용 분양 랜딩페이지가 즉시 생성됩니다</span>
-                        <button class="btn btn-primary" id="btn-new-community">+ 새 조직 추가</button>
+                        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                            <button class="btn btn-secondary" id="btn-delete-communities" disabled style="color:#C62828;">🗑 선택 삭제</button>
+                            <button class="btn btn-primary" id="btn-new-community">+ 새 조직 추가</button>
+                        </div>
                     </div>
                     <div id="communities-table-area"><div class="state-box"><div class="emoji">⏳</div><h3>불러오는 중...</h3></div></div>
                 </div>
@@ -9963,10 +9966,11 @@
 
                         tableArea.innerHTML = `
                             <table>
-                                <thead><tr><th>로고</th><th>조직명</th><th>랜딩페이지</th><th>연락처</th><th>담당자</th><th>적립율</th><th>상품노출</th><th>카테고리노출</th><th>상태</th><th></th></tr></thead>
+                                <thead><tr><th style="width:36px;"><input type="checkbox" id="comm-check-all" title="전체 선택" aria-label="전체 선택" style="width:18px; height:18px; cursor:pointer;"></th><th>로고</th><th>조직명</th><th>랜딩페이지</th><th>연락처</th><th>담당자</th><th>적립율</th><th>상품노출</th><th>카테고리노출</th><th>상태</th><th></th></tr></thead>
                                 <tbody>
                                     ${communitiesCache.map(c => `
                                     <tr data-id="${c.id}">
+                                        <td data-label="선택"><input type="checkbox" class="comm-check" value="${c.id}" aria-label="${WithPlus.escapeHtml(c.name)} 선택" style="width:18px; height:18px; cursor:pointer;"></td>
                                         <td data-label="로고">${c.logo_url
                                             ? `<img src="${WithPlus.escapeHtml(c.logo_url)}" alt="${WithPlus.escapeHtml(c.name)} 로고" style="width:36px; height:36px; object-fit:cover; border-radius:8px; border:1px solid var(--border-color);">`
                                             : `<span style="display:inline-flex; align-items:center; justify-content:center; width:36px; height:36px; border-radius:8px; background:var(--bg-light); font-size:1.1em;">🏛️</span>`}</td>
@@ -9988,6 +9992,21 @@
                                     </tr>`).join('')}
                                 </tbody>
                             </table>`;
+
+                        // ☑ 전체 선택 / 개별 선택 → [🗑 선택 삭제] 버튼에 개수 표시
+                        const checkAll = document.getElementById('comm-check-all');
+                        const delBtn = document.getElementById('btn-delete-communities');
+                        const checks = () => [...tableArea.querySelectorAll('.comm-check')];
+                        const syncChecks = () => {
+                            const n = checks().filter(x => x.checked).length;
+                            delBtn.disabled = n === 0;
+                            delBtn.textContent = n ? `🗑 선택 삭제 (${n})` : '🗑 선택 삭제';
+                            checkAll.checked = n > 0 && n === checks().length;
+                            checkAll.indeterminate = n > 0 && n < checks().length;
+                        };
+                        checkAll.addEventListener('change', () => { checks().forEach(x => { x.checked = checkAll.checked; }); syncChecks(); });
+                        checks().forEach(x => x.addEventListener('change', syncChecks));
+                        syncChecks();
 
                         tableArea.querySelectorAll('.act-edit-community').forEach(btn => {
                             btn.addEventListener('click', () => {
@@ -10310,6 +10329,27 @@
                 // 🔐 조직별 사업자등록번호·은행계좌·적립율이 담긴 화면이므로, 처음 진입할 때 대표자 2단계
                 // 인증을 먼저 통과해야 한다(대표자가 2FA 수단을 하나도 등록하지 않은 부트스트랩 상태는 예외).
                 // 취소하면 dataset.loaded를 남기지 않아 다음 클릭에서 다시 시도할 수 있다.
+                document.getElementById('btn-delete-communities').addEventListener('click', async () => {
+                    const ids = [...document.querySelectorAll('#communities-table-area .comm-check:checked')].map(x => x.value);
+                    if (!ids.length) return;
+                    const names = ids.map(id => (communitiesCache.find(c => c.id === id) || {}).name).filter(Boolean);
+                    const preview = names.slice(0, 10).join(', ') + (names.length > 10 ? ` 외 ${names.length - 10}개` : '');
+                    if (!confirm(`선택한 ${ids.length}개 조직을 삭제할까요?\n${preview}\n\n삭제하면 되돌릴 수 없고, 조직 랜딩페이지·회원 연결·담당자·노출 설정이 함께 사라집니다.\n(주문·정산·헌금 기록이 있는 조직은 거래 기록 보호를 위해 삭제하지 않고 건너뜁니다 — 그런 조직은 '비활성화'를 사용하세요)`)) return;
+                    const btn = document.getElementById('btn-delete-communities');
+                    btn.disabled = true; btn.textContent = '삭제 중...';
+                    try {
+                        const { ok, json } = await authedFetch('/api/admin/communities/bulk-delete', { method: 'POST', body: JSON.stringify({ ids }) });
+                        if (!ok || !json.success) throw new Error((json && json.message) || '삭제에 실패했습니다');
+                        const d = json.data || {};
+                        let msg = `✅ ${(d.deleted || []).length}개 조직을 삭제했습니다.`;
+                        if ((d.skipped || []).length) msg += `\n\n⚠️ 거래 기록이 있어 삭제하지 않은 조직:\n` + d.skipped.map(s => `- ${s.name} (${s.reasons.join('·')} 기록)`).join('\n') + `\n→ 이 조직들은 '비활성화'로 숨길 수 있습니다.`;
+                        alert(msg);
+                    } catch (e) {
+                        alert('⚠️ ' + e.message);
+                    }
+                    loadCommunitiesAdmin();
+                });
+
                 document.querySelector('[data-tab="communities"]').addEventListener('click', async () => {
                     const tableArea = document.getElementById('communities-table-area');
                     if (tableArea.dataset.loaded) return;

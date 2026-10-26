@@ -15034,6 +15034,49 @@ app.delete('/api/admin/communities/:id/logo', authenticate, requireRole(['admin'
   }
 });
 
+// 관리자: 분양 조직 일괄 삭제 (분양 조직 관리 목록의 체크박스)
+// communities 행을 지우면 orders_with·community_points·회원 연결 등이 CASCADE 로 함께 지워진다.
+// 거래 기록을 지키기 위해 주문·정산·헌금(offerings) 기록이 하나라도 있는 조직은 지우지 않고 건너뛴다(대신 비활성화 안내).
+app.post('/api/admin/communities/bulk-delete', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const raw = Array.isArray(req.body && req.body.ids) ? req.body.ids : [];
+    const ids = [...new Set(raw.map(String).filter(id => /^[0-9a-f-]{36}$/i.test(id)))].slice(0, 200);
+    if (!ids.length) return res.status(400).json({ error: 'Bad Request', message: '삭제할 조직을 골라주세요', timestamp: new Date().toISOString() });
+    const [commRes, ordRes, stRes, offRes] = await Promise.all([
+      supabase.from('communities').select('id, name').in('id', ids),
+      supabase.from('orders_with').select('community_id').in('community_id', ids).limit(10000),
+      supabase.from('community_settlements_with').select('community_id').in('community_id', ids).limit(10000),
+      supabase.from('offerings').select('community_id').in('community_id', ids).limit(10000)
+    ]);
+    for (const r of [commRes, ordRes, stRes, offRes]) if (r.error) throw r.error;
+    const reasons = {};
+    const mark = (rows, label) => (rows || []).forEach(r => { (reasons[r.community_id] = reasons[r.community_id] || new Set()).add(label); });
+    mark(ordRes.data, '주문');
+    mark(stRes.data, '정산');
+    mark(offRes.data, '헌금');
+    const found = commRes.data || [];
+    const deletable = found.filter(c => !reasons[c.id]);
+    const skipped = found.filter(c => reasons[c.id]).map(c => ({ id: c.id, name: c.name, reasons: [...reasons[c.id]] }));
+    if (deletable.length) {
+      const delIds = deletable.map(c => c.id);
+      // 분양 영업 리스트에서 공개 전환했던 후보는 다시 공개 전환할 수 있도록 연결만 푼다
+      const { error: pErr } = await supabase.from('community_prospects').update({ promoted_community_id: null }).in('promoted_community_id', delIds);
+      if (pErr) throw pErr;
+      const { error: dErr } = await supabase.from('communities').delete().in('id', delIds);
+      if (dErr) throw dErr;
+    }
+    res.json({
+      success: true,
+      data: { deleted: deletable.map(c => ({ id: c.id, name: c.name })), skipped, not_found: ids.length - found.length },
+      message: `${deletable.length}개 조직을 삭제했습니다` + (skipped.length ? ` (거래 기록이 있는 ${skipped.length}개는 건너뜀)` : ''),
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error bulk deleting communities:', err);
+    res.status(500).json({ error: 'Failed to delete communities', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, status, admin_email, personal_point_rate, community_point_rate, landing_template, settlement_commission_rate, business_number, settlement_tax_method, bank_name, bank_account, account_holder, bank_account_verified, business_info_mode, business_name, ceo_name, mail_order_registration_number, privacy_officer_name, privacy_officer_position, privacy_officer_contact, org_type, offering_labels } = req.body;
