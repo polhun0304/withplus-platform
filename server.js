@@ -15034,6 +15034,32 @@ app.delete('/api/admin/communities/:id/logo', authenticate, requireRole(['admin'
   }
 });
 
+// 관리자: 분양 조직 일괄 삭제 (분양 조직 관리 목록의 체크박스)
+// communities 행을 지우면 orders_with·community_points·회원 연결 등이 CASCADE 로 함께 지워진다.
+// 그래서 확인과 삭제를 DB 함수 delete_communities_safely 한 번으로 처리한다(docs/migrations/2026-10-27_delete_communities_safely.sql):
+//  - 조직 행을 잠근 뒤 조직마다 주문·정산·헌금(offerings) 기록을 확인 → 동시에 들어온 주문이 끼어들어 지워지거나, 결과 개수 제한으로 기록이 빠지는 일이 없다
+//  - 기록이 있는 조직은 지우지 않고 사유와 함께 돌려준다(화면에서 비활성화 안내), 공개 전환했던 영업 후보는 미공개로 되돌린다
+app.post('/api/admin/communities/bulk-delete', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+  try {
+    const raw = Array.isArray(req.body && req.body.ids) ? req.body.ids : [];
+    const ids = [...new Set(raw.map(String).filter(id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)))].slice(0, 200);
+    if (!ids.length) return res.status(400).json({ error: 'Bad Request', message: '삭제할 조직을 골라주세요', timestamp: new Date().toISOString() });
+    const { data, error } = await supabase.rpc('delete_communities_safely', { p_ids: ids });
+    if (error) throw error;
+    const deleted = (data && data.deleted) || [];
+    const skipped = (data && data.skipped) || [];
+    res.json({
+      success: true,
+      data: { deleted, skipped, not_found: ids.length - deleted.length - skipped.length },
+      message: `${deleted.length}개 조직을 삭제했습니다` + (skipped.length ? ` (거래 기록이 있는 ${skipped.length}개는 건너뜀)` : ''),
+      timestamp: new Date().toISOString()
+    });
+  } catch (err) {
+    console.error('Error bulk deleting communities:', err);
+    res.status(500).json({ error: 'Failed to delete communities', message: err.message, timestamp: new Date().toISOString() });
+  }
+});
+
 app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const { name, slug, description, image_url, logo_url, stamp_url, primary_color, hero_title, hero_subtitle, intro_text, address, phone, website_url, contact_email, status, admin_email, personal_point_rate, community_point_rate, landing_template, settlement_commission_rate, business_number, settlement_tax_method, bank_name, bank_account, account_holder, bank_account_verified, business_info_mode, business_name, ceo_name, mail_order_registration_number, privacy_officer_name, privacy_officer_position, privacy_officer_contact, org_type, offering_labels } = req.body;
