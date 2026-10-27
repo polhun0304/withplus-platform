@@ -4701,7 +4701,7 @@
                         </div>
                         <input type="hidden" class="section-image-input" value="${(s.image_url || '').replace(/"/g, '&quot;')}">
                         <div class="section-img-mgr"></div>
-                        <textarea class="section-text-input" placeholder="이 사진에 대한 설명">${s.text || ''}</textarea>
+                        <textarea class="section-text-input" placeholder="이 사진에 대한 설명">${WithPlus.escapeHtml(s.text || '')}</textarea>
                     </div>`;
             }
 
@@ -10343,9 +10343,12 @@
                         const d = json.data || {};
                         let msg = `✅ ${(d.deleted || []).length}개 조직을 삭제했습니다.`;
                         if ((d.skipped || []).length) msg += `\n\n⚠️ 거래 기록이 있어 삭제하지 않은 조직:\n` + d.skipped.map(s => `- ${s.name} (${s.reasons.join('·')} 기록)`).join('\n') + `\n→ 이 조직들은 '비활성화'로 숨길 수 있습니다.`;
+                        if (d.not_found) msg += `\n\nℹ️ 이미 없어진 조직 ${d.not_found}개는 건너뛰었습니다.`;
                         alert(msg);
                     } catch (e) {
                         alert('⚠️ ' + e.message);
+                    } finally {
+                        btn.disabled = false; btn.textContent = '🗑 선택 삭제'; // 목록이 비거나 불러오기에 실패해도 버튼이 '삭제 중...'에 멈추지 않게
                     }
                     loadCommunitiesAdmin();
                 });
