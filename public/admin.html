@@ -13207,8 +13207,8 @@
                                     탈퇴·이용정지 계정은 로그인되지 않습니다. 저장된 Client Secret은 화면에 다시 표시되지 않습니다.
                                 </p>
                                 <p class="desc" style="background:#F3F6FB; padding:10px 12px; border-radius:8px;">
-                                    WITH+와 LIVE+는 같은 회원DB를 쓰므로 <b>키는 두 사이트가 함께 씁니다</b> — 카카오/네이버 앱 하나에 두 사이트의 Redirect URI를 모두 등록하세요.
-                                    "지금 접속한 주소"는 이 관리자 화면을 연 사이트 기준이라, LIVE+ 관리자 화면에서 열면 LIVE+ 주소가 표시됩니다.
+                                    WITH+와 LIVE+는 이제 <b>회원 DB가 따로</b>입니다. 여기서 저장한 키는 <b>WITH+에만</b> 적용되고, LIVE+는 LIVE+ 관리자 화면에서 따로 설정합니다.
+                                    카카오/네이버에 <b>WITH+ 전용 앱</b>을 만들고 아래에 보이는 WITH+ 주소만 등록하세요(한 앱을 같이 쓰면 두 사이트에서 같은 사람이 서로 다른 회원으로 따로 가입됩니다).
                                 </p>
 
                                 <div style="border:1px solid var(--border-color); border-radius:10px; padding:14px; margin:14px 0;">
@@ -13219,9 +13219,9 @@
                                         <summary style="cursor:pointer; font-weight:600;">카카오 설정 순서 보기</summary>
                                         <ol style="padding-left:18px; margin:6px 0;">
                                             <li><a href="https://developers.kakao.com/console/app" target="_blank" rel="noopener">Kakao Developers</a> 로그인 → <b>애플리케이션 추가하기</b>(앱 이름: WITH+ 등)</li>
-                                            <li>앱 설정 &gt; 플랫폼 &gt; <b>Web 플랫폼 등록</b> → 사이트 도메인에 <code>${socialEsc((kakaoOauth && kakaoOauth.service_url) || location.origin)}</code> 등록(LIVE+ 주소도 함께)</li>
+                                            <li>앱 설정 &gt; 플랫폼 &gt; <b>Web 플랫폼 등록</b> → 사이트 도메인에 <code>${socialEsc((kakaoOauth && kakaoOauth.service_url) || location.origin)}</code> 등록</li>
                                             <li>제품 설정 &gt; 카카오 로그인 → <b>활성화 설정 ON</b></li>
-                                            <li>같은 화면의 <b>Redirect URI</b>에 아래 주소를 그대로 등록(사이트별로 모두)</li>
+                                            <li>같은 화면의 <b>Redirect URI</b>에 아래 주소를 그대로 등록</li>
                                             <li>카카오 로그인 &gt; <b>동의항목</b>: 닉네임, 카카오계정(이메일) 설정(이메일은 비즈 앱 전환 후 '필수 동의' 가능 — 이메일이 없으면 카카오 회원번호로 가입됩니다)</li>
                                             <li>카카오 로그인 &gt; <b>보안</b>: Client Secret 코드 생성 → 활성화 상태 <b>사용함</b></li>
                                             <li>앱 설정 &gt; 앱 키의 <b>REST API 키</b>와 위 Client Secret을 아래에 입력 → 활성화 체크 → 저장</li>
@@ -13256,7 +13256,7 @@
                                             <li><a href="https://developers.naver.com/apps/#/register" target="_blank" rel="noopener">NAVER Developers</a> → Application &gt; <b>애플리케이션 등록</b></li>
                                             <li>사용 API: <b>네이버 로그인</b> 선택</li>
                                             <li>제공 정보: <b>이메일 주소·이름</b>(필수), 휴대전화번호(선택)</li>
-                                            <li>로그인 오픈 API 서비스 환경: <b>PC 웹</b>(+ <b>Mobile 웹</b>) → 서비스 URL <code>${socialEsc((naverOauth && naverOauth.service_url) || location.origin)}</code>, Callback URL에 아래 주소 등록(사이트별로 모두)</li>
+                                            <li>로그인 오픈 API 서비스 환경: <b>PC 웹</b>(+ <b>Mobile 웹</b>) → 서비스 URL <code>${socialEsc((naverOauth && naverOauth.service_url) || location.origin)}</code>, Callback URL에 아래 주소 등록</li>
                                             <li>등록 후 <b>Client ID / Client Secret</b>을 아래에 입력 → 활성화 체크 → 저장</li>
                                             <li>⚠️ <b>검수 요청 승인 전</b>에는 '멤버관리 &gt; 테스터 ID'에 등록한 네이버 아이디만 로그인됩니다 → 실제 오픈 전 <b>검수 요청</b> 필요</li>
                                         </ol>
