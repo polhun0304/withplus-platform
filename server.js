@@ -570,6 +570,12 @@ const requireRole = (allowedRoles) => async (req, res, next) => {
 };
 
 const isAdminRole = (role) => role === 'admin' || role === 'super_admin';
+// requireRole 과 같은 규칙: 인증 앱(TOTP)을 등록한 관리자는 2단계 인증(aal2) 세션이어야 한다
+function adminNeedsMfa(req, role) {
+  if (!isAdminRole(role)) return false;
+  const hasVerifiedTotp = Array.isArray(req.user && req.user.factors) && req.user.factors.some(f => f.factor_type === 'totp' && f.status === 'verified');
+  return hasVerifiedTotp && req.authAal !== 'aal2';
+}
 
 // 🔑 WITH+ 전용 관리자 — profiles.role 은 LIVE+(GMWOS)와 같은 DB를 함께 쓰는 칸이라, 거기를 admin 으로 바꾸면
 // LIVE+ 에서도 관리자가 된다. "WITH+ 에서만 관리자"인 회원은 role 을 그대로 두고 platform_settings(key='with_site_admins')
@@ -1212,7 +1218,8 @@ app.post('/api/me/withdraw', authenticate, async (req, res) => {
       supabase.from('cart_snapshots_with').delete().eq('user_id', userId),
       supabase.from('wishlist_with').delete().eq('user_id', userId),
       supabase.from('restock_subscriptions_with').delete().eq('user_id', userId),
-      supabase.from('notifications_with').delete().eq('user_id', userId)
+      supabase.from('notifications_with').delete().eq('user_id', userId),
+      supabase.from('push_subscriptions_with').delete().eq('user_id', userId) // 탈퇴 후에도 전체 푸시가 오던 문제
     ].map(p => Promise.resolve(p).catch(err => { console.error('회원탈퇴 부가데이터 정리 중 일부 실패(계속 진행):', err.message); return null; })));
 
     // 게시판에 남긴 글/댓글 자체는 커뮤니티 기록으로 유지하되(작성자 삭제 시 다른 회원의 답글 맥락이 깨지는 것을 방지),
@@ -1664,6 +1671,13 @@ async function getChannelPricingSettings() {
 // 상품별 도매채널가 맵 { product_id: price } - productIds 를 주면 그 상품만 조회
 // 상품 ID가 수백 개면 한 번에 in(...)으로 보내면 주소가 너무 길어져 DB가 거절(Bad Request)한다 → 150개씩 나눠 조회
 const ID_CHUNK = 150;
+// 라이브 채널가는 그 채널에 등록된 상품에만 — 아무 채널 ID 나 보내 모든 상품을 라이브가로 사던 문제 차단
+async function keepLivePriceForChannelProducts(priceMap, channelId, productIds) {
+  if (!channelId || !priceMap) return;
+  const { data: links } = await supabase.from((typeof liveTable === 'function' ? liveTable('channel_products') : 'channel_products_live')).select('product_id').eq('channel_id', channelId).in('product_id', productIds);
+  const inChannel = new Set((links || []).map(l => l.product_id));
+  Object.keys(priceMap).forEach(pid => { if (!inChannel.has(pid)) priceMap[pid] = null; });
+}
 async function variantBelongsToProduct(variantId, productId) {
   const { data } = await supabase.from('product_variants_with').select('id').eq('id', variantId).eq('product_id', productId).maybeSingle();
   return !!data;
@@ -4225,6 +4239,9 @@ function verifySocialState(state, provider) {
 }
 
 // 로그인 후 돌아갈 주소: 같은 사이트 안의 상대경로만 허용(외부 주소·//host·역슬래시·제어문자 차단).
+// 조직 랜딩 색상(#RGB~#RRGGBBAA)·웹사이트(http/https)만 저장 — 그 외 값은 비움
+function safeHexColor(v) { const s = String(v || '').trim(); return /^#[0-9a-f]{3,8}$/i.test(s) ? s : null; }
+function safeHttpUrl(v) { const s = String(v || '').trim(); if (!s) return null; try { const u = new URL(s); return (u.protocol === 'http:' || u.protocol === 'https:') ? u.toString().slice(0, 500) : null; } catch (e) { return null; } }
 function sanitizeNextPath(raw) {
   if (typeof raw !== 'string') return '/';
   const s = raw.trim();
@@ -11571,6 +11588,7 @@ app.post('/api/orders', authenticate, async (req, res) => {
         liveChannelPriceByProductId = await resolveLiveChannelPrices((orderProducts || []).map(p => ({
           id: p.id, cost_price: p.cost_price, category: p.category, fallbackPrice: null
         })));
+        await keepLivePriceForChannelProducts(liveChannelPriceByProductId, channel_id, productIds);
       }
       // 📺 라이브 타임세일 가격은 결제 시점에 서버가 다시 검증한다 - live_session_id + product_id 조합으로 지금 유효한
       // (취소되지 않았고 ends_at이 지나지 않은) 행만 인정한다. 타이머 만료/관리자 취소 뒤 주문엔 할인가가 절대 붙지 않는다.
@@ -12997,7 +13015,8 @@ async function runBandSync({ full = false, reason = 'cron' } = {}) {
         const cands2 = kind === 'review' ? match(body) : [];
         const top = cands2[0];
         const confident = top && top.score >= 0.75 && (!cands2[1] || cands2[1].score < top.score * 0.6);
-        const approve = kind === 'review' && cfg.auto_approve !== false;
+        // 자동 공개는 '상품이 확실히 연결되고 건강 효능 표현이 없는' 후기만 — 나머지는 관리자 확인 대기(건강기능식품 광고 규정)
+        const approve = kind === 'review' && cfg.auto_approve !== false && !!confident && !BAND_HEALTH.test(body);
         const { data: ins, error } = await supabase.from('band_posts_with').insert({
           post_key: key, source: 'api', author_masked: isLeader ? '창고털이' : bandMask(authorName), is_leader: !!isLeader, kind,
           posted_label: new Date(Number(it.created_at)).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' }), posted_at: postedAt,
@@ -14009,13 +14028,13 @@ app.post('/api/admin/communities', authenticate, requireRole(['admin', 'super_ad
         business_number_status: bizUpdates.business_number_status || null,
         logo_url: logoInput.value || null,
         stamp_url: stampInput.value || null,
-        primary_color: primary_color || null,
+        primary_color: safeHexColor(primary_color),
         hero_title: hero_title || null,
         hero_subtitle: hero_subtitle || null,
         intro_text: intro_text || null,
         address: address || null,
         phone: phone || null,
-        website_url: website_url || null,
+        website_url: safeHttpUrl(website_url),
         contact_email: contact_email || null,
         admin_user_id: adminUserId,
         personal_point_rate: personalRate.present ? personalRate.value : null,
@@ -15215,13 +15234,13 @@ app.put('/api/admin/communities/:id', authenticate, requireRole(['admin', 'super
     }
     if (description !== undefined) updates.description = description;
     if (image_url !== undefined) updates.image_url = image_url || null;
-    if (primary_color !== undefined) updates.primary_color = primary_color || null;
+    if (primary_color !== undefined) updates.primary_color = safeHexColor(primary_color);
     if (hero_title !== undefined) updates.hero_title = hero_title || null;
     if (hero_subtitle !== undefined) updates.hero_subtitle = hero_subtitle || null;
     if (intro_text !== undefined) updates.intro_text = intro_text || null;
     if (address !== undefined) updates.address = address || null;
     if (phone !== undefined) updates.phone = phone || null;
-    if (website_url !== undefined) updates.website_url = website_url || null;
+    if (website_url !== undefined) updates.website_url = safeHttpUrl(website_url);
     if (contact_email !== undefined) updates.contact_email = contact_email || null;
     if (status !== undefined) updates.status = status;
     // 대표 담당자 표시값 변경/해제 - 빈 문자열이면 해제(null), 값이 있으면 해당 이메일 회원으로 교체
@@ -16225,7 +16244,7 @@ app.get('/api/home/live', async (req, res) => {
         const po = prodOut(first.product_id);
         return { type: 'order', author: o.author_name || '고객', ...po, product_name: po.product_name || first.name || '상품', extra: items.length > 1 ? items.length - 1 : 0, at: o.payment_at || o.created_at };
       }),
-      ...withRev.map(r => ({ type: 'review', author: r.author, product_id: r.product ? r.product.id : null, product_name: r.product ? r.product.name : null, product_image: r.product ? (r.product.image || r.photo) : r.photo, extra: 0, at: r.at })),
+      ...withRev.filter(r => !r.label).map(r => ({ type: 'review', author: r.author, product_id: r.product ? r.product.id : null, product_name: r.product ? r.product.name : null, product_image: r.product ? (r.product.image || r.photo) : r.photo, extra: 0, at: r.at })),
       ...wishes.map(w => ({ type: 'wishlist', author: w.author_name || '고객', ...prodOut(w.product_id), extra: 0, at: w.created_at })),
       ...atts.map(a => ({ type: 'attendance', author: a.author_name || '고객', ...noProd, extra: 0, at: a.created_at })),
       ...cpns.map(c => ({ type: 'coupon', author: c.author_name || '고객', ...noProd, extra: 0, at: c.claimed_at }))
@@ -16421,7 +16440,7 @@ app.post('/api/boards', authenticate, async (req, res) => {
     }
 
     const { data: profile } = await supabase.from('profiles').select('email, full_name').eq('id', req.user.id).single();
-    const authorName = profile?.full_name || profile?.email || req.user.email || '회원';
+    const authorName = boardAuthorName(profile, req.user.email); // 이메일 전체가 공개되지 않게 가린 이름
 
     const { data, error } = await supabase
       .from('board_posts')
@@ -16513,7 +16532,7 @@ app.post('/api/boards/:id/comments', authenticate, async (req, res) => {
     const { data: profile } = await supabase.from('profiles').select('role, email, full_name').eq('id', req.user.id).single();
     if (profile) await applySiteRole(profile, req.user.id);
     const isAdminReply = isAdminRole(profile?.role);
-    const authorName = profile?.full_name || profile?.email || req.user.email || '회원';
+    const authorName = boardAuthorName(profile, req.user.email); // 이메일 전체가 공개되지 않게 가린 이름
 
     const { data, error } = await supabase
       .from('board_comments')
@@ -17414,6 +17433,9 @@ app.get('/api/admin/community-settlements', authenticate, async (req, res) => {
     // 거치기 때문에 req.userRole이 채워지지 않는다(requireRole 미들웨어에서만 설정됨) - 직접 프로필을 조회한다.
     const { data: callerProfile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
     if (callerProfile) await applySiteRole(callerProfile, req.user.id);
+    if (callerProfile && adminNeedsMfa(req, callerProfile.role)) {
+      return res.status(403).json({ error: 'Forbidden', message: '2단계 인증이 필요합니다. 로그인 시 인증 앱의 코드를 입력해주세요.', mfaRequired: true, timestamp: new Date().toISOString() });
+    }
     if (callerProfile && isAdminRole(callerProfile.role)) {
       // 관리자 화면("💵 분양조직 정산" 탭)에서 조회하는 경로는 전체 조직의 매출·수수료·은행계좌가 그대로
       // 노출되므로 대표자 전용으로 제한한다. requireRole 미들웨어로 걸 수 없는 이유는 바로 아래 else 분기
@@ -17965,6 +17987,9 @@ app.get('/api/admin/settlements/:id/withholding-receipt', authenticate, async (r
     if (!row) return res.status(404).json({ error: 'Not Found', message: '정산 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
     const { data: callerProfile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
     if (callerProfile) await applySiteRole(callerProfile, req.user.id);
+    if (callerProfile && adminNeedsMfa(req, callerProfile.role)) {
+      return res.status(403).json({ error: 'Forbidden', message: '2단계 인증이 필요합니다. 로그인 시 인증 앱의 코드를 입력해주세요.', mfaRequired: true, timestamp: new Date().toISOString() });
+    }
     const isSelf = row.supplier_id === req.user.id;
     if (!isSelf && !(callerProfile && isAdminRole(callerProfile.role))) {
       return res.status(403).json({ error: 'Forbidden', message: '본인의 정산 건만 조회할 수 있습니다', timestamp: new Date().toISOString() });
@@ -17989,6 +18014,9 @@ app.get('/api/admin/community-settlements/:id/withholding-receipt', authenticate
     if (!row) return res.status(404).json({ error: 'Not Found', message: '정산 내역을 찾을 수 없습니다', timestamp: new Date().toISOString() });
     const { data: callerProfile } = await supabase.from('profiles').select('role').eq('id', req.user.id).maybeSingle();
     if (callerProfile) await applySiteRole(callerProfile, req.user.id);
+    if (callerProfile && adminNeedsMfa(req, callerProfile.role)) {
+      return res.status(403).json({ error: 'Forbidden', message: '2단계 인증이 필요합니다. 로그인 시 인증 앱의 코드를 입력해주세요.', mfaRequired: true, timestamp: new Date().toISOString() });
+    }
     let allowed = !!(callerProfile && isAdminRole(callerProfile.role));
     if (!allowed) {
       const myCommunity = await getMyManagedCommunity(req.user.id);
@@ -18456,10 +18484,16 @@ app.get('/api/push/public-key', async (req, res) => {
 });
 
 // 구독 등록 — 로그인 상태면 회원과 연결(개별 발송 대상), 비로그인도 전체 발송은 받을 수 있다
+function isKnownPushEndpoint(u) {
+  try {
+    const h = new URL(u).hostname;
+    return new URL(u).protocol === 'https:' && (h === 'fcm.googleapis.com' || h.endsWith('.push.apple.com') || h === 'updates.push.services.mozilla.com' || h.endsWith('.notify.windows.com') || h.endsWith('.push.services.mozilla.com'));
+  } catch (e) { return false; }
+}
 app.post('/api/push/subscribe', optionalAuth, async (req, res) => {
   try {
     const sub = req.body && req.body.subscription;
-    if (!sub || typeof sub.endpoint !== 'string' || !/^https:\/\//.test(sub.endpoint) || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) {
+    if (!sub || typeof sub.endpoint !== 'string' || !isKnownPushEndpoint(sub.endpoint) || !sub.keys || !sub.keys.p256dh || !sub.keys.auth) {
       return res.status(400).json({ error: 'Bad Request', message: '구독 정보가 올바르지 않습니다', timestamp: new Date().toISOString() });
     }
     const row = {
@@ -20784,7 +20818,8 @@ app.get('/product/:id', async (req, res) => {
       .from('product_reviews')
       .select('rating')
       .eq('product_id', id)
-      .eq('status', 'published');
+      .eq('status', 'published')
+      .or('review_source.is.null,review_source.eq.member'); // 검색엔진 별점은 실제 구매 회원 후기만
 
     const productLd = {
       '@context': 'https://schema.org',
@@ -22979,6 +23014,13 @@ const LIVE_CHAT_RATE_LIMIT_MS = 2000; // 같은 사용자가 이 시간 안에 �
 // 채팅에는 실명을 그대로 노출하지 않는다 - 상품평 공개 API(/api/reviews/recent)가 애초에 작성자 이름을
 // 아예 내려주지 않는 것과 같은 이유(개인정보 보호). 채팅은 누가 말했는지 구분은 되어야 하므로 완전히
 // 숨기는 대신 가운데를 마스킹한다 (예: "홍길동" → "홍*동", "이몽" → "이*").
+// 게시판 작성자명 — 이름이 없으면 이메일 앞부분만 가려서(ab***) 보여준다(전체 이메일이 공개되던 문제)
+function boardAuthorName(profile, fallbackEmail) {
+  if (profile && profile.full_name && String(profile.full_name).trim()) return maskChatDisplayName(String(profile.full_name));
+  const email = (profile && profile.email) || fallbackEmail || '';
+  const local = String(email).split('@')[0];
+  return local ? (local.slice(0, 2) + '***') : '회원';
+}
 function maskChatDisplayName(name) {
   const trimmed = (name || '').trim();
   if (!trimmed) return '방문자';
@@ -23180,7 +23222,12 @@ app.patch('/api/admin/settings/live-gift-catalog', authenticate, requireRole(['a
   }
 });
 
+const giftInFlight = new Set();
 app.post('/api/live/channels/:slug/sessions/:sessionId/gifts', authenticate, async (req, res) => {
+  if (giftInFlight.has(req.user.id)) return res.status(429).json({ error: 'Too Many Requests', message: '선물을 보내는 중입니다. 잠시 후 다시 시도해주세요', timestamp: new Date().toISOString() });
+  giftInFlight.add(req.user.id);
+  res.on('finish', () => giftInFlight.delete(req.user.id));
+  res.on('close', () => giftInFlight.delete(req.user.id));
   try {
     const { giftKey } = req.body;
     if (!giftKey) return res.status(400).json({ error: 'giftKey is required', timestamp: new Date().toISOString() });
@@ -23631,7 +23678,8 @@ async function finalizeAuctionIfEnded(auction) {
       const discountValue = Math.max(0, normalPrice - Number(claim.current_price));
       const template = {
         label: `🔨 실시간 경매 낙찰가 쿠폰 (${Number(claim.current_price).toLocaleString('ko-KR')}원)`,
-        discount_type: 'fixed', discount_value: discountValue, per_user_limit: 1, valid_days: 1
+        discount_type: 'fixed', discount_value: discountValue, per_user_limit: 1, valid_days: 1,
+        min_order_amount: normalPrice // 낙찰 상품을 담은(정상가 이상) 주문에서만 쓰이도록
       };
       const coupon = await issueCouponForBatch([claim.current_bidder_id], template, 'live_auction_win', {
         codePrefix: 'AUCTION', notifyTitle: '🔨 경매 낙찰을 축하합니다!',
@@ -24807,10 +24855,8 @@ function ekosParseCookies(req) {
 
 // 내부 경로만 허용(오픈 리다이렉트 방지): '/'로 시작하되 '//' 또는 '/\'(프로토콜상대/백슬래시 우회)는 거부.
 function ekosSafeNext(next) {
-  if (typeof next !== 'string' || next.length === 0) return '/';
-  if (next.charAt(0) !== '/') return '/';
-  if (next.charAt(1) === '/' || next.charAt(1) === '\\') return '/';
-  return next;
+  // 공용 검사기 사용(탭·제어문자를 끼운 '/%09/evil.com' 같은 외부 이동 차단)
+  return sanitizeNextPath(next);
 }
 
 const EKOS_COOKIE = 'ekos_oidc';
@@ -24918,6 +24964,9 @@ app.get('/auth/ekos/callback', async (req, res) => {
     const email = payload.email;
     if (!email || typeof email !== 'string') {
       return fail('EKOS 계정에서 이메일을 받지 못했습니다. 관리자에게 문의해주세요.');
+    }
+    if (payload.email_verified === false) { // 이메일 확인이 안 된 계정으로 같은 이메일의 기존 회원(관리자 포함)에 로그인되는 것 차단
+      return fail('EKOS 계정의 이메일 인증이 확인되지 않았습니다. EKOS에서 이메일 인증 후 다시 시도해주세요.');
     }
 
     // service_role로 사용자 find-or-create (있으면 그대로 사용).
