@@ -18639,6 +18639,8 @@ function publicFlashDeal(d, product) {
     starts_at: d.starts_at,
     ends_at: d.ends_at,
     sort_order: Number(d.sort_order) || 0,
+    headline: d.headline || '',   // 홍보 문구(예: 홈쇼핑 완판템!) — /deals 목록 카테고리 옆
+    subtitle: d.subtitle || '',   // 한 줄 설명 — 비우면 화면에서 상품 요약 설명을 대신 보여준다
     status: flashDealStatusOf(d)
   };
 }
@@ -18646,7 +18648,7 @@ function publicFlashDeal(d, product) {
 async function loadOpenFlashDeals() {
   const { data, error } = await supabase
     .from('flash_deals_with')
-    .select('id, product_id, deal_price, limit_qty, sold_count, starts_at, ends_at, sort_order, is_active')
+    .select('id, product_id, deal_price, limit_qty, sold_count, starts_at, ends_at, sort_order, is_active, headline, subtitle')
     .eq('site', FLASH_SITE)
     .eq('is_active', true)
     .gt('ends_at', new Date().toISOString())
@@ -18729,7 +18731,9 @@ async function markFlashDealClaimsPaid(orderId) {
   } catch (e) { console.error('초특가 결제완료 표시 실패:', orderId, e.message); }
 }
 
-const FLASH_PRODUCT_COLUMNS = 'id, name, price, discount_price, images_urls, stock, category, rating, review_count, status, brand';
+const FLASH_PRODUCT_COLUMNS = 'id, name, price, discount_price, images_urls, stock, category, rating, review_count, status, brand, description';
+// 목록 화면용 짧은 요약(태그 제거·120자) — 상품 설명 전체를 내려보내지 않는다
+function flashShortText(s) { return String(s || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 120); }
 // 공개: 진행중(+예정) 초특가 목록 — 홈 섹션·/deals 페이지에서 사용
 app.get('/api/flash-deals', async (req, res) => {
   try {
@@ -18747,6 +18751,17 @@ app.get('/api/flash-deals', async (req, res) => {
       const { data: prods, error } = await supabase.from('products_with').select(FLASH_PRODUCT_COLUMNS).in('id', productIds).eq('status', 'active');
       if (error) throw error;
       (prods || []).forEach(p => { productMap[p.id] = p; });
+      // /deals 한 줄 목록: 카테고리 이름 + 옵션(사이즈/색상) 상품 여부(옵션 상품은 장바구니 버튼 대신 상세에서 고르게)
+      const [catLabels, { data: vRows }] = await Promise.all([
+        wmsCategoryLabels(),
+        supabase.from('product_variants_with').select('product_id').in('product_id', Object.keys(productMap)).eq('is_active', true)
+      ]);
+      const hasOpt = new Set((vRows || []).map(v => v.product_id));
+      Object.values(productMap).forEach(p => {
+        p.description = flashShortText(p.description);
+        p.category_label = catLabels[p.category] || '';
+        p.has_options = hasOpt.has(p.id);
+      });
     }
     const order = { active: 0, soldout: 1, upcoming: 2 };
     const items = wanted
@@ -18840,6 +18855,12 @@ async function validateFlashDealInput(body, existing) {
     const so = Number(b.sort_order);
     if (!Number.isInteger(so) || so < -100000 || so > 100000) return { error: '노출 순서는 정수로 입력해주세요' };
     out.sort_order = so;
+  }
+  for (const [k, max, label] of [['headline', 40, '홍보 문구'], ['subtitle', 80, '한 줄 설명']]) {
+    if (b[k] === undefined) continue;
+    const s = String(b[k] == null ? '' : b[k]).replace(/\s+/g, ' ').trim();
+    if (s.length > max) return { error: `${label}는 ${max}자 이내로 입력해주세요` };
+    out[k] = s || null;
   }
   if (b.is_active !== undefined) out.is_active = !!b.is_active;
   return { values: out, product };

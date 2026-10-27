@@ -119,7 +119,7 @@
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
-    <link rel="stylesheet" href="/flash-deals.css?v=1">
+    <link rel="stylesheet" href="/flash-deals.css?v=2">
     <style>
         .page-hero.fd-hero { background: linear-gradient(135deg, #FF3D7F, #FF8A3D); }
         .page-hero .fd-sub { margin-top: 6px; opacity: .92; font-size: .95em; }
@@ -156,22 +156,23 @@
         </div>
     </header>
 
-    <div class="page-hero fd-hero">
-        <h1>⚡ 한정수량 초특가</h1>
-        <p class="fd-sub">정해진 수량이 다 팔리거나 시간이 끝나면 정상가로 돌아가요</p>
-    </div>
-    <div class="breadcrumb"><a href="/">홈</a> &gt; <span>한정수량 초특가</span></div>
-
-    <section class="products-section">
-        <div class="fd-tabs" id="fd-tabs" role="tablist">
-            <button type="button" data-f="all" class="on">전체</button>
-            <button type="button" data-f="active">진행중</button>
-            <button type="button" data-f="upcoming">오픈 예정</button>
-        </div>
-        <div id="content-area">
-            <div class="state-box"><div class="emoji">⏳</div><h3>초특가를 불러오는 중입니다...</h3></div>
+    <section class="fdp-hero" aria-label="한정수량 초특가 안내">
+        <div class="fdp-hero-in">
+            <span class="fdp-bolt" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.6 1.8 4.4 13.6h6.3L9.6 22.2l9.3-11.9h-6.4l1.1-8.5z" fill="#FFE45C" stroke="#FFF6C4" stroke-width="1.1" stroke-linejoin="round"/></svg></span>
+            <div class="fdp-hero-text">
+                <h1>한정수량 <b>초특가</b> <span class="fdp-pill">지금만 만나는 특가 상품!</span></h1>
+                <p class="fdp-schedule">매주 금요일 새로운 특가 상품이 업데이트됩니다!</p>
+            </div>
+            <div class="fdp-clock">
+                <span class="fdp-clock-label">다음 특가 업데이트까지</span>
+                <span class="fd-timer" id="fdp-timer" role="timer"></span>
+            </div>
         </div>
     </section>
+
+    <div class="fdp-list" id="content-area" aria-live="polite">
+        <div class="fdp-empty"><div class="emoji">⏳</div><h3>초특가를 불러오는 중입니다...</h3></div>
+    </div>
 
     <footer class="footer">
         <p>&copy; 2024-2026 WITH+ Co., Ltd. All Rights Reserved. | <a href="/">홈으로</a></p>
@@ -179,23 +180,32 @@
 
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
     <script src="/withplus-common.js"></script>
-    <script src="/flash-deals.js?v=1"></script>
+    <script src="/flash-deals.js?v=2"></script>
+    <script src="/soldout-popup.js"></script>
     <script>
         (async function () {
             WithPlus.initHeader();
             WithPlus.initSearchBox();
             WithPlus.initCategoryNav();
             const area = document.getElementById('content-area');
+            const timerEl = document.getElementById('fdp-timer');
             let all = [];
-            let filter = 'all';
+            // 장바구니 버튼 · 품절 줄(품절 안내 + 비슷한 특가 추천 팝업)
+            WPFlash.bindRowActions(area, id => all.find(d => d.id === id));
+            // 카운트다운: 다음 금요일 00:00(한국 시간)과 가장 가까운 '오픈 예정' 초특가 시작 중 빠른 쪽
+            function setClock() {
+                const t = WPFlash.now();
+                const ups = all.filter(d => d.status === 'upcoming').map(d => new Date(d.starts_at).getTime()).filter(x => x > t);
+                const target = Math.min(WPFlash.nextFridayKst(t).getTime(), ...ups);
+                timerEl.setAttribute('data-fd-end', new Date(target).toISOString());
+                delete timerEl.dataset.fdDone;
+            }
             function render() {
-                const list = all.filter(d => filter === 'all' || d.status === filter || (filter === 'active' && d.status === 'soldout'));
-                if (list.length === 0) {
-                    area.innerHTML = `<div class="state-box"><div class="emoji">⚡</div><h3>${filter === 'upcoming' ? '오픈 예정인 초특가가 없습니다' : '지금 진행 중인 초특가가 없습니다'}</h3><p>새 초특가가 열리면 이곳에서 가장 먼저 만나보실 수 있어요.</p><a href="/">홈으로 돌아가기</a></div>`;
+                if (!all.length) {
+                    area.innerHTML = '<div class="fdp-empty"><div class="emoji">⚡</div><h3>지금 진행 중인 초특가가 없습니다</h3><p>매주 금요일 새로운 특가가 열려요. 조금만 기다려 주세요!</p><a href="/">홈으로 돌아가기</a></div>';
                     return;
                 }
-                area.innerHTML = `<div class="fd-grid">${list.map(d => WPFlash.renderCard(d, { cardTimer: true })).join('')}</div>`;
-                WPFlash.tick();
+                area.innerHTML = all.map(d => WPFlash.renderRow(d)).join('');
             }
             async function load() {
                 try {
@@ -203,16 +213,13 @@
                     all = json.data || [];
                     render();
                 } catch (err) {
-                    area.innerHTML = `<div class="state-box"><div class="emoji">⚠️</div><h3>초특가를 불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p><a href="/">홈으로 돌아가기</a></div>`;
+                    area.innerHTML = `<div class="fdp-empty"><div class="emoji">⚠️</div><h3>초특가를 불러오는 중 문제가 발생했습니다</h3><p>${WithPlus.escapeHtml(err.message)}</p><a href="/">홈으로 돌아가기</a></div>`;
                 }
+                setClock();
+                WPFlash.tick();
             }
-            document.querySelectorAll('#fd-tabs button').forEach(btn => btn.addEventListener('click', () => {
-                filter = btn.dataset.f;
-                document.querySelectorAll('#fd-tabs button').forEach(b => b.classList.toggle('on', b === btn));
-                render();
-            }));
             await load();
-            // 어떤 초특가가 시작/종료되면 목록을 다시 불러와 상태(진행중·종료·오픈)를 맞춘다
+            // 초특가 시작/종료 · 카운트다운이 끝나면 목록을 다시 불러와 상태(진행중·품절·오픈)를 맞춘다
             WPFlash.startTicker(() => setTimeout(load, 1200));
         })();
     </script>

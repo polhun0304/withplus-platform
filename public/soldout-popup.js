@@ -204,6 +204,11 @@
       document.title = '존재하지 않는 상품 - WITH+';
       renderRecoInto(document.getElementById('wso-del-reco'), productId, '', { title: '🔥 이런 특가상품은 어떠세요?' });
     },
+    // 상세 화면 밖(예: /deals 의 품절 줄)에서 안내 팝업만 띄운다 — 구매 버튼 잠금 없이. p: { id, category }
+    showPopup: function (p) {
+      if (!p || !p.id) return;
+      openModal(p, false);
+    },
     isSoldOut: function (p) {
       return global.WithPlus && global.WithPlus.isProductSoldOut ? global.WithPlus.isProductSoldOut(p) : !!(p && p.is_sold_out);
     }
