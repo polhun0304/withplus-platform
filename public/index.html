@@ -1528,7 +1528,7 @@
     </style>
     <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
     <link rel="stylesheet" href="/typography.css">
-    <link rel="stylesheet" href="/flash-deals.css?v=1">
+    <link rel="stylesheet" href="/flash-deals.css?v=2">
     <style>
         /* ⭐ 베스트 상품 — 휴대폰에서는 실시간 랭킹처럼 한 줄 가로 스크롤 (8/16/24/전체 버튼으로 늘린 상품은 옆으로 넘겨서 보기) */
         .best-more-link { display: block; width: max-content; max-width: 100%; margin: 22px auto 0; padding: 11px 26px; border-radius: 999px; border: 1px solid var(--primary-color); color: var(--primary-color); text-decoration: none; font-weight: 700; }
@@ -1539,6 +1539,48 @@
             #best-section .count-selector { overflow-x: auto; scrollbar-width: none; min-width: 0; }
             #best-section .count-btn { padding: 7px 12px; }
             #best-section .view-all { white-space: nowrap; font-size: .92em; }
+        }
+    </style>
+    <style>
+        /* ===== 회원 혜택 바 — 한 줄 3칸으로 작게(회원등급 · 구매 적립 · 보유 적립금) ===== */
+        .wp-member-strip { grid-template-columns: repeat(3, 1fr); padding: 10px 0; margin: 14px auto 10px; border-radius: 16px; box-shadow: 0 6px 16px rgba(232,18,92,0.18); }
+        .wp-member-strip .wms-cell { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-areas: "label icon chev" "value icon chev"; column-gap: 8px; row-gap: 0; padding: 2px 20px; }
+        .wp-member-strip .wms-cell::after { content: '›'; grid-area: chev; font-size: 22px; line-height: 1; opacity: .85; }
+        .wp-member-strip .wms-label { font-size: 13px; }
+        .wp-member-strip .wms-value { font-size: 20px; }
+        .wp-member-strip .wms-icon { font-size: 26px; }
+        .wp-member-strip .wms-coin { width: 30px; height: 30px; font-size: 15px; }
+        .wp-member-strip .wms-link { display: none; }
+        @media (max-width: 768px) {
+            .wp-member-strip { grid-template-columns: repeat(3, 1fr); row-gap: 0; margin: 10px 14px 8px; padding: 8px 0; border-radius: 14px; }
+            .wp-member-strip .wms-cell { padding: 2px 8px; column-gap: 3px; }
+            .wp-member-strip .wms-cell:nth-child(3) { border-left: 1px solid rgba(255,255,255,0.35); }
+            .wp-member-strip .wms-label { font-size: 11px; white-space: nowrap; }
+            .wp-member-strip .wms-value { font-size: 15px; }
+            .wp-member-strip .wms-icon { font-size: 18px; }
+            .wp-member-strip .wms-coin { width: 22px; height: 22px; font-size: 11px; }
+            .wp-member-strip .wms-cell::after { font-size: 16px; }
+        }
+        @media (max-width: 360px) { .wp-member-strip .wms-icon { display: none; } }
+
+        /* ===== 회원 혜택 안내 — 페이지 맨 아래 작은 타일 3개 ===== */
+        .promo-banner.wp-promo-mini { max-width: var(--wp-container, 1200px); margin: 26px auto 28px; }
+        .wp-promo-mini .banner-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+        .wp-promo-mini .banner-card { display: flex !important; align-items: center; min-height: 72px; padding: 14px 34px 14px 16px; border-radius: 14px; text-decoration: none; }
+        .wp-promo-mini .banner-card::after { content: '›'; position: absolute; right: 14px; top: 50%; transform: translateY(-50%); font-size: 24px; line-height: 1; z-index: 1; }
+        .wp-promo-mini .banner-card:hover { transform: translateY(-2px); }
+        .wp-promo-mini .banner-card-content { min-width: 0; }
+        .wp-promo-mini .banner-card h3 { font-size: 17px; margin: 0 0 2px; display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+        .wp-promo-mini .banner-card h3 .wp-emoji { width: 1.35em; height: 1.35em; margin: 0; }
+        .wp-promo-mini .banner-card p { font-size: 12.5px; margin: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        @media (max-width: 768px) {
+            .promo-banner.wp-promo-mini { margin: 18px auto 22px; padding: 0 14px; }
+            .wp-promo-mini .banner-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+            .wp-promo-mini .banner-card { min-height: 58px; padding: 9px 18px 9px 9px; border-radius: 11px; }
+            .wp-promo-mini .banner-card::after { right: 6px; font-size: 16px; }
+            .wp-promo-mini .banner-card h3 { font-size: 12.5px; gap: 3px; white-space: normal; word-break: keep-all; line-height: 1.25; }
+            .wp-promo-mini .banner-card h3 .wp-emoji { width: 1.25em; height: 1.25em; flex: 0 0 auto; }
+            .wp-promo-mini .banner-card p { font-size: 10.5px; margin-top: 2px; }
         }
     </style>
 </head>
@@ -1659,12 +1701,6 @@
             <span class="wms-icon wms-coin" aria-hidden="true">P</span>
             <span class="wms-link" id="wms-rate-link">커뮤니티 참여 시 +2%</span>
         </a>
-        <a class="wms-cell" id="wms-coupon" href="/join">
-            <span class="wms-label">쿠폰</span>
-            <span class="wms-value" id="wms-coupon-value">가입 혜택</span>
-            <span class="wms-icon" aria-hidden="true"><img class="wp-emoji" src="/images/emoji/ticket.png" width="128" height="128" alt="" aria-hidden="true"></span>
-            <span class="wms-link" id="wms-coupon-link">회원가입 ›</span>
-        </a>
         <a class="wms-cell" id="wms-mileage" href="/join">
             <span class="wms-label">보유 적립금</span>
             <span class="wms-value" id="wms-mileage-value">0<small>P</small></span>
@@ -1673,32 +1709,16 @@
         </a>
     </section>
 
-    <!-- PROMOTIONAL BANNERS -->
-    <section class="promo-banner">
-        <div class="banner-grid">
-            <a href="/join" class="banner-card" style="text-decoration:none; display:block;">
-                <div class="banner-card-content">
-                    <h3><img class="wp-emoji" src="/images/emoji/gift.png" width="128" height="128" alt="" aria-hidden="true">신규 회원 혜택</h3>
-                    <p>구매 금액의 1% 적립 · 적립금은 다음 구매에 바로 사용</p>
-                    <button type="button">지금 가입하기</button>
-                </div>
-            </a>
-            <a href="/mypage" class="banner-card" style="background: linear-gradient(135deg, #667EEA, #764BA2); text-decoration:none; display:block;">
-                <div class="banner-card-content">
-                    <h3><img class="wp-emoji" src="/images/emoji/glowstar.png" width="128" height="128" alt="" aria-hidden="true">VIP 회원 전용</h3>
-                    <p>매월 특별 할인 상품 & 빠른 배송</p>
-                    <button type="button">등급 올리기</button>
-                </div>
-            </a>
-            <a href="/communities" class="banner-card" style="background: linear-gradient(135deg, #F093FB, #F5576C); text-decoration:none; display:block;">
-                <div class="banner-card-content">
-                    <h3><img class="wp-emoji" src="/images/emoji/handshake.png" width="128" height="128" alt="" aria-hidden="true">커뮤니티 참여</h3>
-                    <p>구매 시 추가 2% 적립 + 커뮤니티 혜택</p>
-                    <button type="button">커뮤니티 보기</button>
-                </div>
-            </a>
-        </div>
-    </section>
+    <!-- ⚡ 한정수량 초특가 배너 — 누르면 /deals(한 상품씩 · 총수량/남은수량 · 품절 표시). 문구·사진은 /api/flash-deals 실제 데이터 -->
+    <a class="wp-flash-banner" id="flash-banner" href="/deals" aria-label="한정수량 초특가 페이지로 이동">
+        <span class="ffb-bolt" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.6 1.8 4.4 13.6h6.3L9.6 22.2l9.3-11.9h-6.4l1.1-8.5z" fill="#FFE45C" stroke="#FFF6C4" stroke-width="1.1" stroke-linejoin="round"/></svg></span>
+        <span class="ffb-text">
+            <span class="ffb-title">한정수량 <b>초특가</b></span>
+            <span class="ffb-row"><span class="ffb-sub">매주 금요일 특가 오픈!</span><span class="ffb-cta">바로가기 ›</span></span>
+        </span>
+        <span class="ffb-img" aria-hidden="true"><img class="wp-emoji" src="/images/emoji/gift.png" width="128" height="128" alt=""></span>
+        <span class="ffb-badge" aria-hidden="true">한정<br>수량</span>
+    </a>
 
     <!-- 🔥 실시간 랭킹 (실시간 인기 · 구매순 · 오래 본 순 · 노출순 — 서버가 3분마다 자동 계산) -->
     <!-- 🔴 실시간 리뷰 + 지금 이 순간 (장바구니 담기·결제완료·후기·밴드 후기 — 실제 이벤트만, 이름은 가려서, 30초마다 갱신) -->
@@ -1721,16 +1741,6 @@
         </div>
         <div class="rank-tabs" id="rank-tabs" role="tablist"></div>
         <div class="product-grid" id="ranking-grid"></div>
-    </section>
-
-    <!-- ⚡ 한정수량 초특가 (진행중인 초특가가 있을 때만 보임 — /api/flash-deals 실제 데이터) -->
-    <section class="wp-flash" id="flash-section" hidden aria-label="한정수량 초특가">
-        <div class="fd-head">
-            <h2>🔥 한정수량 초특가</h2>
-            <span class="fd-timer" role="timer" aria-label="초특가 종료까지 남은 시간"></span>
-            <a href="/deals" class="fd-more">전체보기 ›</a>
-        </div>
-        <div class="fd-row"></div>
     </section>
 
     <!-- BEST PRODUCTS (판매·후기·평점·장바구니·찜 자동 점수 + 관리자 고정/제외 — /api/home/best) -->
@@ -1810,6 +1820,30 @@
         </div>
     </section>
 
+    <!-- 회원 혜택 안내 — 작은 타일 3개(페이지 맨 아래) -->
+    <section class="promo-banner wp-promo-mini" aria-label="회원 혜택 안내">
+        <div class="banner-grid">
+            <a href="/join" class="banner-card">
+                <div class="banner-card-content">
+                    <h3><img class="wp-emoji" src="/images/emoji/gift.png" width="128" height="128" alt="" aria-hidden="true">신규 회원 혜택</h3>
+                    <p>구매 금액 1% 적립</p>
+                </div>
+            </a>
+            <a href="/mypage" class="banner-card" style="background: linear-gradient(135deg, #667EEA, #764BA2);">
+                <div class="banner-card-content">
+                    <h3><img class="wp-emoji" src="/images/emoji/glowstar.png" width="128" height="128" alt="" aria-hidden="true">VIP 회원 전용</h3>
+                    <p>매월 특별 할인</p>
+                </div>
+            </a>
+            <a href="/communities" class="banner-card" style="background: linear-gradient(135deg, #F093FB, #F5576C);">
+                <div class="banner-card-content">
+                    <h3><img class="wp-emoji" src="/images/emoji/handshake.png" width="128" height="128" alt="" aria-hidden="true">커뮤니티 참여</h3>
+                    <p>추가 2% 적립</p>
+                </div>
+            </a>
+        </div>
+    </section>
+
     <!-- FOOTER (minimal) -->
     <footer class="footer">
         <div class="footer-content">
@@ -1856,7 +1890,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
     <script src="/withplus-pricing.js"></script>
     <script src="/withplus-common.js"></script>
-    <script src="/flash-deals.js?v=1"></script>
+    <script src="/flash-deals.js?v=2"></script>
     <script>
         (async function () {
             WithPlus.initHeader();
@@ -1953,10 +1987,6 @@
                     set('wms-rate-value', WithPlus.formatPercent(rates.personalPercent + bonus * 100) + '%');
                     set('wms-rate-link', '등급 보너스 +' + WithPlus.formatPercent(bonus * 100) + '%p 포함');
                 }
-
-                document.getElementById('wms-coupon').href = '/mypage#coupon';
-                set('wms-coupon-value', '쿠폰 등록');
-                set('wms-coupon-link', '쿠폰 입력하기 ›');
 
                 document.getElementById('wms-mileage').href = '/mypage';
                 const balance = balanceRes && balanceRes.success && balanceRes.data ? Number(balanceRes.data.balance) || 0 : 0;
@@ -2507,7 +2537,7 @@
             await Promise.all([
                 loadProductSections(),
                 loadBestProducts(),
-                (window.WPFlash ? WPFlash.mountHomeSection('flash-section') : Promise.resolve()),
+                (window.WPFlash ? WPFlash.mountHomeBanner('flash-banner') : Promise.resolve()),
                 loadRecommendedProducts(),
                 loadRecentlyViewed(),
                 loadLivePulse(),

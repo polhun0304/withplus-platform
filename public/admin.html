@@ -11663,11 +11663,13 @@
                     area.innerHTML = `
                         <div class="settings-card" style="max-width:760px; margin-bottom:20px;">
                             <h3 id="fd-form-title">⚡ 한정수량 초특가 등록</h3>
-                            <p class="desc">기간 중이고 잔여 수량이 남아 있는 동안에만 주문 가격이 초특가로 계산됩니다. 수량이 다 팔리거나 종료 일시가 지나면 자동으로 정상가로 돌아갑니다. 홈 "🔥 한정수량 초특가"와 상단 메뉴 "초특가"(/deals)에 노출됩니다.</p>
+                            <p class="desc">기간 중이고 잔여 수량이 남아 있는 동안에만 주문 가격이 초특가로 계산됩니다. 수량이 다 팔리거나 종료 일시가 지나면 자동으로 정상가로 돌아갑니다. 홈 "⚡ 한정수량 초특가" 배너를 누르면 열리는 초특가 페이지(/deals)에 한 상품씩 노출되고, 수량이 다 팔리면 "품절되었습니다"로 표시됩니다. <b>매주 금요일 오픈</b>은 아래 [📅 이번 주 금요일 오픈] 버튼으로 기간을 바로 채울 수 있습니다.</p>
                             <form id="fd-form">
                                 <input type="hidden" id="fd-id">
                                 <div class="field"><label>상품</label><div id="fd-picker"></div>
                                     <div id="fd-picked" style="margin-top:8px; font-size:0.92em; color:var(--text-dark);">선택된 상품이 없습니다</div></div>
+                                <div class="field"><label for="fd-headline">홍보 문구 (선택 · 40자) — 카테고리 옆에 보입니다</label><input type="text" id="fd-headline" maxlength="40" placeholder="예: 홈쇼핑 완판템! N사 실시간검색 1위" style="width:100%; padding:10px 12px; border:1px solid var(--border-color); border-radius:8px;"></div>
+                                <div class="field"><label for="fd-subtitle">한 줄 설명 (선택 · 80자) — 비우면 상품 요약 설명이 보입니다</label><input type="text" id="fd-subtitle" maxlength="80" placeholder="예: 모공 속 딥클렌징! 간편한 스틱형 머드 팩" style="width:100%; padding:10px 12px; border:1px solid var(--border-color); border-radius:8px;"></div>
                                 <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:12px;">
                                     <div class="field"><label for="fd-price">초특가 가격(원)</label><input type="number" id="fd-price" min="0" step="1" required style="width:100%; padding:10px 12px; border:1px solid var(--border-color); border-radius:8px;"></div>
                                     <div class="field"><label for="fd-limit">한정 수량(개)</label><input type="number" id="fd-limit" min="1" step="1" required style="width:100%; padding:10px 12px; border:1px solid var(--border-color); border-radius:8px;"></div>
@@ -11676,6 +11678,7 @@
                                     <div class="field"><label for="fd-end">종료 일시</label><input type="datetime-local" id="fd-end" required style="width:100%; padding:10px 12px; border:1px solid var(--border-color); border-radius:8px;"></div>
                                     <div class="field" style="display:flex; align-items:flex-end;"><label style="display:flex; gap:8px; align-items:center; cursor:pointer; margin:0 0 10px; color:var(--text-dark); font-size:0.95em;"><input type="checkbox" id="fd-active" checked> 사용</label></div>
                                 </div>
+                                <div style="margin:-2px 0 10px;"><button type="button" class="btn btn-secondary" id="fd-friday" style="padding:7px 12px; font-size:0.85em;">📅 이번 주 금요일 오픈 (금 00:00 ~ 다음 주 목 23:59)</button></div>
                                 <div style="display:flex; gap:8px; flex-wrap:wrap;">
                                     <button type="submit" class="settings-save-btn" id="fd-save">등록</button>
                                     <button type="button" class="btn btn-secondary" id="fd-cancel-edit" style="margin-top:8px; display:none;">수정 취소</button>
@@ -11712,10 +11715,21 @@
                         document.getElementById('fd-price').value = '';
                         document.getElementById('fd-limit').value = '';
                         document.getElementById('fd-order').value = '0';
+                        document.getElementById('fd-headline').value = '';
+                        document.getElementById('fd-subtitle').value = '';
                         document.getElementById('fd-active').checked = true;
                         setPicked(null);
                     }
                     document.getElementById('fd-cancel-edit').addEventListener('click', resetForm);
+                    // 매주 금요일 오픈: 이번 주 금요일 00:00(오늘이 금요일이면 오늘) ~ 다음 주 목요일 23:59
+                    document.getElementById('fd-friday').addEventListener('click', () => {
+                        const d = new Date();
+                        d.setHours(0, 0, 0, 0);
+                        d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7));
+                        const end = new Date(d.getTime() + 7 * 24 * 3600 * 1000 - 60 * 1000);
+                        document.getElementById('fd-start').value = fdLocalInput(d.toISOString());
+                        document.getElementById('fd-end').value = fdLocalInput(end.toISOString());
+                    });
 
                     document.getElementById('fd-form').addEventListener('submit', async (e) => {
                         e.preventDefault();
@@ -11730,6 +11744,8 @@
                             deal_price: Number(document.getElementById('fd-price').value),
                             limit_qty: Number(document.getElementById('fd-limit').value),
                             sort_order: Number(document.getElementById('fd-order').value || 0),
+                            headline: document.getElementById('fd-headline').value.trim(),
+                            subtitle: document.getElementById('fd-subtitle').value.trim(),
                             starts_at: startV ? new Date(startV).toISOString() : '',
                             ends_at: endV ? new Date(endV).toISOString() : '',
                             is_active: document.getElementById('fd-active').checked
@@ -11771,7 +11787,7 @@
                                             return `
                                             <tr data-id="${d.id}">
                                                 <td data-label="순서">${d.sort_order}</td>
-                                                <td data-label="상품" class="cell-name">${d.product ? `<a href="/product/${d.product_id}" target="_blank" rel="noopener">${WithPlus.escapeHtml(d.product.name)}</a>` : '(삭제된 상품)'}</td>
+                                                <td data-label="상품" class="cell-name">${d.product ? `<a href="/product/${d.product_id}" target="_blank" rel="noopener">${WithPlus.escapeHtml(d.product.name)}</a>` : '(삭제된 상품)'}${d.headline ? `<br><span style="font-size:0.8em; color:var(--text-gray);">📣 ${WithPlus.escapeHtml(d.headline)}</span>` : ''}</td>
                                                 <td data-label="가격" style="white-space:nowrap;"><span style="color:var(--text-gray); text-decoration:line-through; font-size:0.85em;">${fdWon(d.original_price)}</span><br><b style="color:#E8125C;">${fdWon(d.deal_price)}</b> <span style="font-size:0.8em;">(${d.discount_rate}%↓)</span></td>
                                                 <td data-label="판매 / 잔여" style="white-space:nowrap;">판매 <b>${d.sold_count}</b> / 한정 ${d.limit_qty}<br>잔여 <b>${d.remaining}</b>개 <span style="color:var(--text-gray); font-size:0.8em;">(${pct}%)</span>${d.pending_qty ? `<br><span style="font-size:0.78em; color:var(--text-gray);">결제대기 ${d.pending_qty} · 결제완료 ${d.paid_qty}</span>` : ''}</td>
                                                 <td data-label="기간" style="white-space:nowrap; font-size:0.85em;">${fdFmt(d.starts_at)}<br>~ ${fdFmt(d.ends_at)}</td>
@@ -11808,6 +11824,8 @@
                                 document.getElementById('fd-price').value = d.deal_price;
                                 document.getElementById('fd-limit').value = d.limit_qty;
                                 document.getElementById('fd-order').value = d.sort_order;
+                                document.getElementById('fd-headline').value = d.headline || '';
+                                document.getElementById('fd-subtitle').value = d.subtitle || '';
                                 document.getElementById('fd-start').value = fdLocalInput(d.starts_at);
                                 document.getElementById('fd-end').value = fdLocalInput(d.ends_at);
                                 document.getElementById('fd-active').checked = !!d.is_active;

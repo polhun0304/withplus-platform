@@ -140,5 +140,115 @@
       </div>`;
   }
 
-  global.WPFlash = { fetchDeals, renderCard, startTicker, tick, mountHomeSection, detailBoxHtml, timerHtml };
+
+  // ===== /deals 한 줄 목록(상품 하나씩) — 사진 · 카테고리/홍보 문구 · 이름 · 설명 · 할인율/가격 · 총수량/남은수량 · 자세히 보기/장바구니 =====
+  const DOW = ['일', '월', '화', '수', '목', '금', '토'];
+  function openLabel(iso) {
+    const st = new Date(iso);
+    return `${st.getMonth() + 1}/${st.getDate()}(${DOW[st.getDay()]}) ${pad(st.getHours())}:${pad(st.getMinutes())}`;
+  }
+  const CART_SVG = '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="20" r="1.4"/><circle cx="18" cy="20" r="1.4"/><path d="M2.5 3.5h2.6l2.4 11.2a1.6 1.6 0 0 0 1.6 1.3h8.6a1.6 1.6 0 0 0 1.6-1.2l1.7-7.3H6"/></svg>';
+  function renderRow(d) {
+    const p = d.product || {};
+    const img = Array.isArray(p.images_urls) && p.images_urls[0] ? p.images_urls[0] : null;
+    const listPrice = Number(p.price) || 0;
+    const rate = listPrice > 0 ? Math.round((1 - d.deal_price / listPrice) * 100) : 0;
+    const limit = Number(d.limit_qty) || 0;
+    const remain = Math.max(0, Number(d.remaining) || 0);
+    const remainPct = limit > 0 ? Math.round(remain / limit * 100) : 0;
+    const sold = d.status === 'soldout', soon = d.status === 'upcoming';
+    const href = '/product/' + encodeURIComponent(d.product_id);
+    const desc = d.subtitle || p.description || '';
+    const n = (x) => Number(x).toLocaleString('ko-KR');
+    // 품절 줄은 링크 대신 품절 안내 팝업(비슷한 특가 추천)을 연다
+    const linkAttr = sold ? `href="${href}" data-fd-soldout="1"` : `href="${href}"`;
+    return `
+      <article class="fdr${sold ? ' is-soldout' : ''}${soon ? ' is-upcoming' : ''}" data-deal-id="${esc(d.id)}" data-pid="${esc(d.product_id)}">
+        <a class="fdr-img" ${linkAttr} aria-label="${esc(p.name)}">
+          ${img ? `<img src="${W ? W.safeUrlAttr(img) : img}" alt="" loading="lazy">` : '<span class="fdr-noimg">🎁</span>'}
+          <span class="fdr-ribbon">한정수량</span>
+          ${sold ? '<span class="fdr-sold"><span><b>SOLD OUT</b><small>품절되었습니다</small></span></span>' : ''}
+          ${soon ? `<span class="fdr-soon">${esc(openLabel(d.starts_at))}<br>오픈 예정</span>` : ''}
+        </a>
+        <div class="fdr-info">
+          <div class="fdr-tags">${p.category_label ? `<span class="fdr-cat">${esc(p.category_label)}</span>` : ''}${d.headline ? `<span class="fdr-headline">${esc(d.headline)}</span>` : ''}</div>
+          <a class="fdr-name" ${linkAttr}>${esc(p.name)}</a>
+          ${desc ? `<p class="fdr-desc">${esc(desc)}</p>` : ''}
+          <div class="fdr-price">${rate > 0 ? `<b class="fdr-rate">${rate}%</b>` : ''}<b class="fdr-deal">${won(d.deal_price)}</b>${listPrice > d.deal_price ? `<s>${won(listPrice)}</s>` : ''}</div>
+        </div>
+        <div class="fdr-side">
+          <dl class="fdr-qty"><dt>총수량</dt><dd>${n(limit)}개</dd><dt>남은수량</dt><dd><b>${n(remain)}개</b></dd></dl>
+          <div class="fdr-bar" role="img" aria-label="남은 수량 ${remainPct}%"><span class="fdr-fill" style="width:${sold ? 100 : remainPct}%"></span></div>
+          <div class="fdr-pct">${sold ? '완판' : `${remainPct}% 남음`}</div>
+          <div class="fdr-btns">
+            ${sold ? '<span class="fdr-detail is-off">품절되었습니다</span>'
+              : soon ? `<span class="fdr-detail is-off">${esc(openLabel(d.starts_at))} 오픈</span>`
+              : `<a class="fdr-detail" href="${href}"><span class="fdr-long">상품 </span>자세히 보기 ›</a>`}
+            <button type="button" class="fdr-cart" data-fd-cart="${esc(d.product_id)}" data-opt="${p.has_options ? '1' : ''}" aria-label="장바구니 담기"${sold || soon ? ' disabled' : ''}>${CART_SVG}</button>
+          </div>
+        </div>
+      </article>`;
+  }
+
+  // /deals 목록의 장바구니 버튼 · 품절 줄 클릭(이벤트 위임 — 목록을 다시 그려도 한 번만 연결)
+  function bindRowActions(container, getDeal) {
+    container.addEventListener('click', (e) => {
+      const cartBtn = e.target.closest('[data-fd-cart]');
+      if (cartBtn) {
+        e.preventDefault();
+        if (cartBtn.disabled) return;
+        const pid = cartBtn.getAttribute('data-fd-cart');
+        // 사이즈/색상 옵션이 있는 상품은 옵션을 골라야 하므로 상세로 보낸다
+        if (cartBtn.getAttribute('data-opt') === '1') { location.href = '/product/' + encodeURIComponent(pid); return; }
+        if (W && W.addToCart) W.addToCart(pid, 1);
+        cartBtn.classList.add('is-done');
+        cartBtn.setAttribute('aria-label', '장바구니에 담겼습니다');
+        setTimeout(() => { cartBtn.classList.remove('is-done'); cartBtn.setAttribute('aria-label', '장바구니 담기'); }, 1600);
+        return;
+      }
+      const soldLink = e.target.closest('[data-fd-soldout]');
+      if (soldLink && global.WPSoldout && global.WPSoldout.showPopup) {
+        e.preventDefault();
+        const row = soldLink.closest('.fdr');
+        const d = getDeal(row && row.getAttribute('data-deal-id'));
+        global.WPSoldout.showPopup({ id: row.getAttribute('data-pid'), category: d && d.product ? d.product.category : '' });
+      }
+    });
+  }
+
+  // 다음 금요일 00:00(한국 시간) — "매주 금요일 새로운 특가" 카운트다운 기준
+  function nextFridayKst(fromMs) {
+    const KST = 9 * 3600 * 1000;
+    const k = new Date((fromMs || now()) + KST);
+    const add = ((5 - k.getUTCDay() + 7) % 7) || 7;
+    return new Date(Date.UTC(k.getUTCFullYear(), k.getUTCMonth(), k.getUTCDate() + add) - KST);
+  }
+
+  // 홈: 한정수량 초특가 배너(항상 보임 → 누르면 /deals). 진행중 초특가 상품 사진·문구를 실제 데이터로 채운다
+  async function mountHomeBanner(bannerId) {
+    const el = document.getElementById(bannerId || 'flash-banner');
+    if (!el) return;
+    const sub = el.querySelector('.ffb-sub');
+    const imgBox = el.querySelector('.ffb-img');
+    try {
+      const json = await fetchDeals({ includeUpcoming: true, limit: 20 });
+      const list = json.data || [];
+      const active = list.filter(d => d.status === 'active');
+      const upcoming = list.filter(d => d.status === 'upcoming');
+      const pics = (active.length ? active : list)
+        .map(d => d.product && Array.isArray(d.product.images_urls) ? d.product.images_urls[0] : null)
+        .filter(Boolean).slice(0, 2);
+      if (pics.length && imgBox) {
+        imgBox.innerHTML = pics.map((u, i) => `<img src="${W ? W.safeUrlAttr(u) : u}" alt="" loading="lazy" class="ffb-pic ffb-pic-${i}">`).join('');
+      }
+      if (sub) {
+        if (active.length) sub.textContent = '지금만 만나보는 특가 상품!';
+        else if (upcoming.length) sub.textContent = openLabel(upcoming[0].starts_at) + ' 오픈 예정';
+        else sub.textContent = '매주 금요일 특가 오픈!';
+      }
+      el.setAttribute('aria-label', '한정수량 초특가 — ' + (sub ? sub.textContent : '') + ' (초특가 페이지로 이동)');
+    } catch (e) { /* 실패해도 기본 문구 그대로 — 누르면 /deals 로 이동 */ }
+  }
+
+  global.WPFlash = { fetchDeals, renderCard, renderRow, bindRowActions, startTicker, tick, mountHomeSection, mountHomeBanner, nextFridayKst, detailBoxHtml, timerHtml, now };
 })(window);
