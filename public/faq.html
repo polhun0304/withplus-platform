@@ -157,7 +157,7 @@
     <script src="/withplus-common.js"></script>
     <script>
         if (window.WithPlus && WithPlus.initHeader) { WithPlus.initHeader(); }
-        function toggleFaq(el) { el.parentElement.classList.toggle('open'); }
+        function toggleFaq(el) { el.classList.toggle('open'); } // el = .faq-item (질문 칸의 부모) — 예전에는 한 단계 더 위를 토글해 답이 안 열렸다
     </script>
 </body>
 </html>
