@@ -15745,7 +15745,10 @@
             // 🔒 대표자 원가 스텝업 토큰 관리 (sessionStorage, 15분)
             // ============================================
             const STEPUP_STORAGE_KEY = 'withplus_cost_stepup';
+            // 브라우저 보관함(sessionStorage)을 못 쓰는 환경(앱 화면·보안 설정 등)에서도 15분 동안 쓰도록 화면 메모리에도 같이 보관
+            let stepUpMem = null;
             function getStoredStepUpToken() {
+                if (stepUpMem && Date.now() < stepUpMem.expiresAt) return stepUpMem.token;
                 try {
                     const raw = sessionStorage.getItem(STEPUP_STORAGE_KEY);
                     if (!raw) return null;
@@ -15758,9 +15761,11 @@
                 } catch (e) { return null; }
             }
             function storeStepUpToken(token, expiresInSec) {
+                stepUpMem = token ? { token, expiresAt: Date.now() + (Number(expiresInSec) || 900) * 1000 } : null;
                 try { sessionStorage.setItem(STEPUP_STORAGE_KEY, JSON.stringify({ token, expiresAt: Date.now() + (Number(expiresInSec) || 900) * 1000 })); } catch (e) { /* 세션스토리지를 못 쓰는 환경이면 매번 재인증을 요구하게 될 뿐, 기능은 계속 동작한다 */ }
             }
             function clearStepUpToken() {
+                stepUpMem = null;
                 try { sessionStorage.removeItem(STEPUP_STORAGE_KEY); } catch (e) { /* no-op */ }
             }
             // 원가/가격정책 API 전용 fetch - authedFetch에 X-Cost-StepUp-Token 헤더를 얹는다.
@@ -15786,8 +15791,8 @@
             // 부트스트랩 상태에서는 토큰 없이도 통과) ownerFetch처럼 "토큰이 없으면 아예 보내지 않고 막는"
             // 방식이 아니라, 저장된 토큰이 있으면 실어 보내고 없으면 그냥 보낸다. 그래도 서버가 403을 주면
             // (=대표자가 이미 2FA를 등록해뒀다는 뜻) 저장된 토큰을 지우고 재인증이 필요하다는 신호를 던진다.
-            async function ownerFetchOptional(path, options) {
-                const token = getStoredStepUpToken();
+            async function ownerFetchOptional(path, options, explicitToken) {
+                const token = explicitToken || getStoredStepUpToken();
                 options = options || {};
                 const res = await authedFetch(path, token ? Object.assign({}, options, {
                     headers: Object.assign({}, options.headers, { 'X-Cost-StepUp-Token': token })
@@ -15806,14 +15811,15 @@
             async function ownerPatchWithStepUp(path, payload) {
                 if (typeof window.__ensureOwnerStepUpOrBootstrap !== 'function') throw new Error('대표자 계정만 결제사 키를 바꿀 수 있습니다');
                 const cancelled = e => { if (e && e.message === 'CANCELLED') throw new Error('2단계 인증을 취소해서 저장하지 않았습니다'); throw e; };
-                await window.__ensureOwnerStepUpOrBootstrap().catch(cancelled);
+                // 인증 창에서 받은 인증을 보관함에서 다시 꺼내지 않고 그대로 실어 보낸다(보관함이 막힌 환경에서도 동작)
+                const first = await window.__ensureOwnerStepUpOrBootstrap().catch(cancelled);
                 const opts = () => ({ method: 'PATCH', body: JSON.stringify(payload) });
                 try {
-                    return await ownerFetchOptional(path, opts());
+                    return await ownerFetchOptional(path, opts(), first || undefined);
                 } catch (e) {
                     if (!e.stepUpRequired) throw e;
-                    await window.__ensureOwnerStepUp().catch(cancelled); // 저장된 인증이 없으므로 인증 창이 뜬다
-                    return await ownerFetchOptional(path, opts());
+                    const fresh = await window.__ensureOwnerStepUp().catch(cancelled); // 저장된 인증이 없으므로 인증 창이 뜬다
+                    return await ownerFetchOptional(path, opts(), fresh || undefined);
                 }
             }
 
