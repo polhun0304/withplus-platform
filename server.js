@@ -1189,9 +1189,23 @@ app.put('/api/me/addresses/:id/default', authenticate, async (req, res) => {
 // 탈퇴 후에는 (1) Supabase Auth 계정을 밴 처리해 재로그인을 막고, (2) 이미 발급된(아직 만료 전인)
 // 액세스 토큰도 이 서버 프로세스 안에서는 즉시 거부되도록 authenticate 미들웨어의 캐시에서 제거한다.
 // ============================================
+// 토큰(JWT)의 로그인 기록(amr)으로 마지막으로 직접 로그인한 지 몇 초 지났는지 — 모르면 null
+function secondsSinceLogin(req) {
+  try {
+    const tok = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
+    const payload = JSON.parse(Buffer.from(tok.split('.')[1], 'base64url').toString('utf8'));
+    const ts = (payload.amr || []).map(a => Number(a && a.timestamp)).filter(Number.isFinite);
+    return ts.length ? Math.floor(Date.now() / 1000) - Math.max(...ts) : null;
+  } catch (e) { return null; }
+}
 app.post('/api/me/withdraw', authenticate, async (req, res) => {
   try {
     const userId = req.user.id;
+    // 훔친 로그인 상태로 한 번에 탈퇴시키지 못하게: 최근 15분 안에 직접 로그인한 경우만
+    const since = secondsSinceLogin(req);
+    if (since !== null && since > 15 * 60) {
+      return res.status(401).json({ error: 'Reauthentication Required', reauth_required: true, message: '보안을 위해 로그아웃 후 다시 로그인한 다음 탈퇴를 진행해주세요(최근 15분 안에 로그인한 경우에만 탈퇴할 수 있습니다).', timestamp: new Date().toISOString() });
+    }
     const { data: profile } = await supabase.from('profiles').select('id, is_active').eq('id', userId).maybeSingle();
     if (profile && profile.is_active === false) {
       return res.status(400).json({ error: 'Bad Request', message: '이미 탈퇴 처리된 계정입니다', timestamp: new Date().toISOString() });
@@ -1686,7 +1700,10 @@ async function variantBelongsToProduct(variantId, productId) {
   return !!data;
 }
 async function selectByIdChunks(productIds, build) {
-  if (!Array.isArray(productIds)) return build(null);
+  // ID 목록 없이 '전체'를 조회할 때도 1,000행에서 잘리지 않게 끝까지 나눠 읽는다(도매 가격 안내 등)
+  if (!Array.isArray(productIds)) {
+    try { return { data: await fetchAllRows(() => build(null), 200000), error: null }; } catch (e) { return { data: null, error: e }; }
+  }
   const out = { data: [], error: null };
   for (let i = 0; i < productIds.length; i += ID_CHUNK) {
     const { data, error } = await build(productIds.slice(i, i + ID_CHUNK));
@@ -3615,7 +3632,7 @@ app.post('/api/admin/products/bulk-import', authenticate, requireRole(['provider
         stock: Number.isFinite(stock) && stock >= 0 ? stock : 0,
         images_urls: raw.image_url ? [String(raw.image_url).trim()] : [],
         supplier_id: req.user.id,
-        status: 'active'
+        status: isAdminRole(req.userRole) ? 'active' : 'inactive' // 판매자 일괄 등록도 관리자 승인 후 판매
       }]).select().single();
 
       if (insertErr) {
@@ -3700,7 +3717,8 @@ app.get('/api/admin/payment-gateway', authenticate, requireRole(['admin', 'super
   }
 });
 
-app.patch('/api/admin/payment-gateway', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+// 🔐 결제사 키(입금 계좌가 바뀌는 설정)는 대표자만 바꿀 수 있다 — 대표자 계정 + 2단계 인증(등록 전에는 대표자 본인만)
+app.patch('/api/admin/payment-gateway', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
   try {
     const update = { updated_at: new Date().toISOString() };
     if (typeof req.body.client_key === 'string') update.client_key = req.body.client_key.trim() || null;
@@ -3870,7 +3888,7 @@ app.get('/api/admin/payment-gateway/:provider', authenticate, requireRole(['admi
   }
 });
 
-app.patch('/api/admin/payment-gateway/:provider', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
+app.patch('/api/admin/payment-gateway/:provider', authenticate, requireRole(['admin', 'super_admin']), requireOwnerStepUpOrBootstrap, async (req, res) => {
   try {
     const provider = req.params.provider;
     if (!SIMPLE_PAY_PROVIDERS[provider]) return res.status(404).json({ error: 'Not Found', message: '지원하지 않는 결제수단입니다', timestamp: new Date().toISOString() });
@@ -6617,7 +6635,7 @@ app.get('/api/products', optionalAuth, async (req, res) => {
 
     // 검색어가 있으면 오타허용(trigram 유사도)+부분일치 검색 함수(search_products_with)로 결과를 가져오고,
     // 없으면 지금까지처럼 일반 목록 조회를 그대로 사용한다 (기존 동작 100% 유지).
-    let data, error;
+    let data, error, curatedIdSet = null;
     if (searchQuery) {
       ({ data, error } = await supabasePublic.rpc('search_products_with', { search_query: searchQuery, limit_count: 100 }));
       // DB 검색함수가 오류이거나 0건이면 직접 부분일치 검색으로 한 번 더 찾는다(검색해도 안 나오는 현상 방지)
@@ -6659,11 +6677,14 @@ app.get('/api/products', optionalAuth, async (req, res) => {
             .eq('community_id', community.id);
           const allowedIds = (picks || []).map(p => p.product_id);
           // 지정된 상품이 하나도 없으면 빈 결과를 정직하게 반환한다(전체 카탈로그로 조용히 되돌아가지 않음)
-          query = query.in('id', allowedIds.length > 0 ? allowedIds : ['00000000-0000-0000-0000-000000000000']);
+          // 150개가 넘으면 주소가 너무 길어 DB가 거절하므로(Bad Request) 조회 뒤에 걸러낸다
+          if (allowedIds.length > 150) curatedIdSet = new Set(allowedIds);
+          else query = query.in('id', allowedIds.length > 0 ? allowedIds : ['00000000-0000-0000-0000-000000000000']);
         }
       }
 
       ({ data, error } = await query);
+      if (!error && curatedIdSet && Array.isArray(data)) data = data.filter(p => curatedIdSet.has(p.id));
     }
 
     if (error) throw error;
@@ -7067,7 +7088,8 @@ app.post('/api/products', authenticate, requireRole(['provider', 'admin', 'super
         vendor_id: vendor_id || null,
         brand: brand ? String(brand).trim() : null,
         subscription_available: !!subscription_available,
-        status: 'active'
+        // 판매자(공급자)가 등록한 상품은 '판매 중지(승인 대기)'로 시작 → 관리자가 확인 후 판매중으로 바꾼다
+        status: isAdminRole(req.userRole) ? 'active' : 'inactive'
       }])
       .select(PRODUCT_SAFE_COLUMNS)
       .single();
@@ -7132,7 +7154,7 @@ async function updateProductCore(req, id, body) {
 
     const { data: existing, error: findErr } = await supabase
       .from('products_with')
-      .select('id, supplier_id, stock, price, discount_price')
+      .select('id, supplier_id, stock, price, discount_price, status')
       .eq('id', id)
       .is('deleted_at', null) // 영구 삭제(종결) 처리된 상품은 수정·복구 불가
       .single();
@@ -7175,7 +7197,13 @@ async function updateProductCore(req, id, body) {
     if (category !== undefined) updates.category = category;
     if (images_urls !== undefined) updates.images_urls = images_urls;
     if (detail_sections !== undefined) updates.detail_sections = sanitizeDetailSections(detail_sections);
-    if (status !== undefined) updates.status = status;
+    if (status !== undefined) {
+      // 판매자는 판매 중지·단종은 직접 할 수 있지만, '판매중'으로 바꾸는 것(신규 판매·판매 재개)은 관리자 승인 필요
+      if (status === 'active' && !isAdminRole(req.userRole) && existing.status !== 'active') {
+        return { httpStatus: 403, payload: { error: 'Forbidden', message: '판매 시작(판매중 전환)은 관리자 승인이 필요합니다. 관리자에게 승인을 요청해주세요.', timestamp: new Date().toISOString() } };
+      }
+      updates.status = status;
+    }
     if (vendor_id !== undefined) updates.vendor_id = vendor_id || null;
     if (brand !== undefined) updates.brand = brand ? String(brand).trim() : null;
     if (subscription_available !== undefined) updates.subscription_available = !!subscription_available;
@@ -7568,14 +7596,13 @@ app.patch('/api/products/:id/supplier', authenticate, requireRole(['admin', 'sup
 app.get('/api/admin/products', authenticate, requireRole(['provider', 'admin', 'super_admin']), async (req, res) => {
   try {
     // 영구 삭제(종결) 처리된 상품은 관리자 목록에서도 숨긴다
-    let query = supabase.from('products_with').select(PRODUCT_SAFE_COLUMNS).is('deleted_at', null).order('created_at', { ascending: false });
-
-    if (!isAdminRole(req.userRole)) {
-      query = query.eq('supplier_id', req.user.id);
-    }
-
-    const { data, error } = await query;
-    if (error) throw error;
+    // 상품이 1,000개를 넘어도 전부(Supabase 기본 1,000행 제한) — 나눠서 끝까지 읽는다
+    const buildQuery = () => {
+      let q = supabase.from('products_with').select(PRODUCT_SAFE_COLUMNS).is('deleted_at', null).order('created_at', { ascending: false }).order('id', { ascending: true });
+      if (!isAdminRole(req.userRole)) q = q.eq('supplier_id', req.user.id);
+      return q;
+    };
+    const data = await fetchAllRows(buildQuery, 100000);
 
     // 관리자 화면에서 "자체재고(쇼핑몰 직접 등록)" 상품과 "공급자 위탁" 상품을 한눈에 구분할 수 있도록
     // 소유 계정의 role/이름을 함께 내려준다(공급자 정산 로직과 동일한 기준: role='provider'만 "공급자").
@@ -12360,9 +12387,18 @@ app.patch('/api/admin/orders/:id/status', authenticate, requireRole(['admin', 's
     }
 
     // 이전 상태를 읽어 '실제로 바뀌는 경우'에만 재고·쿠폰 복구 / 결제완료 혜택을 한 번 실행한다
-    const { data: before } = await supabase.from('orders_with').select('status').eq('id', id).maybeSingle();
+    const { data: before } = await supabase.from('orders_with').select('status, order_number').eq('id', id).maybeSingle();
     if (!before) {
       return res.status(404).json({ error: 'Not Found', message: 'Order not found', timestamp: new Date().toISOString() });
+    }
+    // 💳 결제된 주문을 취소·환불로 바꾸면 결제사에 실제 환불을 먼저 요청한다(실패하면 상태를 바꾸지 않는다).
+    // 결제사 관리자 화면에서 이미 직접 환불했다면 skip_pg_refund:true 로 다시 보내 상태만 바꾼다.
+    let pgRefund = null;
+    if ((status === 'cancelled' || status === 'refunded') && ['paid', 'processing', 'shipped', 'delivered'].includes(before.status) && !(req.body && req.body.skip_pg_refund)) {
+      pgRefund = await refundOrderPayment({ id, order_number: before.order_number }, `관리자 주문 ${status === 'cancelled' ? '취소' : '환불'}`);
+      if (!pgRefund.ok && !pgRefund.skipped) {
+        return res.status(502).json({ error: 'Refund Failed', refund_failed: true, message: `결제사 환불에 실패해 주문 상태를 바꾸지 않았습니다: ${pgRefund.message}`, timestamp: new Date().toISOString() });
+      }
     }
     let updQuery = supabase.from('orders_with').update(updates).eq('id', id);
     // 상태를 바꿀 때는 '읽은 상태 그대로일 때만' — 그 사이 자동취소·결제가 끼면 덮어쓰지 않는다
@@ -12576,8 +12612,9 @@ app.get('/api/provider/orders', authenticate, requireRole(['provider', 'admin', 
     const { data: orders, error } = await supabase
       .from('orders_with')
       .select('id, order_number, user_id, community_id, items, status, shipping_status, tracking_number, courier_name, created_at')
+      .gte('created_at', new Date(Date.now() - 183 * 24 * 3600 * 1000).toISOString()) // 최근 6개월(사이트 전체 최근 500건만 보던 문제)
       .order('created_at', { ascending: false })
-      .limit(500);
+      .limit(20000);
     if (error) throw error;
 
     const matched = (orders || [])
@@ -16930,17 +16967,25 @@ app.get('/api/admin/supplier-sales-report', authenticate, requireRole(['provider
 // 특정 기간의 공급자별(provider) 매출 집계 - settlements 생성 시 재사용
 // 정산·매출 집계에 넣는 주문 상태: 실제로 결제된 주문만(결제 대기 pending 은 24시간 뒤 자동취소될 수 있어 제외)
 const SETTLEMENT_PAID_STATUSES = ['paid', 'processing', 'shipped', 'delivered'];
+// 날짜만 받은 정산 기간(예: 2026-08-01)은 한국 시간 자정 기준으로 자른다(UTC 기준이면 1일 새벽 0~9시 주문이 전달로 넘어갔다)
+function kstDayStartIso(d) { return /^\d{4}-\d{2}-\d{2}$/.test(d) ? new Date(d + 'T00:00:00+09:00').toISOString() : d; }
 function settlementOrdersQuery(columns, startDate, endDate, extra) {
   let q = supabase.from('orders_with').select(columns).in('status', SETTLEMENT_PAID_STATUSES);
   if (extra) q = extra(q);
-  if (startDate) q = q.gte('created_at', startDate);
+  if (startDate) q = q.gte('created_at', kstDayStartIso(startDate));
   if (endDate) {
     const endExclusive = /^\d{4}-\d{2}-\d{2}$/.test(endDate)
       ? new Date(new Date(endDate + 'T00:00:00Z').getTime() + 24 * 60 * 60 * 1000).toISOString()
       : endDate;
-    q = q.lt('created_at', endExclusive);
+    q = q.lt('created_at', /^\d{4}-\d{2}-\d{2}$/.test(endDate) ? new Date(new Date(endDate + 'T00:00:00+09:00').getTime() + 24 * 60 * 60 * 1000).toISOString() : endExclusive);
   }
   return q.order('id', { ascending: true });
+}
+// 이미 만든 정산과 기간이 겹치는지(정확히 같은 기간은 '재계산'이라 허용) — 같은 주문이 두 번 정산되는 것 방지
+async function findOverlappingSettlement(table, startDate, endDate) {
+  const { data } = await supabase.from(table).select('period_start, period_end')
+    .neq('status', 'cancelled').lte('period_start', endDate).gte('period_end', startDate).limit(20);
+  return (data || []).find(r => !(String(r.period_start).slice(0, 10) === startDate && String(r.period_end).slice(0, 10) === endDate)) || null;
 }
 
 async function computeProviderRevenueForPeriod(startDate, endDate) {
@@ -17139,6 +17184,8 @@ app.post('/api/admin/settlements/generate', authenticate, requireRole(['admin', 
       return res.status(400).json({ error: 'Bad Request', message: 'startDate, endDate는 필수입니다 (예: 2026-08-01)', timestamp: new Date().toISOString() });
     }
 
+    const overlapS = await findOverlappingSettlement('supplier_settlements', startDate, endDate);
+    if (overlapS) return res.status(400).json({ error: 'Bad Request', message: `이미 만든 정산 기간(${String(overlapS.period_start).slice(0, 10)} ~ ${String(overlapS.period_end).slice(0, 10)})과 겹칩니다. 같은 주문이 두 번 정산되지 않도록 겹치지 않는 기간으로 만들어주세요(같은 기간을 다시 만들면 재계산됩니다).`, timestamp: new Date().toISOString() });
     const agg = await computeProviderRevenueForPeriod(startDate, endDate);
     const supplierIds = Object.keys(agg);
 
@@ -17340,6 +17387,8 @@ app.post('/api/admin/community-settlements/generate', authenticate, requireRole(
       return res.status(400).json({ error: 'Bad Request', message: 'startDate, endDate는 필수입니다 (예: 2026-08-01)', timestamp: new Date().toISOString() });
     }
 
+    const overlapC = await findOverlappingSettlement('community_settlements_with', startDate, endDate);
+    if (overlapC) return res.status(400).json({ error: 'Bad Request', message: `이미 만든 정산 기간(${String(overlapC.period_start).slice(0, 10)} ~ ${String(overlapC.period_end).slice(0, 10)})과 겹칩니다. 겹치지 않는 기간으로 만들어주세요(같은 기간을 다시 만들면 재계산됩니다).`, timestamp: new Date().toISOString() });
     const agg = await computeCommunityRevenueForPeriod(startDate, endDate);
     const communityIds = Object.keys(agg);
     if (communityIds.length === 0) {
@@ -18821,13 +18870,71 @@ async function releaseFlashDealClaims(orderId) {
 }
 // 💳 결제 승인 → 주문 '결제완료' 전환. 아직 결제 대기(pending)일 때만 바꾼다 — 그 사이 자동취소된 주문을 결제완료로
 // 덮어써 재고·초특가 수량이 두 번 팔리던 문제 차단. 바뀐 경우에만 초특가 점유 확정 + 결제 후 혜택(추천·라이브 캐시백).
+// 💳 결제사 자동 환불 — 결제된 주문을 취소·환불할 때 토스·카카오페이·네이버페이에 실제 환불(전액)을 요청한다.
+// 결과는 order_payments 에 남긴다(성공: refunded / 실패: approved 그대로 + refund_response 에 오류). 결제사 기록이 없으면 skipped.
+async function refundOrderPayment(order, reason) {
+  const { data: pay } = await supabase.from('order_payments').select('*')
+    .eq('order_id', order.id).eq('status', 'approved').order('created_at', { ascending: false }).limit(1).maybeSingle();
+  if (!pay) return { ok: false, skipped: true, message: '결제사 결제 기록이 없습니다(자동 환불 대상 아님)' };
+  const amount = Math.round(Number(pay.amount) || 0);
+  const why = String(reason || '주문 취소').slice(0, 100);
+  let ok = false, json = null;
+  try {
+    const config = await getPgConfig(pay.provider_key);
+    if (!config || !config.secret_key) return { ok: false, message: '결제사 설정(비밀 키)이 없어 자동 환불할 수 없습니다' };
+    if (pay.provider_key === 'toss') {
+      const resp = await fetch(`https://api.tosspayments.com/v1/payments/${encodeURIComponent(pay.payment_key)}/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Basic ' + Buffer.from(config.secret_key + ':').toString('base64'), 'Idempotency-Key': 'refund-' + pay.id },
+        body: JSON.stringify({ cancelReason: why }),
+        signal: AbortSignal.timeout(20000)
+      });
+      json = await resp.json().catch(() => null);
+      ok = resp.ok || (json && json.code === 'ALREADY_CANCELED_PAYMENT'); // 결제사 화면에서 이미 취소한 경우도 환불 완료로
+    } else if (pay.provider_key === 'kakaopay') {
+      const resp = await fetch('https://open-api.kakaopay.com/online/v1/payment/cancel', {
+        method: 'POST',
+        headers: { Authorization: 'SECRET_KEY ' + config.secret_key, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cid: config.client_key, tid: pay.payment_key, cancel_amount: amount, cancel_tax_free_amount: 0 }),
+        signal: AbortSignal.timeout(15000)
+      });
+      json = await resp.json().catch(() => null);
+      ok = resp.ok;
+    } else if (pay.provider_key === 'naverpay') {
+      const partnerId = config.extra_config && config.extra_config.partner_id;
+      const paymentId = pay.raw_response && pay.raw_response.body && pay.raw_response.body.paymentId;
+      if (!partnerId || !paymentId) return { ok: false, message: '네이버페이 결제 번호를 찾을 수 없어 자동 환불할 수 없습니다' };
+      const domain = config.mode === 'live' ? 'apis.naver.com' : 'dev.apis.naver.com';
+      const resp = await fetch(`https://${domain}/${partnerId}/naverpay/payments/v1/cancel`, {
+        method: 'POST',
+        headers: { 'X-Naver-Client-Id': config.client_key, 'X-Naver-Client-Secret': config.secret_key, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({ paymentId, cancelAmount: String(amount), cancelReason: why, cancelRequester: '2', taxScopeAmount: String(amount), taxExScopeAmount: '0' }).toString(),
+        signal: AbortSignal.timeout(15000)
+      });
+      json = await resp.json().catch(() => null);
+      ok = resp.ok && json && json.code === 'Success';
+    } else {
+      return { ok: false, skipped: true, message: '자동 환불을 지원하지 않는 결제 수단입니다' };
+    }
+  } catch (e) { json = { error: e.message }; ok = false; }
+  if (ok) {
+    await supabase.from('order_payments').update({ status: 'refunded', refunded_at: new Date().toISOString(), refund_response: json }).eq('id', pay.id);
+    return { ok: true, provider: pay.provider_key, amount };
+  }
+  await supabase.from('order_payments').update({ refund_response: json }).eq('id', pay.id); // 다시 시도할 수 있게 상태는 approved 유지
+  const msg = (json && (json.message || json.msg || json.error_message || json.error)) || '결제사 응답 오류';
+  console.error(`[환불 실패] 주문 ${order.order_number || order.id} (${pay.provider_key}): ${msg}`);
+  return { ok: false, provider: pay.provider_key, message: String(msg) };
+}
+
 async function markOrderPaid(order, method) {
   const { data: rows, error } = await supabase.from('orders_with')
     .update({ status: 'paid', payment_method: method })
     .eq('id', order.id).eq('status', 'pending').select('id');
   if (error) throw error;
   if (!rows || !rows.length) {
-    console.error(`[결제확인 필요] 주문 ${order.order_number}: ${method} 결제는 승인됐지만 주문이 이미 결제 대기 상태가 아니어서(자동취소 등) 결제완료로 바꾸지 않았습니다 — PG 관리자 화면에서 환불해주세요`);
+    const r = await refundOrderPayment(order, '자동취소된 주문의 결제 — 자동 환불').catch(e => ({ ok: false, message: e.message }));
+    console.error(`[결제확인 필요] 주문 ${order.order_number}: ${method} 결제는 승인됐지만 주문이 이미 결제 대기 상태가 아니어서(자동취소 등) 결제완료로 바꾸지 않았습니다 — ${r.ok ? '결제 금액은 자동 환불했습니다' : 'PG 관리자 화면에서 환불해주세요(' + r.message + ')'}`);
     return false;
   }
   await markFlashDealClaimsPaid(order.id);
@@ -20607,6 +20714,14 @@ app.patch('/api/admin/return-requests/:id', authenticate, requireRole(['admin', 
         const isCancel = existingRequest.request_type === 'cancel';
         const newOrderStatus = isCancel ? 'cancelled' : 'refunded';
         const allowedFrom = isCancel ? ['pending', 'paid', 'processing'] : ['shipped', 'delivered'];
+        // 💳 결제된 주문이면 결제사에 실제 환불을 먼저 요청 — 실패하면 신청을 완료하지 않고 원래 상태로 되돌린다
+        if (allowedFrom.includes(order.status) && ['paid', 'processing', 'shipped', 'delivered'].includes(order.status) && !(req.body && req.body.skip_pg_refund)) {
+          const pgRefund = await refundOrderPayment(order, isCancel ? '주문 취소 승인' : '반품 승인');
+          if (!pgRefund.ok && !pgRefund.skipped) {
+            await supabase.from('return_requests').update({ status: existingRequest.status, updated_at: new Date().toISOString() }).eq('id', existingRequest.id);
+            return res.status(502).json({ error: 'Refund Failed', refund_failed: true, message: `결제사 환불에 실패해 완료 처리하지 않았습니다: ${pgRefund.message}`, timestamp: new Date().toISOString() });
+          }
+        }
         const { data: changed } = await supabase.from('orders_with').update({ status: newOrderStatus })
           .eq('id', order.id).in('status', allowedFrom).select('id');
         if (changed && changed.length) {
@@ -24000,6 +24115,18 @@ app.get('/api/live/channels/:slug/sessions/:sessionId/guests', async (req, res) 
 // ============================================
 const LIVE_VIEWER_HEARTBEAT_WINDOW_SEC = 90;
 
+const anonViewerKeys = new Map(); // `${session}|${ip}` → { keys:Set, at }
+function allowAnonViewer(sessionId, ip, viewerKey) {
+  const k = `${sessionId}|${ip}`, now = Date.now();
+  let e = anonViewerKeys.get(k);
+  if (!e || now - e.at > 120000) { e = { keys: new Set(), at: now }; anonViewerKeys.set(k, e); }
+  e.at = now;
+  if (e.keys.has(viewerKey)) return true;
+  if (e.keys.size >= 5) return false;
+  e.keys.add(viewerKey);
+  if (anonViewerKeys.size > 20000) anonViewerKeys.clear(); // 메모리 보호
+  return true;
+}
 app.post('/api/live/channels/:slug/sessions/:sessionId/heartbeat', optionalAuth, async (req, res) => {
   try {
     const viewerKey = String(req.body?.viewer_key || '').trim();
@@ -24007,8 +24134,11 @@ app.post('/api/live/channels/:slug/sessions/:sessionId/heartbeat', optionalAuth,
 
     const { data: channel } = await supabase.from(liveTable('channels')).select('id').eq('slug', req.params.slug).eq('status', 'active').maybeSingle();
     if (!channel) return res.status(404).json({ error: 'Not Found', message: '채널을 찾을 수 없습니다', timestamp: new Date().toISOString() });
-    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id').eq('id', req.params.sessionId).eq('channel_id', channel.id).maybeSingle();
+    const { data: session } = await supabase.from(liveTable('live_sessions')).select('id, status').eq('id', req.params.sessionId).eq('channel_id', channel.id).maybeSingle();
     if (!session) return res.status(404).json({ error: 'Not Found', message: '세션을 찾을 수 없습니다', timestamp: new Date().toISOString() });
+    // 시청자 수 부풀리기 방지: 방송 중인 세션만 세고, 로그인 안 한 시청은 같은 IP에서 5명까지만 센다
+    if (session.status !== 'live') return res.json({ success: true, counted: false, timestamp: new Date().toISOString() });
+    if (!req.user && !allowAnonViewer(req.params.sessionId, getClientIp(req), viewerKey)) return res.json({ success: true, counted: false, timestamp: new Date().toISOString() });
 
     await supabase.from(liveTable('live_session_viewers')).upsert(
       [{ live_session_id: req.params.sessionId, viewer_key: viewerKey, user_id: req.user ? req.user.id : null, last_seen_at: new Date().toISOString() }],

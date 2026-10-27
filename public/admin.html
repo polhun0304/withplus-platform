@@ -8575,10 +8575,14 @@
                                 const id = sel.closest('tr').dataset.id;
                                 const newStatus = sel.value;
                                 sel.disabled = true;
-                                const { ok, json } = await authedFetch('/api/admin/orders/' + id + '/status', {
+                                let { ok, json } = await authedFetch('/api/admin/orders/' + id + '/status', {
                                     method: 'PATCH',
                                     body: JSON.stringify({ status: newStatus })
                                 });
+                                // 💳 결제사 자동 환불 실패 → 결제사 관리자 화면에서 이미 직접 환불했다면 상태만 바꿀 수 있게
+                                if (!ok && json && json.refund_failed && confirm((json.message || '결제사 환불 실패') + '\n\n결제사 관리자 화면에서 이미 직접 환불하셨나요?\n[확인]을 누르면 결제사 환불 없이 주문 상태만 바꿉니다.')) {
+                                    ({ ok, json } = await authedFetch('/api/admin/orders/' + id + '/status', { method: 'PATCH', body: JSON.stringify({ status: newStatus, skip_pg_refund: true }) }));
+                                }
                                 sel.disabled = false;
                                 if (!ok) { alert(json.message || '상태 변경에 실패했습니다'); loadOrders(); return; }
                             });
@@ -13858,7 +13862,8 @@
                                 const payload = { mode, enabled };
                                 if (clientKey) payload.client_key = clientKey;
                                 if (secretKey) payload.secret_key = secretKey;
-                                const { ok, json } = await authedFetch('/api/admin/payment-gateway', { method: 'PATCH', body: JSON.stringify(payload) });
+                                await window.__ensureOwnerStepUpOrBootstrap(); // 🔐 결제사 키는 대표자만(2단계 인증)
+                                const { ok, json } = await ownerFetchOptional('/api/admin/payment-gateway', { method: 'PATCH', body: JSON.stringify(payload) });
                                 if (!ok) throw new Error(json.message || '저장 실패');
                                 document.getElementById('settings-area').dataset.loaded = '';
                                 loadSettings();
@@ -13900,7 +13905,8 @@
                                     if (clientKey) payload.client_key = clientKey;
                                     if (secretKey) payload.secret_key = secretKey;
                                     if (partnerIdInput) payload.extra_config = { partner_id: partnerIdInput.value.trim() };
-                                    const { ok, json } = await authedFetch(`/api/admin/payment-gateway/${provider}`, { method: 'PATCH', body: JSON.stringify(payload) });
+                                    await window.__ensureOwnerStepUpOrBootstrap(); // 🔐 결제사 키는 대표자만(2단계 인증)
+                                    const { ok, json } = await ownerFetchOptional(`/api/admin/payment-gateway/${provider}`, { method: 'PATCH', body: JSON.stringify(payload) });
                                     if (!ok) throw new Error(json.message || '저장 실패');
                                     document.getElementById('settings-area').dataset.loaded = '';
                                     loadSettings();
