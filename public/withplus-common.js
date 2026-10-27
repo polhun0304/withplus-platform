@@ -1628,6 +1628,16 @@
         .wp-tabbar .active { color: #E8125C; font-weight: 700; }
         .wp-tabbar .active svg { fill: currentColor; fill-opacity: .12; }
       }
+      /* 📱 휴대폰 화면 유격(좌우 흔들림) 방지
+         - 화면 폭보다 넓은 요소가 있어도 옆으로 밀리지 않게(내용 폭 = 하단 탭바 폭)
+         - 아이폰은 16px 보다 작은 입력칸을 누르면 화면을 확대해 버려서, 입력칸 글자를 16px 로 */
+      /*   (하단 탭바가 있는 쇼핑 화면만 — 관리자·판매자 화면의 넓은 표 가로 스크롤은 그대로) */
+      @media (max-width: 1024px) {
+        html.wp-has-tabbar { overflow-x: hidden; } /* 휴대폰이 넘친 내용에 맞춰 화면 폭을 넓게 잡지 않도록(내용이 작아 보이고 좌우로 흔들리던 문제) */
+        body.wp-has-tabbar { overflow-x: clip; max-width: 100%; }
+        body.wp-has-tabbar img, body.wp-has-tabbar video, body.wp-has-tabbar iframe { max-width: 100%; }
+        body.wp-has-tabbar input:not([type=checkbox]):not([type=radio]):not([type=range]), body.wp-has-tabbar select, body.wp-has-tabbar textarea { font-size: 16px !important; }
+      }
     `;
     document.head.appendChild(style);
   }
@@ -1803,6 +1813,7 @@
       <a href="/mypage"${cls('my')}>${shellIcon('user')}<span>마이페이지</span></a>`;
     document.body.appendChild(nav);
     document.body.classList.add('wp-has-tabbar');
+    document.documentElement.classList.add('wp-has-tabbar');
     nav.querySelector('#wp-tab-category').addEventListener('click', () => openDrawer(true));
     // 같은 /mypage 안에서 찜 ↔ 마이페이지를 오갈 때(해시만 바뀜) 활성 탭 표시를 갱신
     window.addEventListener('hashchange', () => {

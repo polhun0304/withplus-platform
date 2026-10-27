@@ -46,7 +46,12 @@
             .my-menu a { padding: 12px 4px; font-size: 0.78em; }
             .profile-box { flex-wrap: wrap; gap: 10px; padding: 16px 18px; }
         }
-        .profile-box .email { font-weight: 600; }
+        .profile-box .email { font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+        /* 휴대폰: 칸 안의 내용(입력칸·긴 글)이 칸을 밀어내지 않게 */
+        .my-menu > a, .mileage-summary > *, .promo-widgets-row > *, .push-card > div, .serial-coupon-form input { min-width: 0; }
+        .order-card .top-row { gap: 8px; flex-wrap: wrap; }
+        .mypage-tabs { overflow-x: auto; scrollbar-width: none; }
+        .mypage-tab-btn { flex-shrink: 0; white-space: nowrap; }
         .profile-box .logout-btn { background: none; border: 1px solid var(--border-color); padding: 8px 16px; border-radius: 20px; cursor: pointer; font-size: 0.85em; color: var(--text-gray); }
         .profile-box .logout-btn:hover { border-color: var(--primary-color); color: var(--primary-color); }
 
