@@ -745,6 +745,7 @@ const requireOwnerStepUp = async (req, res, next) => {
     return res.status(403).json({
       error: 'Forbidden',
       message: '원가 정보는 대표자 계정이 2단계 인증을 완료해야 조회/수정할 수 있습니다',
+      stepUpReason: reason, // 화면이 '2단계 인증 문제'일 때만 저장된 인증을 지우고 다시 인증 창을 띄우도록
       timestamp: new Date().toISOString()
     });
   };
@@ -818,7 +819,7 @@ const requireOwnerStepUpOrBootstrap = async (req, res, next) => {
     const result = await checkOwnerStepUp(req, { allowBootstrap: true });
     if (!result.ok) {
       await logCostAudit({ profileId: req.user ? req.user.id : null, action: 'step_up_denied', detail: { reason: result.reason }, ip: getClientIp(req) });
-      return res.status(result.status).json({ error: 'Forbidden', message: result.message, timestamp: new Date().toISOString() });
+      return res.status(result.status).json({ error: 'Forbidden', message: result.message, stepUpReason: result.reason, timestamp: new Date().toISOString() });
     }
     req.ownerProfile = result.profile;
     next();

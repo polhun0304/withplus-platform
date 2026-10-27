@@ -13862,8 +13862,7 @@
                                 const payload = { mode, enabled };
                                 if (clientKey) payload.client_key = clientKey;
                                 if (secretKey) payload.secret_key = secretKey;
-                                await window.__ensureOwnerStepUpOrBootstrap(); // 🔐 결제사 키는 대표자만(2단계 인증)
-                                const { ok, json } = await ownerFetchOptional('/api/admin/payment-gateway', { method: 'PATCH', body: JSON.stringify(payload) });
+                                const { ok, json } = await ownerPatchWithStepUp('/api/admin/payment-gateway', payload); // 🔐 결제사 키는 대표자만(2단계 인증)
                                 if (!ok) throw new Error(json.message || '저장 실패');
                                 document.getElementById('settings-area').dataset.loaded = '';
                                 loadSettings();
@@ -13905,8 +13904,7 @@
                                     if (clientKey) payload.client_key = clientKey;
                                     if (secretKey) payload.secret_key = secretKey;
                                     if (partnerIdInput) payload.extra_config = { partner_id: partnerIdInput.value.trim() };
-                                    await window.__ensureOwnerStepUpOrBootstrap(); // 🔐 결제사 키는 대표자만(2단계 인증)
-                                    const { ok, json } = await ownerFetchOptional(`/api/admin/payment-gateway/${provider}`, { method: 'PATCH', body: JSON.stringify(payload) });
+                                    const { ok, json } = await ownerPatchWithStepUp(`/api/admin/payment-gateway/${provider}`, payload); // 🔐 결제사 키는 대표자만(2단계 인증)
                                     if (!ok) throw new Error(json.message || '저장 실패');
                                     document.getElementById('settings-area').dataset.loaded = '';
                                     loadSettings();
@@ -15774,7 +15772,7 @@
                 const res = await authedFetch(path, Object.assign({}, options, {
                     headers: Object.assign({}, options.headers, { 'X-Cost-StepUp-Token': token })
                 }));
-                if (res.status === 403) {
+                if (res.status === 403 && ['missing_token', 'invalid_token', 'token_subject_mismatch'].includes(res.json && res.json.stepUpReason)) { // 다른 이유의 거절(권한 등)로 멀쩡한 인증까지 지우지 않게
                     clearStepUpToken();
                     const e = new Error((res.json && res.json.message) || '2단계 인증이 만료되었습니다. 다시 인증해주세요.');
                     e.stepUpRequired = true;
@@ -15794,13 +15792,29 @@
                 const res = await authedFetch(path, token ? Object.assign({}, options, {
                     headers: Object.assign({}, options.headers, { 'X-Cost-StepUp-Token': token })
                 }) : options);
-                if (res.status === 403) {
+                if (res.status === 403 && ['missing_token', 'invalid_token', 'token_subject_mismatch'].includes(res.json && res.json.stepUpReason)) { // 다른 이유의 거절(권한 등)로 멀쩡한 인증까지 지우지 않게
                     clearStepUpToken();
                     const e = new Error((res.json && res.json.message) || '대표자 2단계 인증이 필요합니다. 다시 인증해주세요.');
                     e.stepUpRequired = true;
                     throw e;
                 }
                 return res;
+            }
+
+            // 결제사 키 저장(대표자 전용): 인증이 있으면 실어 보내고, 서버가 '2단계 인증 필요'로 거절하면
+            // 화면 추측과 상관없이 인증 창을 띄운 뒤 한 번 다시 저장한다(인증을 마쳐도 같은 거절이 반복되던 문제)
+            async function ownerPatchWithStepUp(path, payload) {
+                if (typeof window.__ensureOwnerStepUpOrBootstrap !== 'function') throw new Error('대표자 계정만 결제사 키를 바꿀 수 있습니다');
+                const cancelled = e => { if (e && e.message === 'CANCELLED') throw new Error('2단계 인증을 취소해서 저장하지 않았습니다'); throw e; };
+                await window.__ensureOwnerStepUpOrBootstrap().catch(cancelled);
+                const opts = () => ({ method: 'PATCH', body: JSON.stringify(payload) });
+                try {
+                    return await ownerFetchOptional(path, opts());
+                } catch (e) {
+                    if (!e.stepUpRequired) throw e;
+                    await window.__ensureOwnerStepUp().catch(cancelled); // 저장된 인증이 없으므로 인증 창이 뜬다
+                    return await ownerFetchOptional(path, opts());
+                }
             }
 
             const PRICING_CHANNEL_LABELS = [['online', '🛍️ 쇼핑몰'], ['live', '📺 라이브'], ['wholesale', '🏭 도매']];
