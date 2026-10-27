@@ -30,7 +30,7 @@
   function effectiveUnitPrice(p) {
     const price = num(p && p.price);
     const dp = p && p.discount_price !== null && p.discount_price !== undefined && p.discount_price !== '' ? Number(p.discount_price) : null;
-    return (dp !== null && Number.isFinite(dp) && dp < price) ? dp : price;
+    return (dp !== null && Number.isFinite(dp) && dp > 0 && dp < price) ? dp : price;
   }
 
   // amount * (1 + bp/10000) 를 unit 단위로 반올림 - 정수 연산(amount*(10000+bp))으로 계산
