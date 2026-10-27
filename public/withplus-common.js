@@ -45,6 +45,9 @@
       return;
     }
     if (existing) return; // 이미 떠 있으면 다시 그리지 않음
+    // 조직 랜딩페이지(/c/슬러그)는 페이지 자체가 그 조직 안내다. 여기서는 띄우지 않는다 —
+    // 이 배너는 랜딩이 새 조직을 저장하기 전에 그려져 예전에 들른 다른 매장 이름(예: 건강몰)이 잘못 보였다.
+    if (/^\/c\//.test(location.pathname)) return;
     if (document.getElementById('wp-community-bar')) return; // 홈의 공동체 바가 같은 역할(매장 표시 + 전체 쇼핑몰 보기)을 대신한다
     let name = '';
     try { name = localStorage.getItem('withplus_preferred_community_name') || ''; } catch (e) {}
