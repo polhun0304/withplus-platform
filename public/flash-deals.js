@@ -156,7 +156,9 @@
     const limit = Number(d.limit_qty) || 0;
     const remain = Math.max(0, Number(d.remaining) || 0);
     const remainPct = limit > 0 ? Math.round(remain / limit * 100) : 0;
-    const sold = d.status === 'soldout', soon = d.status === 'upcoming';
+    // 초특가 수량이 남아도 상품 재고가 없으면 품절로(상품 상세와 같은 판정 — 장바구니에 못 담게)
+    const noStock = d.status !== 'upcoming' && (W && W.isProductSoldOut ? W.isProductSoldOut(p) : (p.stock != null && Number(p.stock) <= 0));
+    const sold = d.status === 'soldout' || noStock, soon = d.status === 'upcoming';
     const href = '/product/' + encodeURIComponent(d.product_id);
     const desc = d.subtitle || p.description || '';
     const n = (x) => Number(x).toLocaleString('ko-KR');
@@ -177,6 +179,7 @@
           <div class="fdr-price">${rate > 0 ? `<b class="fdr-rate">${rate}%</b>` : ''}<b class="fdr-deal">${won(d.deal_price)}</b>${listPrice > d.deal_price ? `<s>${won(listPrice)}</s>` : ''}</div>
         </div>
         <div class="fdr-side">
+          ${d.status === 'active' ? `<span hidden data-fd-end="${esc(d.ends_at)}" data-fd-compact="1"></span>` : ''}${soon ? `<span hidden data-fd-end="${esc(d.starts_at)}" data-fd-compact="1"></span>` : ''}
           <dl class="fdr-qty"><dt>총수량</dt><dd>${n(limit)}개</dd><dt>남은수량</dt><dd><b>${n(remain)}개</b></dd></dl>
           <div class="fdr-bar" role="img" aria-label="남은 수량 ${remainPct}%"><span class="fdr-fill" style="width:${sold ? 100 : remainPct}%"></span></div>
           <div class="fdr-pct">${sold ? '완판' : `${remainPct}% 남음`}</div>
