@@ -35,6 +35,26 @@
         .msg { margin-top: 14px; font-size: 0.9em; padding: 10px 12px; border-radius: 8px; display: none; }
         .msg.error { display: block; background: #FDECEA; color: #C62828; }
         .msg.success { display: block; background: #E8F5E9; color: #2E7D32; }
+        /* 약관 동의 */
+        .agree-box { border: 1px solid var(--border-color); border-radius: 10px; padding: 12px 14px; margin-bottom: 18px; background: #fff; }
+        .agree-box input[type=checkbox] { width: 18px; height: 18px; flex-shrink: 0; margin: 0; accent-color: var(--primary-color); }
+        .agree-all { display: flex; align-items: center; gap: 8px; font-size: 0.95em; padding-bottom: 10px; border-bottom: 1px solid var(--border-color); cursor: pointer; }
+        .agree-all small { color: var(--text-gray); font-weight: 400; }
+        .agree-list { display: grid; gap: 8px; padding-top: 10px; }
+        .agree-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; font-size: 0.84em; line-height: 1.45; color: var(--text-dark); }
+        .agree-item label, label.agree-item { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; margin: 0; min-width: 0; }
+        label.agree-item { justify-content: flex-start; }
+        .agree-item em { font-style: normal; font-weight: 700; color: var(--primary-color); }
+        .agree-item em.opt { color: var(--text-gray); }
+        .agree-view { flex-shrink: 0; font-size: 0.95em; color: var(--text-gray); text-decoration: underline; background: none; border: none; cursor: pointer; padding: 0; font-family: inherit; }
+        .agree-detail { font-size: 0.78em; color: var(--text-gray); background: var(--bg-light); border-radius: 8px; padding: 10px; }
+        .agree-detail table { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
+        .agree-detail th { text-align: left; white-space: nowrap; padding: 3px 8px 3px 0; vertical-align: top; color: var(--text-dark); }
+        .agree-detail td { padding: 3px 0; }
+        .agree-detail p { margin: 0; }
+        .agree-msg { display: none; margin-top: 10px; font-size: 0.84em; color: #C62828; }
+        .agree-msg.show { display: block; }
+        .agree-box.need { border-color: #E57373; }
         .links-row { text-align: center; margin-top: 20px; font-size: 0.9em; color: var(--text-gray); }
         .links-row a { color: var(--primary-color); text-decoration: none; font-weight: 600; }
         .back-home { text-align: center; margin-top: 16px; }
@@ -58,6 +78,25 @@
         <div class="auth-box">
             <h1>회원가입</h1>
             <div class="sub">WITH+ 회원이 되고 마일리지 혜택을 받아보세요</div>
+            <!-- 약관 동의: 이메일 가입·카카오/네이버 가입 모두 필수 항목에 동의해야 진행 -->
+            <div class="agree-box" id="agree-box">
+                <label class="agree-all"><input type="checkbox" id="agree-all"> <b>전체 동의</b> <small>(선택 항목 포함)</small></label>
+                <div class="agree-list">
+                    <label class="agree-item"><input type="checkbox" class="agree-req" id="agree-age"> <span><em>[필수]</em> 만 14세 이상입니다</span></label>
+                    <div class="agree-item"><label><input type="checkbox" class="agree-req" id="agree-terms"> <span><em>[필수]</em> 이용약관 동의</span></label><a href="/terms" target="_blank" rel="noopener" class="agree-view">보기</a></div>
+                    <div class="agree-item"><label><input type="checkbox" class="agree-req" id="agree-privacy"> <span><em>[필수]</em> 개인정보 수집·이용 동의</span></label><button type="button" class="agree-view" id="agree-privacy-toggle" aria-expanded="false" aria-controls="agree-privacy-detail">보기</button></div>
+                    <div class="agree-detail" id="agree-privacy-detail" hidden>
+                        <table>
+                            <tr><th>목적</th><td>회원 가입·관리, 주문·결제·배송, 고객 문의 응대</td></tr>
+                            <tr><th>항목</th><td>이메일 주소, 비밀번호 (소셜 가입 시 해당 계정의 회원 식별값·이메일·이름·닉네임)</td></tr>
+                            <tr><th>보유 기간</th><td>회원 탈퇴 시까지 (법령상 보존 기간이 있는 거래 기록은 그 기간까지)</td></tr>
+                        </table>
+                        <p>동의를 거부할 수 있으나, 거부하면 회원가입을 할 수 없습니다. 자세한 내용은 <a href="/privacy" target="_blank" rel="noopener">개인정보처리방침</a>을 확인해주세요.</p>
+                    </div>
+                    <label class="agree-item"><input type="checkbox" id="marketing-consent"> <span><em class="opt">[선택]</em> 마케팅 정보 수신 동의 — 혜택·이벤트 안내 (가입 후 마이페이지에서 언제든 변경)</span></label>
+                </div>
+                <div class="agree-msg" id="agree-msg" role="alert"></div>
+            </div>
             <div class="quick-join">
                 <button type="button" class="qj-btn kakao" id="join-kakao-btn">💬 카카오로 3초 가입<span class="soon-badge">준비중</span></button>
                 <button type="button" class="qj-btn naver" id="join-naver-btn">N 네이버로 3초 가입<span class="soon-badge">준비중</span></button>
@@ -81,10 +120,6 @@
                 <div class="field" id="referral-field" style="display:none;">
                     <label for="referral-code">추천인 코드 (선택)</label>
                     <input type="text" id="referral-code" placeholder="추천받은 코드가 있다면 입력해주세요" maxlength="20" style="text-transform:uppercase;">
-                </div>
-                <div class="field" style="display:flex; align-items:flex-start; gap:8px; background:var(--bg-light); padding:12px 14px; border-radius:8px;">
-                    <input type="checkbox" id="marketing-consent" style="width:18px; height:18px; flex-shrink:0; margin-top:2px;">
-                    <label for="marketing-consent" style="margin:0; font-size:0.82em; line-height:1.5; color:var(--text-dark);">마케팅 정보 활용에 동의합니다 (선택) — 맞춤 혜택/이벤트 안내에 활용되며, 가입 후 마이페이지에서 언제든 변경할 수 있습니다.</label>
                 </div>
                 <button type="submit" class="submit-btn" id="submit-btn">회원가입</button>
                 <div class="msg" id="msg"></div>
@@ -122,9 +157,35 @@
                 }
             } catch (e) { /* 추천인 프로그램 상태 조회 실패는 조용히 무시 - 가입 자체는 계속 진행 가능해야 함 */ }
 
+            // ✅ 약관 동의 — 전체 동의 / 개별 동의, 필수 항목에 모두 동의해야 가입(이메일·카카오·네이버 공통)
+            const agreeAll = document.getElementById('agree-all');
+            const agreeBoxes = [...document.querySelectorAll('#agree-box .agree-list input[type=checkbox]')];
+            const agreeRequiredOk = () => [...document.querySelectorAll('.agree-req')].every(c => c.checked);
+            const agreeHint = (show) => {
+                const box = document.getElementById('agree-box'), m = document.getElementById('agree-msg');
+                box.classList.toggle('need', !!show); m.classList.toggle('show', !!show);
+                m.textContent = show ? '필수 항목(만 14세 이상, 이용약관, 개인정보 수집·이용)에 동의해주세요.' : '';
+                if (show) box.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            };
+            agreeAll.addEventListener('change', () => { agreeBoxes.forEach(c => { c.checked = agreeAll.checked; }); if (agreeRequiredOk()) agreeHint(false); });
+            agreeBoxes.forEach(c => c.addEventListener('change', () => { agreeAll.checked = agreeBoxes.every(x => x.checked); if (agreeRequiredOk()) agreeHint(false); }));
+            document.getElementById('agree-privacy-toggle').addEventListener('click', (e) => {
+                const d = document.getElementById('agree-privacy-detail');
+                d.hidden = !d.hidden;
+                e.currentTarget.setAttribute('aria-expanded', String(!d.hidden));
+                e.currentTarget.textContent = d.hidden ? '보기' : '닫기';
+            });
+            // 카카오/네이버로 가입 버튼도 필수 동의 전에는 막는다(버튼 자체 동작보다 먼저 확인)
+            document.querySelector('.quick-join').addEventListener('click', (e) => {
+                if (!e.target.closest('.qj-btn') || agreeRequiredOk()) return;
+                e.preventDefault(); e.stopImmediatePropagation();
+                agreeHint(true);
+            }, true);
+
             form.addEventListener('submit', async function (e) {
                 e.preventDefault();
                 msg.className = 'msg';
+                if (!agreeRequiredOk()) { agreeHint(true); return; }
 
                 const email = document.getElementById('email').value.trim();
                 const password = document.getElementById('password').value;
