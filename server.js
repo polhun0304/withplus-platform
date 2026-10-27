@@ -4157,8 +4157,8 @@ app.get('/api/payments/naverpay/approve', async (req, res) => {
 //   네이버: 인가(nid.naver.com/oauth2.0/authorize) → 토큰(nid.naver.com/oauth2.0/token) → 회원정보(openapi.naver.com/v1/nid/me)
 // - 카카오 서버 키가 없고 Supabase 대시보드에 Kakao Provider가 켜져 있으면 예전처럼 프론트의
 //   signInWithOAuth로 대체 동작한다(/api/auth/social-status의 kakao_via='supabase').
-// - 키는 oauth_configs(provider_key='kakao'|'naver') 한 행을 WITH+·LIVE+가 함께 쓴다(같은 DB). 한 앱에
-//   두 사이트의 Redirect URI를 모두 등록하는 방식 - 같은 앱이어야 두 사이트에서 같은 회원번호로 인식된다.
+// - 키는 이 사이트 DB의 oauth_configs(provider_key='kakao'|'naver') 한 행에 저장한다.
+//   (2026-10-27 WITH+·LIVE+ DB 분리 이후) 키는 사이트별 DB의 oauth_configs 에 따로 저장되고, Redirect URI 도 이 사이트 주소만 안내한다.
 //   Redirect URI는 요청이 들어온 사이트 주소로 자동 계산된다(관리자 화면에 사이트별 주소 표시).
 // - 회원 연결 순서: ① social_identities_with(제공자 회원번호→회원) ② 제공자가 '인증된 이메일'이라고
 //   알려준 경우에만 같은 이메일의 기존 회원에 연결 ③ 그 외에는 신규 가입(이메일 미제공/미인증이면
@@ -4428,7 +4428,7 @@ function socialRedirectUris(req, provider) {
   };
   add('이 사이트(SITE_URL)', process.env.SITE_URL);
   add('지금 접속한 주소', getBaseUrl(req));
-  if (UPLOAD_PLATFORM !== 'liveplus') add('LIVE+(LIVEPLUS_URL)', process.env.LIVEPLUS_URL);
+  // (DB 분리 이후) 다른 사이트(LIVE+) 주소는 안내하지 않는다 — LIVE+는 자기 관리자 화면·자기 앱에서 따로 설정
   return list;
 }
 
