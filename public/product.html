@@ -407,7 +407,7 @@
                 // 1개 묶음이 따로 없으면 1개 가격(할인가 반영) 행을 맨 위에 자동으로 넣는다.
                 const tierOptions = (() => {
                     const opts = WithPlus.getQuantityPriceOptions(p);
-                    if (opts.length === 0) return [];
+                    if (opts.length === 0 || flash) return []; // 초특가 중에는 묶음가를 쓰지 않는다(서버도 초특가 × 수량으로 계산)
                     const rows = opts.slice();
                     if (!rows.some(o => o.qty === 1)) rows.unshift({ qty: 1, price: WithPlus.getEffectiveUnitPrice(p), label: '', badge: '', auto: true });
                     return rows;
@@ -444,7 +444,7 @@
                             <p id="price-history-badge" style="font-size:0.85em; margin:-8px 0 12px; color:var(--text-gray);"></p>
                             <dl class="ss-rows">
                                 <dt>적립</dt><dd>구매 시 <b>${personalMileage.toLocaleString('ko-KR')}원</b>(${personalPct}%) · 커뮤니티 참여 시 <b>+${communityMileage.toLocaleString('ko-KR')}원</b>(${communityPct}%)</dd>
-                                <dt>배송</dt><dd><span id="ss-ship-fee">배송비 정보를 불러오는 중...</span><br><span class="stock-info" id="shipping-badge-text" style="color:#2e7d32; margin:0;">${hasVariants ? '' : (WithPlus.getShippingBadgeLabel(p.stock) || '')}</span></dd>
+                                <dt>배송</dt><dd><span id="ss-ship-fee">배송비 정보를 불러오는 중...</span><br><span class="stock-info" id="shipping-badge-text" style="color:#2e7d32; margin:0;">${hasVariants || outOfStock ? '' : (WithPlus.getShippingBadgeLabel(p.stock) || '')}</span></dd>
                                 <dt>유통기한</dt><dd id="ss-expiry">${expiryText}</dd>
                                 <dt>재고</dt><dd><span class="stock-info" id="stock-info-text" style="margin:0;">${hasVariants ? '옵션을 선택하면 재고를 확인할 수 있어요' : (outOfStock ? '❌ 현재 품절된 상품입니다' : '✅ 재고 ' + p.stock + '개 남음')}</span></dd>
                             </dl>
@@ -586,7 +586,14 @@
                     </div>
                 `;
                 initContinueShopping(p);
-                if (flash && window.WPFlash) WPFlash.startTicker(() => setTimeout(() => location.reload(), 1500)); // 종료되면 정상가로 다시 표시
+                if (flash && window.WPFlash) {
+                    // 기기 시계가 틀려도 맞게: 서버 시각을 한 번 받아 둔 뒤 카운트다운 시작. 끝나면 정상가로 다시 표시하되 같은 초특가에는 한 번만
+                    const reloadKey = 'wp_fd_reload_' + flash.id;
+                    WPFlash.fetchDeals({ limit: 1 }).catch(() => {}).then(() => WPFlash.startTicker(() => {
+                        try { if (sessionStorage.getItem(reloadKey)) return; sessionStorage.setItem(reloadKey, '1'); } catch (e) { /* 저장 불가면 그냥 진행 */ }
+                        setTimeout(() => location.reload(), 1500);
+                    }));
+                }
                 initSmartstoreLayout(p, images, Number(currentPrice), sections);
                 loadBandReviews(p.id);
 
@@ -618,7 +625,9 @@
                         const vs = document.getElementById('variant-select');
                         const opt = vs && vs.selectedOptions ? vs.selectedOptions[0] : null;
                         const adj = opt && opt.value ? Number(opt.dataset.adjustment || 0) : 0;
-                        totalEl.textContent = WithPlus.formatPrice(WithPlus.computeLineTotal(p, qty, adj).lineTotal);
+                        // 초특가 진행 중이면 '초특가 × 수량'(서버 결제 금액과 같게), 아니면 일반 규칙(묶음가 포함)
+                        const fd = p.flash_deal && Number(p.flash_deal.deal_price) < Number(p.price) ? p.flash_deal : null;
+                        totalEl.textContent = WithPlus.formatPrice(fd ? Math.max(0, Number(fd.deal_price) + adj) * qty : WithPlus.computeLineTotal(p, qty, adj).lineTotal);
                     };
                     window.__wpRecalcTotal = recalc;
                     setTimeout(() => {
@@ -961,7 +970,7 @@
                             cartBtn.disabled = true;
                             buyBtn.disabled = true;
                         } else {
-                            stockInfoEl.textContent = `✅ 재고 ${selectedVariantStock}개 남음 | 배송비 무료`;
+                            stockInfoEl.textContent = `✅ 재고 ${selectedVariantStock}개 남음`;
                             cartBtn.disabled = false;
                             buyBtn.disabled = false;
                         }

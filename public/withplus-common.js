@@ -1054,6 +1054,13 @@
     if (!at || !rt) return;
     try {
       const client = await getClient();
+      // 이미 로그인된 다른 계정을 링크 하나로 몰래 바꿔치기하지 못하게(로그인 CSRF 완화)
+      try {
+        const cur = (await client.auth.getSession()).data.session;
+        const b64 = at.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+        const sub = JSON.parse(atob(b64 + '==='.slice((b64.length + 3) % 4))).sub;
+        if (cur && cur.user && sub && cur.user.id !== sub) return;
+      } catch (e) { return; } // 토큰 형식이 이상하면 쓰지 않는다
       const { error } = await client.auth.setSession({ access_token: at, refresh_token: rt });
       if (!error) {
         // 세션이 반영된 상태로 전체 페이지 재초기화(헤더 로그인표시·장바구니 동기화 등)

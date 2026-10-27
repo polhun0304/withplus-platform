@@ -261,7 +261,9 @@
                 localStorage.setItem('withplus_preferred_community_name', community.name || community.slug);
             } catch (e) {}
 
-            const primaryColor = community.primary_color || '#E91E63';
+            // 색상은 #RRGGBB 형식만, 웹사이트는 http/https 만(스크립트·javascript: 링크가 섞이지 않게)
+            const primaryColor = /^#[0-9a-f]{3,8}$/i.test(String(community.primary_color || '')) ? community.primary_color : '#E91E63';
+            if (!/^https?:\/\//i.test(String(community.website_url || ''))) community.website_url = '';
             const heroTitle = community.hero_title || '함께할수록 더 큰 나눔이 됩니다';
             const heroSubtitle = community.hero_subtitle || 'WITH+에서 쇼핑하고 적립된 혜택이 공동체를 위해 사용됩니다.';
             const totalPointsText = Number(community.total_points_earned || 0).toLocaleString('ko-KR') + '원';

@@ -160,6 +160,9 @@ app.use(helmet({
     directives: {
       ...helmet.contentSecurityPolicy.getDefaultDirectives(),
       "script-src": ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https:"],
+      // helmet 기본값 script-src-attr 'none' 이 onclick 같은 속성 핸들러를 막아 FAQ 펼치기·게시글 삭제·인쇄 버튼이 동작하지 않았다
+      // (script-src 가 이미 'unsafe-inline' 이라 이 제한은 보안상 이득이 거의 없음)
+      "script-src-attr": ["'unsafe-inline'"],
       "style-src": ["'self'", "'unsafe-inline'", "https:"],
       "img-src": ["'self'", "data:", "https:", "blob:"],
       "connect-src": ["'self'", "https:", "wss:"],
@@ -6630,6 +6633,11 @@ app.get('/api/products', optionalAuth, async (req, res) => {
         .select(PRODUCT_SAFE_COLUMNS)
         .eq('status', 'active');
 
+      // 장바구니처럼 '이 상품들만' 필요할 때: ids=uuid,uuid (최대 150개) — 전체 목록(1,000개 제한)에서 못 찾아 장바구니에서 지워지던 문제
+      if (typeof req.query.ids === 'string' && req.query.ids) {
+        const onlyIds = [...new Set(req.query.ids.split(',').filter(x => /^[0-9a-f-]{36}$/i.test(x)))].slice(0, 150);
+        query = query.in('id', onlyIds.length ? onlyIds : ['00000000-0000-0000-0000-000000000000']);
+      }
       if (req.query.category) {
         query = query.eq('category', req.query.category);
       }
@@ -15150,8 +15158,9 @@ app.delete('/api/admin/communities/:id/logo', authenticate, requireRole(['admin'
 app.post('/api/admin/communities/bulk-delete', authenticate, requireRole(['admin', 'super_admin']), async (req, res) => {
   try {
     const raw = Array.isArray(req.body && req.body.ids) ? req.body.ids : [];
-    const ids = [...new Set(raw.map(String).filter(id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)))].slice(0, 200);
+    const ids = [...new Set(raw.map(String).filter(id => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)))];
     if (!ids.length) return res.status(400).json({ error: 'Bad Request', message: '삭제할 조직을 골라주세요', timestamp: new Date().toISOString() });
+    if (ids.length > 200) return res.status(400).json({ error: 'Bad Request', message: '한 번에 200개까지만 삭제할 수 있습니다. 나눠서 삭제해주세요', timestamp: new Date().toISOString() });
     const { data, error } = await supabase.rpc('delete_communities_safely', { p_ids: ids });
     if (error) throw error;
     const deleted = (data && data.deleted) || [];
