@@ -1664,6 +1664,10 @@ async function getChannelPricingSettings() {
 // 상품별 도매채널가 맵 { product_id: price } - productIds 를 주면 그 상품만 조회
 // 상품 ID가 수백 개면 한 번에 in(...)으로 보내면 주소가 너무 길어져 DB가 거절(Bad Request)한다 → 150개씩 나눠 조회
 const ID_CHUNK = 150;
+async function variantBelongsToProduct(variantId, productId) {
+  const { data } = await supabase.from('product_variants_with').select('id').eq('id', variantId).eq('product_id', productId).maybeSingle();
+  return !!data;
+}
 async function selectByIdChunks(productIds, build) {
   if (!Array.isArray(productIds)) return build(null);
   const out = { data: [], error: null };
@@ -7373,11 +7377,11 @@ app.post('/api/admin/products/bulk', authenticate, requireRole(['provider', 'adm
       if (priceMode === 'amount' && (Math.abs(priceValue) > 10000000 || !Number.isInteger(priceValue))) return bad('정액 조정은 ±10,000,000원 이내의 정수여야 합니다');
     }
 
-    const { data: rows, error: fErr } = await supabase
+    const { data: rows, error: fErr } = await selectByIdChunks(uniqueIds, ids => supabase
       .from('products_with')
       .select('id, name, supplier_id, status, price, discount_price, supply_amount, vat_amount')
-      .in('id', uniqueIds)
-      .is('deleted_at', null); // 이미 영구 삭제(종결) 처리된 상품은 다시 손댈 수 없다
+      .in('id', ids)
+      .is('deleted_at', null)); // 이미 영구 삭제(종결) 처리된 상품은 다시 손댈 수 없다 · 150개씩 나눠 조회
     if (fErr) throw fErr;
     const byId = {};
     (rows || []).forEach(p => { byId[p.id] = p; });
@@ -7416,14 +7420,17 @@ app.post('/api/admin/products/bulk', authenticate, requireRole(['provider', 'adm
         }
       }
       if (keepIds.length) {
-        const { error: sErr } = await supabase.from('products_with')
-          .update({ status: 'inactive', deleted_at: new Date().toISOString(), deleted_by: req.user.id })
-          .in('id', keepIds);
-        if (sErr) throw sErr;
-        // 이력이 아닌 딸린 데이터(찜·재입고 알림·재구매 알림·커뮤니티 노출)는 지운다 — 주문·리뷰·재고원장·판매기록은 보존
-        for (const t of ['wishlist_with', 'restock_subscriptions_with', 'repurchase_reminders_with', 'community_products']) {
-          const { error: cErr } = await supabase.from(t).delete().in('product_id', keepIds);
-          if (cErr) console.warn('영구 삭제 정리 실패(' + t + '):', cErr.message);
+        for (let ci = 0; ci < keepIds.length; ci += ID_CHUNK) { // 150개씩
+          const chunk = keepIds.slice(ci, ci + ID_CHUNK);
+          const { error: sErr } = await supabase.from('products_with')
+            .update({ status: 'inactive', deleted_at: new Date().toISOString(), deleted_by: req.user.id })
+            .in('id', chunk);
+          if (sErr) throw sErr;
+          // 이력이 아닌 딸린 데이터(찜·재입고 알림·재구매 알림·커뮤니티 노출)는 지운다 — 주문·리뷰·재고원장·판매기록은 보존
+          for (const t of ['wishlist_with', 'restock_subscriptions_with', 'repurchase_reminders_with', 'community_products']) {
+            const { error: cErr } = await supabase.from(t).delete().in('product_id', chunk);
+            if (cErr) console.warn('영구 삭제 정리 실패(' + t + '):', cErr.message);
+          }
         }
       }
       for (const p of targets) {
@@ -9157,6 +9164,10 @@ app.post('/api/admin/inventory/scan', authenticate, requireRole(['provider', 'ad
     if (access.error) {
       return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
     }
+    // 옵션은 이 상품의 옵션이어야 한다(다른 판매자 상품의 옵션 ID를 섞어 그 재고를 바꾸던 문제 차단)
+    if (variant_id && !(await variantBelongsToProduct(variant_id, product_id))) {
+      return res.status(400).json({ error: 'Bad Request', message: '이 상품의 옵션이 아닙니다', timestamp: new Date().toISOString() });
+    }
 
     const { data: newStock, error } = await supabase.rpc('adjust_stock_with', {
       p_product_id: product_id,
@@ -9256,6 +9267,10 @@ app.post('/api/admin/inventory/write-off', authenticate, requireRole(['provider'
     if (access.error) {
       return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
     }
+    // 옵션은 이 상품의 옵션이어야 한다(다른 판매자 상품의 옵션 ID를 섞어 그 재고를 바꾸던 문제 차단)
+    if (variant_id && !(await variantBelongsToProduct(variant_id, product_id))) {
+      return res.status(400).json({ error: 'Bad Request', message: '이 상품의 옵션이 아닙니다', timestamp: new Date().toISOString() });
+    }
     const reasonLabel = WMS_WRITE_OFF_REASONS[category] + (note ? ` (${String(note).trim()})` : '');
 
     const { data: newStock, error } = await supabase.rpc('adjust_stock_with', {
@@ -9291,6 +9306,10 @@ app.post('/api/admin/inventory/stocktake', authenticate, requireRole(['provider'
     const access = await assertProductAccess(product_id, req);
     if (access.error) {
       return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+    // 옵션은 이 상품의 옵션이어야 한다(다른 판매자 상품의 옵션 ID를 섞어 그 재고를 바꾸던 문제 차단)
+    if (variant_id && !(await variantBelongsToProduct(variant_id, product_id))) {
+      return res.status(400).json({ error: 'Bad Request', message: '이 상품의 옵션이 아닙니다', timestamp: new Date().toISOString() });
     }
 
     let currentStock;
@@ -9367,6 +9386,10 @@ app.post('/api/admin/inventory/channel-sales', authenticate, requireRole(['provi
     const access = await assertProductAccess(product_id, req);
     if (access.error) {
       return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
+    }
+    // 옵션은 이 상품의 옵션이어야 한다(다른 판매자 상품의 옵션 ID를 섞어 그 재고를 바꾸던 문제 차단)
+    if (variant_id && !(await variantBelongsToProduct(variant_id, product_id))) {
+      return res.status(400).json({ error: 'Bad Request', message: '이 상품의 옵션이 아닙니다', timestamp: new Date().toISOString() });
     }
 
     const { data: sale, error: saleErr } = await supabase
@@ -9523,23 +9546,28 @@ app.patch('/api/admin/inventory/channel-sales/:id/cancel', authenticate, require
       return res.status(access.error.status).json({ error: access.error.status === 404 ? 'Not Found' : 'Forbidden', message: access.error.message, timestamp: new Date().toISOString() });
     }
 
-    await supabase.rpc('release_channel_stock', { p_product_id: sale.product_id, p_variant_id: sale.variant_id, p_channel: sale.channel, p_qty: sale.quantity }).catch(() => {});
+    // 먼저 '취소됨'으로 바꿔 둔다 — 동시에 두 번 눌려도 한 번만 재고가 복원되도록
+    const { data: claimed, error: claimErr } = await supabase.from('channel_sales_with')
+      .update({ status: 'cancelled', cancelled_at: new Date().toISOString(), cancelled_by: req.user.id })
+      .eq('id', sale.id).neq('status', 'cancelled').select();
+    if (claimErr) throw claimErr;
+    if (!claimed || !claimed.length) {
+      return res.status(400).json({ error: 'Bad Request', message: '이미 취소된 판매입니다', timestamp: new Date().toISOString() });
+    }
+
+    await supabase.rpc('release_channel_stock', { p_product_id: sale.product_id, p_variant_id: sale.variant_id, p_channel: sale.channel, p_qty: sale.quantity }).then(null, () => {});
 
     const { error: stockErr } = await supabase.rpc('adjust_stock_with', {
       p_product_id: sale.product_id, p_variant_id: sale.variant_id, p_delta: sale.quantity,
       p_reason: `${WMS_CHANNEL_LABEL[sale.channel] || sale.channel} 판매 취소(재고 복원)`, p_order_id: null, p_created_by: req.user.id,
       p_scan_source: 'channel_sale_cancel', p_channel_sale_id: sale.id
     });
-    if (stockErr) throw stockErr;
+    if (stockErr) { // 재고 복원 실패 → 취소 표시를 되돌려 다시 시도할 수 있게
+      await supabase.from('channel_sales_with').update({ status: sale.status, cancelled_at: null, cancelled_by: null }).eq('id', sale.id);
+      throw stockErr;
+    }
     if (sale.variant_id) await syncProductStockFromVariants(sale.product_id);
-
-    const { data, error } = await supabase
-      .from('channel_sales_with')
-      .update({ status: 'cancelled', cancelled_at: new Date().toISOString(), cancelled_by: req.user.id })
-      .eq('id', sale.id)
-      .select()
-      .single();
-    if (error) throw error;
+    const data = claimed[0];
 
     res.json({ success: true, data, message: '판매가 취소되고 재고가 복원되었습니다', timestamp: new Date().toISOString() });
   } catch (err) {
@@ -10464,7 +10492,7 @@ app.get('/api/admin/wms/stock-report/:productId', authenticate, requireRole(['pr
     const supplierId = access.product ? access.product.supplier_id : null;
     const [{ data: p, error: pErr }, { data: variants }, locMap, events, { data: ledger }, { data: lotRows }, catLabels, { data: prof }] = await Promise.all([
       supabase.from('products_with')
-        .select('id, name, category, barcode, slug, price, discount_price, cost_price, stock, expiry_date, status, supplier_id, brand, spec, images_urls, created_at')
+        .select('id, name, category, barcode, slug, price, discount_price, stock, expiry_date, status, supplier_id, brand, spec, images_urls, created_at') // 원가(cost_price)는 판매자·일반 관리자에게 보내지 않음
         .eq('id', productId).maybeSingle(),
       supabase.from('product_variants_with').select('id, name, sku, barcode, price_adjustment, stock, is_active').eq('product_id', productId),
       wmsLocationMap([productId]),
@@ -10509,7 +10537,7 @@ app.get('/api/admin/wms/stock-report/:productId', authenticate, requireRole(['pr
         product: {
           id: p.id, name: p.name, category: p.category, category_label: catLabels[p.category] || p.category, code: p.barcode, slug: p.slug,
           brand: p.brand, spec: p.spec, status: p.status, image: Array.isArray(p.images_urls) ? p.images_urls[0] || null : null,
-          price: Number(p.price || 0), discount_price: p.discount_price !== null ? Number(p.discount_price) : null, cost_price: p.cost_price !== null ? Number(p.cost_price) : null,
+          price: Number(p.price || 0), discount_price: p.discount_price !== null ? Number(p.discount_price) : null,
           stock: Number(p.stock || 0), expiry_date: p.expiry_date, expiry_d: p.expiry_date ? wmsDaysBetween(range.today, p.expiry_date) : null,
           supplier_name: supplierName
         },
@@ -11583,18 +11611,22 @@ app.post('/api/orders', authenticate, async (req, res) => {
     // ⚡ 한정수량 초특가 - 진행중이고 잔여 수량이 있는 상품은 서버가 초특가로 계산한다(getFlashDealPrice, 캐시 없이 최신값).
     // 한 주문에서 같은 상품(옵션 여러 개 포함)의 합계 수량이 잔여 수량을 넘으면 정상가로 몰래 바꾸지 않고 명확히 거절한다.
     const flashDealMap = await getFlashDealPrice(productIds, { fresh: true });
+    // (잔여 수량 확인은 아래 가격 계산 뒤 — 실제로 초특가가 적용된 줄만 센다)
+    const checkFlashRemaining = (verified) => {
     const flashQtyByProduct = {};
-    items.forEach(it => {
-      if (it && it.product_id && flashDealMap[it.product_id]) flashQtyByProduct[it.product_id] = (flashQtyByProduct[it.product_id] || 0) + (Number(it.quantity) || 1);
+    verified.forEach(it => {
+      if (it && it.product_id && it.flash_deal_id && flashDealMap[it.product_id]) flashQtyByProduct[it.product_id] = (flashQtyByProduct[it.product_id] || 0) + (Number(it.quantity) || 1);
     });
     for (const [pid, qtySum] of Object.entries(flashQtyByProduct)) {
       const d = flashDealMap[pid];
       const remaining = Math.max(0, Number(d.limit_qty) - Number(d.sold_count));
       if (qtySum > remaining) {
         const pname = productMap[pid] ? productMap[pid].name : pid;
-        return res.status(400).json({ error: 'Bad Request', message: `⚡ 한정수량 초특가 잔여 수량(${remaining}개)을 넘었습니다: ${pname}. ${remaining}개 이하로 주문해주세요.`, flash_deal: { product_id: pid, remaining }, timestamp: new Date().toISOString() });
+        return { error: 'Bad Request', message: `⚡ 한정수량 초특가 잔여 수량(${remaining}개)을 넘었습니다: ${pname}. ${remaining}개 이하로 주문해주세요.`, flash_deal: { product_id: pid, remaining }, timestamp: new Date().toISOString() };
       }
     }
+    return null;
+    };
 
     // 🔒 보안: 상품 가격은 절대 클라이언트(브라우저)가 보낸 값을 신뢰하지 않는다. 여기서 검증하면서
     // 동시에 DB의 실제 판매가(옵션이 있으면 옵션 가격조정 포함)로 다시 계산한 "검증된 주문항목"을
@@ -11678,6 +11710,8 @@ app.post('/api/orders', authenticate, async (req, res) => {
       }
       verifiedItems.push(verifiedItem);
     }
+    const flashOver = checkFlashRemaining(verifiedItems);
+    if (flashOver) return res.status(400).json(flashOver);
 
     // 총액 계산 - verifiedItems(서버가 재검증한 가격)만 사용 (수량별 가격이 적용된 항목은 line_total)
     let totalPrice = 0;
@@ -16792,26 +16826,12 @@ app.get('/api/admin/supplier-sales-report', authenticate, requireRole(['provider
   try {
     const { startDate, endDate } = req.query;
 
-    let ordersQuery = supabase
-      .from('orders_with')
-      .select('id, items, status, final_price, created_at')
-      .not('status', 'in', '(cancelled,refunded)');
-    if (startDate) ordersQuery = ordersQuery.gte('created_at', startDate);
-    if (endDate) {
-      // endDate는 날짜만 넘어올 수 있으므로(예: 2026-08-12) 그 날 끝까지 포함되도록 다음날 자정 미만으로 처리
-      const endExclusive = /^\d{4}-\d{2}-\d{2}$/.test(endDate)
-        ? new Date(new Date(endDate + 'T00:00:00Z').getTime() + 24 * 60 * 60 * 1000).toISOString()
-        : endDate;
-      ordersQuery = ordersQuery.lt('created_at', endExclusive);
-    }
-
-    const [{ data: orders, error: ordersErr }, { data: allProducts, error: prodErr }, providerIds] = await Promise.all([
-      ordersQuery,
-      supabase.from('products_with').select('id, supplier_id, name'),
+    // 결제된 주문만(결제 대기 제외) · 주문/상품이 1,000건을 넘어도 끝까지 (endDate 는 그 날 끝까지 포함)
+    const [orders, allProducts, providerIds] = await Promise.all([
+      fetchAllRows(() => settlementOrdersQuery('id, items, status, final_price, created_at', startDate, endDate), 1000000),
+      fetchAllRows(() => supabase.from('products_with').select('id, supplier_id, name').order('id', { ascending: true }), 1000000),
       getProviderIdSet()
     ]);
-    if (ordersErr) throw ordersErr;
-    if (prodErr) throw prodErr;
 
     // role='provider'인 계정 소유 상품만 "공급자 상품"으로 집계한다. 관리자가 직접 등록한 자체재고 상품은
     // 여기서 제외되어(=쇼핑몰 자체 매출이라 별도 통계는 관리자 통계 탭에서 확인), 공급자 리포트를 왜곡하지 않는다.
@@ -16880,26 +16900,28 @@ app.get('/api/admin/supplier-sales-report', authenticate, requireRole(['provider
 // ============================================
 
 // 특정 기간의 공급자별(provider) 매출 집계 - settlements 생성 시 재사용
-async function computeProviderRevenueForPeriod(startDate, endDate) {
-  let ordersQuery = supabase
-    .from('orders_with')
-    .select('id, items, status, created_at')
-    .not('status', 'in', '(cancelled,refunded)');
-  if (startDate) ordersQuery = ordersQuery.gte('created_at', startDate);
+// 정산·매출 집계에 넣는 주문 상태: 실제로 결제된 주문만(결제 대기 pending 은 24시간 뒤 자동취소될 수 있어 제외)
+const SETTLEMENT_PAID_STATUSES = ['paid', 'processing', 'shipped', 'delivered'];
+function settlementOrdersQuery(columns, startDate, endDate, extra) {
+  let q = supabase.from('orders_with').select(columns).in('status', SETTLEMENT_PAID_STATUSES);
+  if (extra) q = extra(q);
+  if (startDate) q = q.gte('created_at', startDate);
   if (endDate) {
     const endExclusive = /^\d{4}-\d{2}-\d{2}$/.test(endDate)
       ? new Date(new Date(endDate + 'T00:00:00Z').getTime() + 24 * 60 * 60 * 1000).toISOString()
       : endDate;
-    ordersQuery = ordersQuery.lt('created_at', endExclusive);
+    q = q.lt('created_at', endExclusive);
   }
+  return q.order('id', { ascending: true });
+}
 
-  const [{ data: orders, error: ordersErr }, { data: allProducts, error: prodErr }, providerIds] = await Promise.all([
-    ordersQuery,
-    supabase.from('products_with').select('id, supplier_id'),
+async function computeProviderRevenueForPeriod(startDate, endDate) {
+  // 주문·상품이 1,000건을 넘어도 빠짐없이(Supabase 기본 1,000행 제한) — 끝까지 나눠 읽는다
+  const [orders, allProducts, providerIds] = await Promise.all([
+    fetchAllRows(() => settlementOrdersQuery('id, items, status, created_at', startDate, endDate), 1000000),
+    fetchAllRows(() => supabase.from('products_with').select('id, supplier_id').order('id', { ascending: true }), 1000000),
     getProviderIdSet()
   ]);
-  if (ordersErr) throw ordersErr;
-  if (prodErr) throw prodErr;
 
   // role='provider'인 계정 소유 상품만 정산 대상. 관리자가 직접 등록한 자체재고 상품은 제외(자체 매출이라 정산/수수료 대상이 아님).
   const productSupplierMap = {};
@@ -17204,10 +17226,11 @@ app.patch('/api/admin/settlements/:id/status', authenticate, requireRole(['admin
     if (status === 'paid') {
       update.paid_at = new Date().toISOString();
       // 지급완료 시점에 공급자의 세무처리 방식을 스냅샷으로 반영: 원천징수 3.3% 자동계산 또는 세금계산서 발행대기 표시
-      const { data: existing } = await supabase.from('supplier_settlements').select('supplier_id, commission_amount').eq('id', id).maybeSingle();
+      const { data: existing } = await supabase.from('supplier_settlements').select('supplier_id, commission_amount, net_amount').eq('id', id).maybeSingle();
       if (existing) {
         const { data: supplierProfile } = await supabase.from('profiles').select('settlement_tax_method').eq('id', existing.supplier_id).maybeSingle();
-        Object.assign(update, computeSettlementTaxFields(existing.commission_amount, supplierProfile?.settlement_tax_method));
+        // 공급자 정산에서 commission_amount 는 플랫폼 수수료, net_amount 가 공급자에게 지급할 금액 → 세금은 지급액 기준
+        Object.assign(update, computeSettlementTaxFields(existing.net_amount != null ? existing.net_amount : existing.commission_amount, supplierProfile?.settlement_tax_method));
       }
     } else {
       update.paid_at = null;
@@ -17265,20 +17288,8 @@ app.patch('/api/admin/settings/community-cash-settlement', authenticate, require
 
 // 특정 기간의 분양조직별 매출 집계 (orders_with.community_id 기준, 취소/환불 제외) - settlements 생성 시 재사용
 async function computeCommunityRevenueForPeriod(startDate, endDate) {
-  let ordersQuery = supabase
-    .from('orders_with')
-    .select('id, community_id, final_price, status, created_at')
-    .not('community_id', 'is', null)
-    .not('status', 'in', '(cancelled,refunded)');
-  if (startDate) ordersQuery = ordersQuery.gte('created_at', startDate);
-  if (endDate) {
-    const endExclusive = /^\d{4}-\d{2}-\d{2}$/.test(endDate)
-      ? new Date(new Date(endDate + 'T00:00:00Z').getTime() + 24 * 60 * 60 * 1000).toISOString()
-      : endDate;
-    ordersQuery = ordersQuery.lt('created_at', endExclusive);
-  }
-  const { data: orders, error } = await ordersQuery;
-  if (error) throw error;
+  // 결제된 주문만 · 1,000건이 넘어도 끝까지
+  const orders = await fetchAllRows(() => settlementOrdersQuery('id, community_id, final_price, status, created_at', startDate, endDate, q => q.not('community_id', 'is', null)), 1000000);
 
   const agg = {}; // communityId -> { revenue, orderCount }
   (orders || []).forEach(o => {
@@ -18748,7 +18759,7 @@ async function attachFlashDeals(products) {
     const map = await getFlashDealPrice(list.map(p => p && p.id));
     list.forEach(p => {
       const d = p && map[p.id];
-      if (d && Number(d.deal_price) < Number(p.price)) p.flash_deal = publicFlashDeal(d, p);
+      if (d && Number(d.deal_price) < effectivePriceOf(p)) p.flash_deal = publicFlashDeal(d, p); // 실제 판매가보다 쌀 때만 초특가 표시
     });
   } catch (e) { /* 초특가 조회 실패해도 상품 목록 자체는 정상 응답 */ }
   return products;
@@ -18862,7 +18873,7 @@ app.get('/api/flash-deals', async (req, res) => {
     }
     const order = { active: 0, soldout: 1, upcoming: 2 };
     const items = wanted
-      .filter(d => productMap[d.product_id])
+      .filter(d => productMap[d.product_id] && Number(d.deal_price) < effectivePriceOf(productMap[d.product_id])) // 할인가가 더 싸면 초특가가 적용되지 않으므로 목록에서 뺀다
       .map(d => ({ ...publicFlashDeal(d, productMap[d.product_id]), product: productMap[d.product_id] }))
       .sort((a, b) => (order[a.status] - order[b.status]) || (a.sort_order - b.sort_order) || (new Date(a.ends_at) - new Date(b.ends_at)))
       .slice(0, limit);
@@ -18895,13 +18906,17 @@ app.get('/api/admin/flash-deals', authenticate, requireRole(['admin', 'super_adm
     const productIds = [...new Set((deals || []).map(d => d.product_id))];
     const productMap = {};
     if (productIds.length) {
-      const { data: prods } = await supabase.from('products_with').select(FLASH_PRODUCT_COLUMNS).in('id', productIds);
+      const { data: prods } = await selectByIdChunks(productIds, ids => supabase.from('products_with').select(FLASH_PRODUCT_COLUMNS).in('id', ids));
       (prods || []).forEach(p => { productMap[p.id] = p; });
     }
     const dealIds = (deals || []).map(d => d.id);
     const claimSum = {};
     if (dealIds.length) {
-      const claims = await fetchAllRows(() => supabase.from('flash_deal_claims_with').select('deal_id, quantity, status').in('deal_id', dealIds).in('status', ['held', 'paid']), 20000);
+      const claims = [];
+      for (let ci = 0; ci < dealIds.length; ci += ID_CHUNK) {
+        const chunk = dealIds.slice(ci, ci + ID_CHUNK);
+        claims.push(...await fetchAllRows(() => supabase.from('flash_deal_claims_with').select('deal_id, quantity, status').in('deal_id', chunk).in('status', ['held', 'paid']).order('id', { ascending: true }), 20000));
+      }
       claims.forEach(c => {
         const s = (claimSum[c.deal_id] = claimSum[c.deal_id] || { held: 0, paid: 0 });
         s[c.status] += Number(c.quantity) || 0;
@@ -18927,13 +18942,16 @@ async function validateFlashDealInput(body, existing) {
   const out = {};
   const productId = b.product_id !== undefined ? b.product_id : (existing && existing.product_id);
   if (!productId || !/^[0-9a-f-]{36}$/i.test(String(productId))) return { error: '상품을 선택해주세요' };
-  const { data: product } = await supabase.from('products_with').select('id, name, price, status').eq('id', productId).maybeSingle();
+  const { data: product } = await supabase.from('products_with').select('id, name, price, discount_price, status').eq('id', productId).maybeSingle();
   if (!product) return { error: '상품을 찾을 수 없습니다' };
   if (b.product_id !== undefined) out.product_id = productId;
 
   const dealPrice = b.deal_price !== undefined ? Number(b.deal_price) : Number(existing && existing.deal_price);
   if (!Number.isFinite(dealPrice) || dealPrice < 0 || Math.round(dealPrice) !== dealPrice) return { error: '초특가 가격은 0 이상의 정수(원)로 입력해주세요' };
-  if (dealPrice >= Number(product.price)) return { error: `초특가 가격은 판매가(${Number(product.price).toLocaleString('ko-KR')}원)보다 낮아야 합니다` };
+  // 실제 판매가(할인가가 있으면 할인가)보다 싸야 초특가가 실제로 적용된다. 켜기/끄기만 바꿀 때는 다시 검사하지 않는다
+  // (상품 가격이 내려가 초특가보다 싸졌을 때 그 초특가를 '사용 안 함'으로 끌 수 없던 문제)
+  const sellPrice = effectivePriceOf(product);
+  if ((b.deal_price !== undefined || b.product_id !== undefined) && dealPrice >= sellPrice) return { error: `초특가 가격은 현재 판매가(${sellPrice.toLocaleString('ko-KR')}원)보다 낮아야 합니다` };
   if (b.deal_price !== undefined) out.deal_price = dealPrice;
 
   const limitQty = b.limit_qty !== undefined ? Number(b.limit_qty) : Number(existing && existing.limit_qty);
