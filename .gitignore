@@ -12,3 +12,6 @@ withplus-key.pem
 nodemailer-pkg.zip
 
 supabase/.temp/
+
+# 앱 등록용 아이콘 묶음은 다운로드용으로 배포
+!public/app-icons/*.zip
