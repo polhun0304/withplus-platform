@@ -12304,7 +12304,8 @@
                             <input type="search" id="hb-deal-q" placeholder="상품 이름으로 검색해 추가" autocomplete="off">
                             <div id="hb-deal-results"></div>
                         </div>` : ''}
-                        <div class="hb-cap" style="margin-top:18px;">사진 칸 크기 <small>(모든 특가 배너 공통 · 상품별 사진 확대·위치는 홈 화면 "🛠 배너 사진 편집"이나 상품 수정 화면에서)</small></div>
+                        <div style="margin-top:14px;"><a class="btn btn-secondary" href="/?wp_edit=1" target="_blank" rel="noopener" style="display:inline-block; text-decoration:none;">🛠 홈 배너 사진 편집 열기</a> <small style="color:var(--text-gray);">홈 화면이 새 창으로 열리고, 왼쪽 아래 '배너 사진 편집' 버튼으로 상품별 사진 확대·위치를 바꿉니다</small></div>
+                        <div class="hb-cap" style="margin-top:18px;">사진 칸 크기 <small>(모든 특가 배너 공통 · 상품별 사진 확대·위치는 위 '홈 배너 사진 편집 열기'나 상품 수정 화면에서)</small></div>
                         <div class="hb-box-fields">${HB_BOX_FIELDS.map(f => `
                             <label class="hb-range"><span>${f.label} <b id="hb-box-v-${f.key}">${box[f.key]}${f.unit}</b></span>
                                 <input type="range" class="hb-box-in" data-k="${f.key}" min="${f.min}" max="${f.max}" step="${f.step}" value="${box[f.key]}"></label>`).join('')}
