@@ -1733,28 +1733,23 @@
         </div>
     </header>
 
-    <!-- 공동체 바: 지금 보고 있는 공동체(매장) · 슬로건 · 공동체 혜택 안내 -->
-    <div class="wp-community-bar" id="wp-community-bar">
-        <div class="wcb-select-wrap">
-            <button type="button" class="wcb-select" id="wcb-select" aria-haspopup="true" aria-expanded="false">
-                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-6.5-6.2-6.5-11.3a6.5 6.5 0 0 1 13 0C18.5 14.8 12 21 12 21z"/><circle cx="12" cy="9.7" r="2.4"/></svg>
-                <span id="wcb-name">전체 쇼핑몰</span>
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
-            </button>
-            <div class="wcb-points" id="wcb-points" hidden>
-                <span>공동체<span class="wcb-long"> 적립금</span> <b id="wcb-cp">-</b></span><span class="wcb-sep" aria-hidden="true">·</span><span>나의<span class="wcb-long"> 적립금</span> <b id="wcb-mp">-</b></span>
-            </div>
-            <a class="wcb-login" id="wcb-login" href="/login" hidden>로그인하고 적립금 확인 ›</a>
-            <div class="wcb-menu" id="wcb-menu" hidden>
-                <a href="#" id="wcb-current" hidden>내 공동체 매장 바로가기</a>
-                <div id="wcb-others"></div>
-                <a href="#" id="wcb-reset">전체 쇼핑몰 보기</a>
-                <a href="/communities">다른 공동체 찾아보기</a>
+    <!-- 메인 배너(관리자 배너 설정) — 검색창 바로 아래 -->
+    <section class="hero hero-slider" id="hero-slider" aria-roledescription="carousel" aria-label="메인 배너">
+        <div class="hero-track" id="hero-track">
+        <div class="hero-content hero-slide">
+            <h1>함께할수록 더 큰 나눔</h1>
+            <p>구매할 때마다 개인 1% + 커뮤니티 2% 적립</p>
+            <div class="hero-carousel">
+                <a href="#category-grid" class="carousel-slide active"><img class="wp-emoji" src="/images/emoji/bags.png" width="128" height="128" alt="" aria-hidden="true">쇼핑</a>
+                <a href="/mypage" class="carousel-slide"><img class="wp-emoji" src="/images/emoji/moneybag.png" width="128" height="128" alt="" aria-hidden="true">적립</a>
+                <a href="/communities" class="carousel-slide"><img class="wp-emoji" src="/images/emoji/handshake.png" width="128" height="128" alt="" aria-hidden="true">공유</a>
+                <a href="/communities" class="carousel-slide"><img class="wp-emoji" src="/images/emoji/glowstar.png" width="128" height="128" alt="" aria-hidden="true">성장</a>
             </div>
         </div>
-        <span class="wcb-slogan">함께할수록 더 큰 나눔</span>
-        <a class="wcb-cta" href="/communities"><span class="wcb-long">공동체 </span>혜택 안내 <span aria-hidden="true">›</span></a>
-    </div>
+        </div>
+        <span class="hero-counter" id="hero-counter" hidden>1/1</span>
+        <div class="hero-dots" id="hero-dots" hidden></div>
+    </section>
 
     <!-- CATEGORY ICON MENU (관리자 카테고리 설정 그대로 반영) -->
     <section class="categories" aria-label="카테고리">
@@ -1827,24 +1822,6 @@
         <ul class="lp-feed hm-feed" id="lp-feed" aria-live="polite"></ul>
     </section>
 
-    <!-- 이벤트 배너(관리자 배너 설정) — 시안 배치에 맞춰 상품·후기 아래로 -->
-    <section class="hero hero-slider" id="hero-slider" aria-roledescription="carousel" aria-label="메인 배너">
-        <div class="hero-track" id="hero-track">
-        <div class="hero-content hero-slide">
-            <h1>함께할수록 더 큰 나눔</h1>
-            <p>구매할 때마다 개인 1% + 커뮤니티 2% 적립</p>
-            <div class="hero-carousel">
-                <a href="#category-grid" class="carousel-slide active"><img class="wp-emoji" src="/images/emoji/bags.png" width="128" height="128" alt="" aria-hidden="true">쇼핑</a>
-                <a href="/mypage" class="carousel-slide"><img class="wp-emoji" src="/images/emoji/moneybag.png" width="128" height="128" alt="" aria-hidden="true">적립</a>
-                <a href="/communities" class="carousel-slide"><img class="wp-emoji" src="/images/emoji/handshake.png" width="128" height="128" alt="" aria-hidden="true">공유</a>
-                <a href="/communities" class="carousel-slide"><img class="wp-emoji" src="/images/emoji/glowstar.png" width="128" height="128" alt="" aria-hidden="true">성장</a>
-            </div>
-        </div>
-        </div>
-        <span class="hero-counter" id="hero-counter" hidden>1/1</span>
-        <div class="hero-dots" id="hero-dots" hidden></div>
-    </section>
-
     <!-- PERSONALIZED HOME SECTIONS -->
     <!-- 개인화 추천 섹션들은 /api/me/home-sections가 내려주는 순서/개수 그대로 여기 채워진다.
          섹션 추가/순서 변경/알고리즘 교체는 서버 쪽만 바꾸면 되고 이 페이지는 다시 손댈 필요가 없다. -->
@@ -1860,6 +1837,30 @@
             <!-- JS로 실제 최근 조회 상품 데이터가 채워집니다 -->
         </div>
     </section>
+
+    <!-- 공동체 바(아래쪽으로 이동): 지금 보고 있는 공동체(매장) · 슬로건 · 공동체 혜택 안내 -->
+    <div class="wp-community-bar" id="wp-community-bar">
+        <div class="wcb-select-wrap">
+            <button type="button" class="wcb-select" id="wcb-select" aria-haspopup="true" aria-expanded="false">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21s-6.5-6.2-6.5-11.3a6.5 6.5 0 0 1 13 0C18.5 14.8 12 21 12 21z"/><circle cx="12" cy="9.7" r="2.4"/></svg>
+                <span id="wcb-name">전체 쇼핑몰</span>
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+            <div class="wcb-points" id="wcb-points" hidden>
+                <span>공동체<span class="wcb-long"> 적립금</span> <b id="wcb-cp">-</b></span><span class="wcb-sep" aria-hidden="true">·</span><span>나의<span class="wcb-long"> 적립금</span> <b id="wcb-mp">-</b></span>
+            </div>
+            <a class="wcb-login" id="wcb-login" href="/login" hidden>로그인하고 적립금 확인 ›</a>
+            <div class="wcb-menu" id="wcb-menu" hidden>
+                <a href="#" id="wcb-current" hidden>내 공동체 매장 바로가기</a>
+                <div id="wcb-others"></div>
+                <a href="#" id="wcb-reset">전체 쇼핑몰 보기</a>
+                <a href="/communities">다른 공동체 찾아보기</a>
+            </div>
+        </div>
+        <span class="wcb-slogan">함께할수록 더 큰 나눔</span>
+        <a class="wcb-cta" href="/communities"><span class="wcb-long">공동체 </span>혜택 안내 <span aria-hidden="true">›</span></a>
+    </div>
+
 
     <!-- 회원 혜택 안내 — 작은 타일 3개(페이지 맨 아래) -->
     <section class="promo-banner wp-promo-mini" aria-label="회원 혜택 안내">
@@ -2254,6 +2255,7 @@
                 const v = await WithPlus.getLayout('home_banner');
                 bannerLayout = { box: (v && v.box) || {}, items: (v && v.items) || {} };
                 applyBannerLayout();
+                if (!new URLSearchParams(location.search).has('wp_edit')) return; // 관리자 화면 › 홈 배너에서 '홈 배너 사진 편집'으로 열었을 때만 편집 버튼 표시
                 WithPlus.addLayoutEditButton('🛠 배너 사진 편집', () => {
                     const track = document.getElementById('hero-track');
                     const slides = Array.from(track.querySelectorAll('.hero-slide:not(.hero-slide-off)'));
