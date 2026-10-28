@@ -3668,6 +3668,15 @@ app.post('/api/admin/products/bulk-import', authenticate, requireRole(['provider
 // - 다만 테스트/실서비스 키 자체는 형님(또는 판매자 계정)이 발급받아 아래 관리자 화면에 입력해야 한다
 //   (임의로 만든 키를 넣어두지 않음 - 정직하게, 실제 키가 있어야만 동작).
 // ============================================
+// 네이버페이 API 주소 — 운영 apis.naver.com / 개발(테스트) dev-pub.apis.naver.com
+// (예전 개발 주소 dev.apis.naver.com 은 더 이상 접속되지 않아 테스트 모드가 늘 '서버 호출 실패'였다)
+function naverPayHost(config) { return config && config.mode === 'live' ? 'apis.naver.com' : 'dev-pub.apis.naver.com'; }
+function naverPayHeaders(config) {
+  const h = { 'X-Naver-Client-Id': config.client_key, 'X-Naver-Client-Secret': config.secret_key, 'Content-Type': 'application/x-www-form-urlencoded' };
+  const chainId = config.extra_config && String(config.extra_config.chain_id || '').trim();
+  if (chainId) h['X-NaverPay-Chain-Id'] = chainId; // 그룹형 가맹점에만 발급되는 값(있을 때만)
+  return h;
+}
 async function getPgConfig(providerKey) {
   const { data, error } = await supabase.from('pg_configs').select('*').eq('provider_key', providerKey).maybeSingle();
   if (error) throw error;
@@ -3947,16 +3956,17 @@ app.post('/api/admin/payment-gateway/:provider/test', authenticate, requireRole(
         const partnerId = (config.extra_config && config.extra_config.partner_id) || '';
         if (!partnerId) { status = 'failed'; message = '네이버페이 파트너 ID(extra_config.partner_id)가 등록되어 있지 않습니다.'; }
         else {
-          const domain = config.mode === 'live' ? 'apis.naver.com' : 'dev.apis.naver.com';
+          const domain = naverPayHost(config);
           const resp = await fetch(`https://${domain}/${partnerId}/naverpay/payments/v2.2/reserve`, {
             method: 'POST',
-            headers: { 'X-Naver-Client-Id': config.client_key, 'X-Naver-Client-Secret': config.secret_key, 'Content-Type': 'application/x-www-form-urlencoded' },
+            headers: naverPayHeaders(config),
             body: new URLSearchParams({ merchantPayKey: 'connection-check', productName: '연동 테스트', totalPayAmount: '100', taxScopeAmount: '100', taxExScopeAmount: '0', productCount: '1', returnUrl: `${baseUrl}/` }).toString(),
             signal: AbortSignal.timeout(15000)
           });
           const json = await resp.json().catch(() => null);
           if (resp.status === 401 || resp.status === 403) { status = 'failed'; message = `Client-Id/Client-Secret 인증에 실패했습니다(HTTP ${resp.status}).`; }
-          else if (resp.ok) { status = 'success'; message = `네이버페이 서버에 정상적으로 인증되어 결제 예약까지 성공했습니다.`; }
+          else if (resp.ok && json && json.code === 'Success') { status = 'success'; message = `네이버페이 서버에 정상적으로 인증되어 결제 예약까지 성공했습니다.`; }
+          else if (resp.ok) { status = 'failed'; message = `네이버페이가 요청을 거절했습니다(${(json && json.code) || '응답 없음'}). ${(json && json.message) || '파트너 ID·Client ID·Client Secret 이 같은 가맹점(테스트/운영 구분 포함) 것인지 확인해주세요.'}`; }
           else { status = 'failed'; message = `네이버페이 서버 응답이 예상과 다릅니다(HTTP ${resp.status}). 파트너 ID가 올바른지 확인해주세요. ${JSON.stringify(json)}`; }
         }
       }
@@ -4069,10 +4079,10 @@ app.post('/api/orders/:id/naverpay/reserve', authenticate, async (req, res) => {
 
     const baseUrl = getBaseUrl(req);
     const amount = Math.round(Number(order.final_price));
-    const domain = config.mode === 'live' ? 'apis.naver.com' : 'dev.apis.naver.com';
+    const domain = naverPayHost(config);
     const resp = await fetch(`https://${domain}/${partnerId}/naverpay/payments/v2.2/reserve`, {
       method: 'POST',
-      headers: { 'X-Naver-Client-Id': config.client_key, 'X-Naver-Client-Secret': config.secret_key, 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: naverPayHeaders(config),
       body: new URLSearchParams({
         merchantPayKey: order.order_number, productName: `WITH+ 주문 (${order.order_number})`.slice(0, 100),
         totalPayAmount: String(amount), taxScopeAmount: String(amount), taxExScopeAmount: '0', productCount: '1',
@@ -4117,10 +4127,10 @@ app.get('/api/payments/naverpay/approve', async (req, res) => {
     const partnerId = config && config.extra_config && config.extra_config.partner_id;
     if (!config || !config.secret_key || !config.client_key || !partnerId) return redirectFail(order.order_number, 'config_missing');
 
-    const domain = config.mode === 'live' ? 'apis.naver.com' : 'dev.apis.naver.com';
+    const domain = naverPayHost(config);
     const resp = await fetch(`https://${domain}/${partnerId}/naverpay/payments/v2.2/apply/payment`, {
       method: 'POST',
-      headers: { 'X-Naver-Client-Id': config.client_key, 'X-Naver-Client-Secret': config.secret_key, 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: naverPayHeaders(config),
       body: new URLSearchParams({ paymentId }).toString(),
       signal: AbortSignal.timeout(15000)
     });
@@ -18905,10 +18915,10 @@ async function refundOrderPayment(order, reason) {
       const partnerId = config.extra_config && config.extra_config.partner_id;
       const paymentId = pay.raw_response && pay.raw_response.body && pay.raw_response.body.paymentId;
       if (!partnerId || !paymentId) return { ok: false, message: '네이버페이 결제 번호를 찾을 수 없어 자동 환불할 수 없습니다' };
-      const domain = config.mode === 'live' ? 'apis.naver.com' : 'dev.apis.naver.com';
+      const domain = naverPayHost(config);
       const resp = await fetch(`https://${domain}/${partnerId}/naverpay/payments/v1/cancel`, {
         method: 'POST',
-        headers: { 'X-Naver-Client-Id': config.client_key, 'X-Naver-Client-Secret': config.secret_key, 'Content-Type': 'application/x-www-form-urlencoded' },
+        headers: naverPayHeaders(config),
         body: new URLSearchParams({ paymentId, cancelAmount: String(amount), cancelReason: why, cancelRequester: '2', taxScopeAmount: String(amount), taxExScopeAmount: '0' }).toString(),
         signal: AbortSignal.timeout(15000)
       });
