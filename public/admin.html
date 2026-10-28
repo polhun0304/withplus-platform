@@ -13159,7 +13159,7 @@
                 async function loadSettings() {
                     const settingsArea = document.getElementById('settings-area');
                     try {
-                        const [ratesRes, gradesRes, pageTemplatesRes, pgRes, kakaoPgRes, naverPgRes, aiRes, shippingRes, emailRes, cartReminderRes, referralRes, naverOauthRes, bizInfoRes, kakaoOauthRes] = await Promise.all([
+                        const [ratesRes, gradesRes, pageTemplatesRes, pgRes, kakaoPgRes, naverPgRes, aiRes, shippingRes, emailRes, cartReminderRes, referralRes, naverOauthRes, bizInfoRes, kakaoOauthRes, googleOauthRes] = await Promise.all([
                             authedFetch('/api/settings/mileage-rates'),
                             authedFetch('/api/settings/member-grades'),
                             authedFetch('/api/settings/page-templates'),
@@ -13173,7 +13173,8 @@
                             authedFetch('/api/admin/settings/referral-program'),
                             authedFetch('/api/admin/oauth-config/naver'),
                             authedFetch('/api/admin/settings/business-info'),
-                            authedFetch('/api/admin/oauth-config/kakao')
+                            authedFetch('/api/admin/oauth-config/kakao'),
+                            authedFetch('/api/admin/oauth-config/google')
                         ]);
                         if (!ratesRes.ok || !ratesRes.json.success) throw new Error(ratesRes.json.message || '설정을 불러오지 못했습니다');
                         const rates = ratesRes.json.data;
@@ -13185,6 +13186,7 @@
                         const naverOauth = (naverOauthRes.ok && naverOauthRes.json.success) ? naverOauthRes.json.data : null;
                         // ===== 🔑 소셜 로그인(카카오·네이버) 카드 - 저장된 시크릿 원문은 서버가 내려주지 않는다(설정됨/미설정만) =====
                         const kakaoOauth = (kakaoOauthRes.ok && kakaoOauthRes.json.success) ? kakaoOauthRes.json.data : null;
+                        const googleOauth = (googleOauthRes.ok && googleOauthRes.json.success) ? googleOauthRes.json.data : null;
                         const socialEsc = (v) => WithPlus.escapeHtml(v == null ? '' : String(v));
                         const socialBadge = (cfg) => {
                             if (!cfg) return '<span style="display:inline-block; padding:2px 10px; border-radius:999px; font-size:0.78em; background:#ECEFF1; color:#546E7A;">불러오기 실패</span>';
@@ -13280,7 +13282,38 @@
                                     <button type="button" class="settings-save-btn social-oauth-save-btn" data-provider="naver">저장</button>
                                     <div id="naver-oauth-save-msg" style="font-size:0.82em; color:var(--text-gray); margin-top:6px;"></div>
                                 </div>
-                                <p class="desc" style="margin-top:10px;">구글 로그인은 Supabase 대시보드(Authentication &gt; Providers)에서 설정합니다.</p>
+                                <div style="border:1px solid var(--border-color); border-radius:10px; padding:14px; margin:14px 0 4px;">
+                                    <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap; margin-bottom:8px;">
+                                        <b>🔵 구글 로그인</b>${socialBadge(googleOauth)}
+                                    </div>
+                                    <details style="font-size:0.84em; line-height:1.7; margin-bottom:10px;">
+                                        <summary style="cursor:pointer; font-weight:600;">구글 설정 순서 보기</summary>
+                                        <ol style="padding-left:18px; margin:6px 0;">
+                                            <li><a href="https://console.cloud.google.com/auth/overview" target="_blank" rel="noopener">Google Cloud Console</a> 로그인 → 프로젝트 만들기(또는 선택)</li>
+                                            <li><b>Google 인증 플랫폼 &gt; 브랜딩</b>: 앱 이름, 지원 이메일, 앱 도메인(<code>${socialEsc((googleOauth && googleOauth.service_url) || location.origin)}</code>), 개인정보처리방침 주소(<code>${socialEsc(((googleOauth && googleOauth.service_url) || location.origin) + '/privacy')}</code>) 입력</li>
+                                            <li><b>대상</b>: 사용자 유형 <b>외부</b> → 앱 게시(테스트 상태에서는 '테스트 사용자'에 넣은 계정만 로그인)</li>
+                                            <li><b>클라이언트 &gt; 클라이언트 만들기</b>: 유형 <b>웹 애플리케이션</b> → '승인된 리디렉션 URI'에 아래 주소 등록</li>
+                                            <li>만들어진 <b>클라이언트 ID / 클라이언트 보안 비밀번호</b>를 아래에 입력 → 활성화 체크 → 저장</li>
+                                        </ol>
+                                    </details>
+                                    <div class="field">
+                                        <label>승인된 리디렉션 URI (Google Cloud Console에 그대로 등록)</label>
+                                        ${socialUriRows('google', googleOauth)}
+                                    </div>
+                                    <div class="field">
+                                        <label>클라이언트 ID</label>
+                                        <div class="rate-input-row"><input type="text" id="google-oauth-client-id" value="${socialEsc(googleOauth && googleOauth.client_id)}" placeholder="....apps.googleusercontent.com" autocomplete="off" style="flex:1; min-width:0;"></div>
+                                    </div>
+                                    <div class="field">
+                                        <label>클라이언트 보안 비밀번호 <span style="font-weight:400; color:var(--text-gray);">${googleOauth && googleOauth.has_client_secret ? '· 저장됨' : '· 미설정'}</span></label>
+                                        <div class="rate-input-row"><input type="password" id="google-oauth-client-secret" placeholder="${googleOauth && googleOauth.has_client_secret ? '저장된 값이 있습니다 (변경하려면 새로 입력)' : 'GOCSPX-...'}" autocomplete="new-password" style="flex:1; min-width:0;"></div>
+                                    </div>
+                                    <label style="display:flex; align-items:center; gap:6px; font-size:0.85em; margin-bottom:14px;">
+                                        <input type="checkbox" id="google-oauth-enabled" ${googleOauth && googleOauth.enabled ? 'checked' : ''}> 구글 로그인 활성화
+                                    </label>
+                                    <button type="button" class="settings-save-btn social-oauth-save-btn" data-provider="google">저장</button>
+                                    <div id="google-oauth-save-msg" style="font-size:0.82em; color:var(--text-gray); margin-top:6px;"></div>
+                                </div>
                             </div>`;
                         const ai = (aiRes.ok && aiRes.json.success) ? aiRes.json.data : null;
                         const shipping = (shippingRes.ok && shippingRes.json.success) ? shippingRes.json.data : { base_fee: 3000, free_shipping_threshold: 30000, surcharge_zones: [] };

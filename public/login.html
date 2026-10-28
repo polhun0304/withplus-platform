@@ -189,13 +189,8 @@
             }
             const returnPath = WithPlus.getLoginReturnPath();
 
-            document.getElementById('social-google-btn').addEventListener('click', async () => {
-                const client = await WithPlus.getClient();
-                const { error } = await client.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + '/login' + (returnPath !== '/' ? '?next=' + encodeURIComponent(returnPath) : '') } });
-                if (error) { socialMsg.textContent = 'Google 로그인을 시작하지 못했습니다: ' + error.message; socialMsg.className = 'msg error'; }
-            });
-            // 카카오·네이버: 키가 등록돼 '준비 완료'된 경우에만 로그인 화면으로 이동, 아니면 준비중 안내
-            WithPlus.bindSocialButtons({ kakao: document.getElementById('social-kakao-btn'), naver: document.getElementById('social-naver-btn') }, socialMsg);
+            // 카카오·네이버·구글: 관리자 화면에 키가 등록돼 '준비 완료'된 경우에만 로그인 화면으로 이동, 아니면 준비중 안내
+            WithPlus.bindSocialButtons({ kakao: document.getElementById('social-kakao-btn'), naver: document.getElementById('social-naver-btn'), google: document.getElementById('social-google-btn') }, socialMsg);
             document.getElementById('social-ekos-btn').addEventListener('click', () => {
                 location.href = '/auth/ekos/login';
             });

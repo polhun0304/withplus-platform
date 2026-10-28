@@ -4199,6 +4199,15 @@ const SOCIAL_PROVIDERS = {
     authorizeUrl: 'https://nid.naver.com/oauth2.0/authorize',
     tokenUrl: 'https://nid.naver.com/oauth2.0/token',
     profileUrl: 'https://openapi.naver.com/v1/nid/me'
+  },
+  // 구글: 카카오·네이버와 같이 우리 서버가 직접 처리(관리자 > 설정 > 소셜 로그인에 Client ID/Secret 저장 — Supabase 대시보드 설정 불필요)
+  google: {
+    name: '구글',
+    requireSecret: true,
+    authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenUrl: 'https://oauth2.googleapis.com/token',
+    profileUrl: 'https://openidconnect.googleapis.com/v1/userinfo',
+    extraAuthParams: { scope: 'openid email profile', prompt: 'select_account' }
   }
 };
 const SOCIAL_CALLBACK_PATH = (provider) => `/api/auth/${provider}/callback`;
@@ -4229,7 +4238,7 @@ function isSocialConfigReady(provider, config) {
 async function socialProviderFetch(req, url, options) {
   if (!isSocialTestMode(req)) return fetch(url, { ...options, signal: AbortSignal.timeout(15000) });
   const respond = (status, body) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
-  const isToken = /\/oauth(2\.0)?\/token/.test(url);
+  const isToken = /\/oauth(2\.0)?\/token|oauth2\.googleapis\.com\/token/.test(url); // 카카오·네이버·구글 토큰 주소
   if (isToken) {
     const bodyStr = options && options.body ? String(options.body) : new URL(url).search.slice(1);
     const params = new URLSearchParams(bodyStr);
@@ -4323,6 +4332,18 @@ function normalizeSocialProfile(provider, body) {
       emailVerified: !!(email && acc.is_email_valid === true && acc.is_email_verified === true),
       name: acc.name || (acc.profile && acc.profile.nickname) || (body.properties && body.properties.nickname) || null,
       phone: acc.phone_number || null
+    };
+  }
+  if (provider === 'google') {
+    if (!body || !body.sub) return null;
+    const email = body.email ? String(body.email).trim().toLowerCase() : null;
+    return {
+      id: String(body.sub),
+      email,
+      // 구글은 email_verified 가 true 인 경우만 본인 이메일로 신뢰한다
+      emailVerified: !!(email && (body.email_verified === true || body.email_verified === 'true')),
+      name: body.name || body.given_name || null,
+      phone: null
     };
   }
   const r = body && body.response;
@@ -4527,14 +4548,16 @@ app.get('/api/auth/social-status', async (req, res) => {
         const r = await fetch(`${supabaseUrl}/auth/v1/settings`, { headers: { apikey: supabaseAnonKey }, signal: AbortSignal.timeout(5000) });
         if (r.ok) external = (await r.json()).external || {};
       } catch (e) { /* 조회 실패 시 꺼진 것으로 취급 */ }
-      const [kakao, naver] = await Promise.all([getOauthConfig('kakao').catch(() => null), getOauthConfig('naver').catch(() => null)]);
+      const [kakao, naver, google] = await Promise.all([getOauthConfig('kakao').catch(() => null), getOauthConfig('naver').catch(() => null), getOauthConfig('google').catch(() => null)]);
       const kakaoServer = isSocialConfigReady('kakao', kakao);
+      const googleServer = isSocialConfigReady('google', google);
       socialStatusCache = {
         at: Date.now(),
         data: {
           kakao: kakaoServer || !!external.kakao,
           kakao_via: kakaoServer ? 'server' : (external.kakao ? 'supabase' : null),
-          google: !!external.google,
+          google: googleServer || !!external.google,
+          google_via: googleServer ? 'server' : (external.google ? 'supabase' : null),
           naver: isSocialConfigReady('naver', naver)
         }
       };
@@ -4560,7 +4583,7 @@ app.get('/api/auth/:provider/login', async (req, res, next) => {
     const nonce = crypto.randomBytes(16).toString('base64url');
     const state = signSocialState({ p: provider, n: nonce, t: Date.now(), r: nextPath, f: from });
     const redirectUri = `${getBaseUrl(req)}${SOCIAL_CALLBACK_PATH(provider)}`;
-    const params = { response_type: 'code', client_id: config.client_id, redirect_uri: redirectUri, state };
+    const params = { response_type: 'code', client_id: config.client_id, redirect_uri: redirectUri, state, ...(spec.extraAuthParams || {}) };
     res.set('Cache-Control', 'no-store');
     res.append('Set-Cookie', `${socialCookieName(provider)}=${nonce}; Max-Age=${SOCIAL_STATE_TTL_MS / 1000}; ${socialCookieAttrs(req)}`);
     res.redirect(`${spec.authorizeUrl}?${new URLSearchParams(params).toString()}`);
