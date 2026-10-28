@@ -13460,7 +13460,7 @@
                                 <h3>🟢 간편결제 - 네이버페이</h3>
                                 <p class="desc">
                                     네이버페이는 토스/카카오페이와 달리 <b>가맹 심사(사업자 확인 등)를 통과해야만</b> 개발에 필요한 Client-Id/Client-Secret/파트너ID를
-                                    발급받을 수 있습니다(자가발급 테스트 키가 없습니다) — 형님이 <a href="https://developer.pay.naver.com" target="_blank" rel="noopener">네이버페이 개발자센터</a>에서
+                                    발급받을 수 있습니다(자가발급 테스트 키가 없습니다) — 형님이 <a href="https://developers.pay.naver.com" target="_blank" rel="noopener">네이버페이 개발자센터</a>에서
                                     가맹 신청을 진행하시면, 승인 후 전달받은 값을 아래에 입력해 바로 활성화할 수 있도록 코드는 미리 준비해뒀습니다.
                                 </p>
                                 <div class="field">
@@ -13474,6 +13474,10 @@
                                 <div class="field">
                                     <label>파트너 ID (가맹 승인 시 함께 전달받는 값)</label>
                                     <div class="rate-input-row"><input type="text" id="naverpay-partner-id" value="${naverPg && naverPg.extra_config && naverPg.extra_config.partner_id ? WithPlus.escapeHtml(naverPg.extra_config.partner_id) : ''}" placeholder="파트너 ID" style="flex:1;"></div>
+                                </div>
+                                <div class="field">
+                                    <label>Chain ID <span style="font-weight:400; color:var(--text-gray);">(선택 · 그룹형 가맹점만 발급 — 받지 않았다면 비워두세요)</span></label>
+                                    <div class="rate-input-row"><input type="text" id="naverpay-chain-id" value="${naverPg && naverPg.extra_config && naverPg.extra_config.chain_id ? WithPlus.escapeHtml(naverPg.extra_config.chain_id) : ''}" placeholder="Chain ID (없으면 비움)" style="flex:1;"></div>
                                 </div>
                                 <div class="field">
                                     <label>모드</label>
@@ -13905,6 +13909,8 @@
                                     if (clientKey) payload.client_key = clientKey;
                                     if (secretKey) payload.secret_key = secretKey;
                                     if (partnerIdInput) payload.extra_config = { partner_id: partnerIdInput.value.trim() };
+                                    const chainIdInput = document.getElementById(`${provider}-chain-id`); // 네이버페이 그룹형 가맹점 Chain ID(선택)
+                                    if (chainIdInput) payload.extra_config = Object.assign(payload.extra_config || {}, { chain_id: chainIdInput.value.trim() });
                                     const { ok, json } = await ownerPatchWithStepUp(`/api/admin/payment-gateway/${provider}`, payload); // 🔐 결제사 키는 대표자만(2단계 인증)
                                     if (!ok) throw new Error(json.message || '저장 실패');
                                     document.getElementById('settings-area').dataset.loaded = '';
