@@ -2221,7 +2221,7 @@
     if (!status[provider]) throw new Error(`${name} 로그인은 아직 준비 중입니다. 이메일로 계속해주세요.`);
     const next = getLoginReturnPath();
     const from = /^\/join(\.html)?$/.test(location.pathname) ? 'join' : 'login';
-    if (provider === 'naver' || (provider === 'kakao' && status.kakao_via !== 'supabase')) {
+    if (provider === 'naver' || (provider === 'kakao' && status.kakao_via !== 'supabase') || (provider === 'google' && status.google_via === 'server')) {
       location.href = API_BASE + '/api/auth/' + provider + '/login?' + new URLSearchParams({ next, from }).toString();
       return;
     }
